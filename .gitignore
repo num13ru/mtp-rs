@@ -1,6 +1,5 @@
 .idea/
-go-mtpfs/
-libmtp/
+similar-repos/
 
 # Rust
 target/
