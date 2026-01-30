@@ -2,9 +2,8 @@
 //!
 //! Run with: cargo run --example diagnose
 
-use mtp_rs::mtp::{MtpDevice, NewObjectInfo};
-use mtp_rs::ptp::ObjectHandle;
 use bytes::Bytes;
+use mtp_rs::mtp::{MtpDevice, NewObjectInfo};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
