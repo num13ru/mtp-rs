@@ -89,9 +89,7 @@ fn main() {
     // Summary
     let potential_mtp: Vec<_> = devices
         .iter()
-        .filter(|d| {
-            is_mtp_class(d.class(), d.subclass(), d.protocol()) || d.class() == 0
-        })
+        .filter(|d| is_mtp_class(d.class(), d.subclass(), d.protocol()) || d.class() == 0)
         .collect();
 
     println!("---");

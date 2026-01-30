@@ -11,7 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to device
     let device = MtpDevice::open_first().await?;
-    println!("Connected to: {} {}", device.device_info().manufacturer, device.device_info().model);
+    println!(
+        "Connected to: {} {}",
+        device.device_info().manufacturer,
+        device.device_info().model
+    );
 
     let storages = device.storages().await?;
     let storage = &storages[0];
@@ -22,32 +26,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root_objects = storage.list_objects(None).await?;
     let root_folders = root_objects.iter().filter(|o| o.is_folder()).count();
     let root_files = root_objects.iter().filter(|o| o.is_file()).count();
-    println!("Root contains: {} folders, {} files, {} total\n", root_folders, root_files, root_objects.len());
+    println!(
+        "Root contains: {} folders, {} files, {} total\n",
+        root_folders,
+        root_files,
+        root_objects.len()
+    );
 
     // Test 2: List recursive (smart - auto-detects Android)
     println!("=== Test 2: Recursive listing (smart) ===");
-    println!("Device is Android: {}", device.device_info().vendor_extension_desc.contains("android.com"));
+    println!(
+        "Device is Android: {}",
+        device
+            .device_info()
+            .vendor_extension_desc
+            .contains("android.com")
+    );
     let start = std::time::Instant::now();
     let recursive_objects = storage.list_objects_recursive(None).await?;
     let elapsed = start.elapsed();
     let rec_folders = recursive_objects.iter().filter(|o| o.is_folder()).count();
     let rec_files = recursive_objects.iter().filter(|o| o.is_file()).count();
-    println!("Recursive contains: {} folders, {} files, {} total", rec_folders, rec_files, recursive_objects.len());
+    println!(
+        "Recursive contains: {} folders, {} files, {} total",
+        rec_folders,
+        rec_files,
+        recursive_objects.len()
+    );
     println!("Time taken: {:.2}s\n", elapsed.as_secs_f64());
 
     // Test 3: Manual recursive listing of first folder
     if let Some(first_folder) = root_objects.iter().find(|o| o.is_folder()) {
-        println!("=== Test 3: Listing contents of '{}' folder ===", first_folder.filename);
+        println!(
+            "=== Test 3: Listing contents of '{}' folder ===",
+            first_folder.filename
+        );
         let folder_contents = storage.list_objects(Some(first_folder.handle)).await?;
         let sub_folders = folder_contents.iter().filter(|o| o.is_folder()).count();
         let sub_files = folder_contents.iter().filter(|o| o.is_file()).count();
-        println!("'{}' contains: {} folders, {} files, {} total\n",
-            first_folder.filename, sub_folders, sub_files, folder_contents.len());
+        println!(
+            "'{}' contains: {} folders, {} files, {} total\n",
+            first_folder.filename,
+            sub_folders,
+            sub_files,
+            folder_contents.len()
+        );
 
         // Show first few items
         for (i, obj) in folder_contents.iter().take(5).enumerate() {
             let kind = if obj.is_folder() { "DIR" } else { "FILE" };
-            println!("  {}. {} {} ({} bytes)", i+1, kind, obj.filename, obj.size);
+            println!(
+                "  {}. {} {} ({} bytes)",
+                i + 1,
+                kind,
+                obj.filename,
+                obj.size
+            );
         }
         if folder_contents.len() > 5 {
             println!("  ... and {} more", folder_contents.len() - 5);
@@ -57,7 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 4: Find and download a small file
     println!("=== Test 4: Download test ===");
-    let small_file = root_objects.iter()
+    let small_file = root_objects
+        .iter()
         .filter(|o| o.is_file() && o.size > 1000 && o.size < 100_000)
         .next();
 
@@ -72,7 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if data.len() as u64 == file.size {
                 println!("✓ Size matches expected");
             } else {
-                println!("✗ Size mismatch: expected {}, got {}", file.size, data.len());
+                println!(
+                    "✗ Size mismatch: expected {}, got {}",
+                    file.size,
+                    data.len()
+                );
             }
         }
         None => {
@@ -81,11 +120,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Try to find a file in a subfolder
             for folder in root_objects.iter().filter(|o| o.is_folder()).take(5) {
                 let contents = storage.list_objects(Some(folder.handle)).await?;
-                if let Some(file) = contents.iter()
+                if let Some(file) = contents
+                    .iter()
                     .filter(|o| o.is_file() && o.size > 1000 && o.size < 100_000)
                     .next()
                 {
-                    println!("Found file in '{}': {} ({} bytes)", folder.filename, file.filename, file.size);
+                    println!(
+                        "Found file in '{}': {} ({} bytes)",
+                        folder.filename, file.filename, file.size
+                    );
                     let stream = storage.download(file.handle).await?;
                     let data: Vec<u8> = stream.collect().await?;
                     println!("Downloaded {} bytes successfully!", data.len());
@@ -93,7 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if data.len() as u64 == file.size {
                         println!("✓ Size matches expected");
                     } else {
-                        println!("✗ Size mismatch: expected {}, got {}", file.size, data.len());
+                        println!(
+                            "✗ Size mismatch: expected {}, got {}",
+                            file.size,
+                            data.len()
+                        );
                     }
                     break;
                 }
@@ -113,9 +160,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let test_content = b"Test file from mtp-rs diagnostic";
             let info = NewObjectInfo::file("mtp-rs-diag-test.txt", test_content.len() as u64);
-            let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(test_content.to_vec()))]);
+            let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+                test_content.to_vec(),
+            ))]);
 
-            match storage.upload(Some(folder.handle), info, Box::pin(stream)).await {
+            match storage
+                .upload(Some(folder.handle), info, Box::pin(stream))
+                .await
+            {
                 Ok(handle) => {
                     println!("✓ Upload succeeded! Handle: {:?}", handle);
 
@@ -131,8 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Try uploading to root
                     println!("\nTrying upload to root...");
-                    let info2 = NewObjectInfo::file("mtp-rs-diag-test.txt", test_content.len() as u64);
-                    let stream2 = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(test_content.to_vec()))]);
+                    let info2 =
+                        NewObjectInfo::file("mtp-rs-diag-test.txt", test_content.len() as u64);
+                    let stream2 = futures::stream::iter(vec![Ok::<_, std::io::Error>(
+                        Bytes::from(test_content.to_vec()),
+                    )]);
 
                     match storage.upload(None, info2, Box::pin(stream2)).await {
                         Ok(handle) => {
@@ -148,7 +203,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Download folder not found, trying root...");
             let test_content = b"Test file from mtp-rs diagnostic";
             let info = NewObjectInfo::file("mtp-rs-diag-test.txt", test_content.len() as u64);
-            let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(test_content.to_vec()))]);
+            let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+                test_content.to_vec(),
+            ))]);
 
             match storage.upload(None, info, Box::pin(stream)).await {
                 Ok(handle) => {

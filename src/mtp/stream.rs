@@ -212,7 +212,10 @@ mod tests {
         }
 
         // Last chunk should have all bytes
-        assert_eq!(chunks.last().unwrap().bytes_so_far, expected_data.len() as u64);
+        assert_eq!(
+            chunks.last().unwrap().bytes_so_far,
+            expected_data.len() as u64
+        );
 
         // Collect all data from chunks and verify
         let collected: Vec<u8> = chunks.iter().flat_map(|c| c.data.iter().copied()).collect();

@@ -4,20 +4,33 @@
 //!
 //! ## Running tests
 //!
+//! **Important**: MTP only allows one operation at a time. Always run with `--test-threads=1`
+//! to avoid timeout issues from tests competing for the device.
+//!
 //! **Read-only tests** (safe to run on any device):
 //! ```sh
-//! cargo test --test integration readonly -- --ignored --nocapture
+//! cargo test --test integration readonly -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! **Destructive tests** (create/delete files on device):
 //! ```sh
-//! cargo test --test integration destructive -- --ignored --nocapture
+//! cargo test --test integration destructive -- --ignored --nocapture --test-threads=1
 //! ```
 //!
-//! **All tests**:
+//! **All tests** (excluding slow tests):
 //! ```sh
-//! cargo test --test integration -- --ignored --nocapture
+//! cargo test --test integration -- --ignored --nocapture --test-threads=1 --skip slow
 //! ```
+//!
+//! **All tests including slow**:
+//! ```sh
+//! cargo test --test integration -- --ignored --nocapture --test-threads=1
+//! ```
+//!
+//! ## Slow tests
+//!
+//! Tests prefixed with `slow_` can take several minutes (e.g., recursive listing on a device
+//! with thousands of files). They are included by default but can be skipped with `--skip slow`.
 
 use serial_test::serial;
 
@@ -133,10 +146,16 @@ mod readonly {
     }
 
     /// Test recursive file listing.
+    ///
+    /// **SLOW TEST**: This test can take 5-10+ minutes on devices with many files.
+    /// It lists ALL objects on the device recursively.
+    ///
+    /// Run separately with: `cargo test test_list_recursive -- --ignored --nocapture`
+    /// Skip this test with: `cargo test -- --ignored --skip slow`
     #[tokio::test]
     #[ignore] // Requires real MTP device
     #[serial]
-    async fn test_list_recursive() {
+    async fn slow_test_list_recursive() {
         let device = MtpDevice::open_first().await.unwrap();
         let storages = device.storages().await.unwrap();
         let storage = &storages[0];
@@ -289,7 +308,10 @@ mod destructive {
             .iter()
             .find(|o| o.filename == "Download")
             .expect("Download folder not found");
-        println!("Using Download folder (handle: {:?})", download_folder.handle);
+        println!(
+            "Using Download folder (handle: {:?})",
+            download_folder.handle
+        );
 
         // Create test content
         let test_content = format!(
@@ -324,7 +346,10 @@ mod destructive {
         let download_stream = storage.download(handle).await.unwrap();
         let downloaded = download_stream.collect().await.unwrap();
 
-        assert_eq!(downloaded, content_bytes, "Downloaded content doesn't match");
+        assert_eq!(
+            downloaded, content_bytes,
+            "Downloaded content doesn't match"
+        );
         println!("Download verified");
 
         // Delete
@@ -363,7 +388,10 @@ mod destructive {
             .iter()
             .find(|o| o.filename == "Download")
             .expect("Download folder not found");
-        println!("Using Download folder (handle: {:?})", download_folder.handle);
+        println!(
+            "Using Download folder (handle: {:?})",
+            download_folder.handle
+        );
 
         let folder_name = format!("mtp-rs-test-{}", std::process::id());
         println!("Creating folder: {}", folder_name);
@@ -386,5 +414,98 @@ mod destructive {
         storage.delete(handle).await.expect("Delete folder failed");
 
         println!("Folder create/delete test PASSED");
+    }
+
+    /// Test renaming a file.
+    #[tokio::test]
+    #[ignore] // Requires real MTP device - WRITES TO DEVICE
+    #[serial]
+    async fn test_rename_file() {
+        let device = MtpDevice::open_first().await.unwrap();
+
+        // Check if rename is supported
+        if !device.supports_rename() {
+            println!("Device does not support renaming (SetObjectPropValue not advertised)");
+            println!("Skipping rename test");
+            return;
+        }
+        println!("Device supports rename operation");
+
+        let storages = device.storages().await.unwrap();
+        let storage = &storages[0];
+
+        // Find Download folder (Android doesn't allow creating files in root)
+        let root_objects = storage.list_objects(None).await.unwrap();
+        let download_folder = root_objects
+            .iter()
+            .find(|o| o.filename == "Download")
+            .expect("Download folder not found");
+        println!(
+            "Using Download folder (handle: {:?})",
+            download_folder.handle
+        );
+
+        // Create a test file
+        let original_name = format!("mtp-rs-rename-test-{}.txt", std::process::id());
+        let renamed_name = format!("mtp-rs-renamed-{}.txt", std::process::id());
+        let test_content = "Test file for rename operation";
+        let content_bytes = test_content.as_bytes();
+
+        println!(
+            "Creating test file: {} ({} bytes)",
+            original_name,
+            content_bytes.len()
+        );
+
+        let info = NewObjectInfo::file(&original_name, content_bytes.len() as u64);
+        let data_stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+            content_bytes.to_vec(),
+        ))]);
+
+        let handle = storage
+            .upload(Some(download_folder.handle), info, Box::pin(data_stream))
+            .await
+            .expect("Upload failed");
+
+        println!("Created file with handle: {:?}", handle);
+
+        // Verify original name
+        let info = storage.get_object_info(handle).await.unwrap();
+        assert_eq!(info.filename, original_name);
+
+        // Rename the file
+        println!("Renaming {} -> {}", original_name, renamed_name);
+        match storage.rename(handle, &renamed_name).await {
+            Ok(()) => {
+                println!("Rename succeeded");
+
+                // Verify the new name
+                let info = storage.get_object_info(handle).await.unwrap();
+                assert_eq!(
+                    info.filename, renamed_name,
+                    "Filename should be updated after rename"
+                );
+                println!("Verified new filename: {}", info.filename);
+            }
+            Err(Error::Protocol {
+                code: mtp_rs::ptp::ResponseCode::OperationNotSupported,
+                ..
+            }) => {
+                println!("Rename operation not supported by device (despite being advertised)");
+                println!("This can happen with some Android devices");
+            }
+            Err(e) => {
+                println!("Rename failed with error: {:?}", e);
+                // Clean up before failing
+                let _ = storage.delete(handle).await;
+                panic!("Rename failed: {:?}", e);
+            }
+        }
+
+        // Clean up: delete the file
+        println!("Cleaning up: deleting test file...");
+        storage.delete(handle).await.expect("Delete failed");
+
+        println!("Rename test PASSED");
     }
 }

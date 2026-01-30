@@ -94,6 +94,18 @@ impl MtpDevice {
         &self.inner.device_info
     }
 
+    /// Check if the device supports renaming objects.
+    ///
+    /// This checks for support of the SetObjectPropValue operation (0x9804),
+    /// which is required to rename files and folders via the ObjectFileName property.
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the device advertises SetObjectPropValue support.
+    pub fn supports_rename(&self) -> bool {
+        self.inner.device_info.supports_rename()
+    }
+
     /// Get all storages on the device.
     pub async fn storages(&self) -> Result<Vec<Storage>, Error> {
         let ids = self.inner.session.get_storage_ids().await?;

@@ -4,9 +4,10 @@
 //! A session maintains the connection state and serializes concurrent operations.
 
 use crate::ptp::{
-    container_type, unpack_u32, unpack_u32_array, CommandContainer, ContainerType, DataContainer,
-    DeviceInfo, EventContainer, ObjectFormatCode, ObjectHandle, ObjectInfo, OperationCode,
-    ResponseCode, ResponseContainer, SessionId, StorageId, StorageInfo, TransactionId,
+    container_type, pack_string, unpack_u32, unpack_u32_array, CommandContainer, ContainerType,
+    DataContainer, DeviceInfo, EventContainer, ObjectFormatCode, ObjectHandle, ObjectInfo,
+    ObjectPropertyCode, OperationCode, ResponseCode, ResponseContainer, SessionId, StorageId,
+    StorageInfo, TransactionId,
 };
 use crate::transport::Transport;
 use crate::Error;
@@ -512,6 +513,80 @@ impl PtpSession {
         Ok(ObjectHandle(response.params[0]))
     }
 
+    /// Get object property value.
+    ///
+    /// Retrieves the value of a specific property for an object.
+    /// This is an MTP extension operation (0x9803).
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The object handle
+    /// * `property` - The property code to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Returns the raw property value as bytes.
+    pub async fn get_object_prop_value(
+        &self,
+        handle: ObjectHandle,
+        property: ObjectPropertyCode,
+    ) -> Result<Vec<u8>, Error> {
+        let (response, data) = self
+            .execute_with_receive(
+                OperationCode::GetObjectPropValue,
+                &[handle.0, property.to_code() as u32],
+            )
+            .await?;
+        Self::check_response(response, OperationCode::GetObjectPropValue)?;
+        Ok(data)
+    }
+
+    /// Set object property value.
+    ///
+    /// Sets the value of a specific property for an object.
+    /// This is an MTP extension operation (0x9804).
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The object handle
+    /// * `property` - The property code to set
+    /// * `value` - The raw property value as bytes
+    pub async fn set_object_prop_value(
+        &self,
+        handle: ObjectHandle,
+        property: ObjectPropertyCode,
+        value: &[u8],
+    ) -> Result<(), Error> {
+        let response = self
+            .execute_with_send(
+                OperationCode::SetObjectPropValue,
+                &[handle.0, property.to_code() as u32],
+                value,
+            )
+            .await?;
+        Self::check_response(response, OperationCode::SetObjectPropValue)?;
+        Ok(())
+    }
+
+    /// Rename an object (file or folder).
+    ///
+    /// This is a convenience method that uses SetObjectPropValue to change
+    /// the ObjectFileName property (0xDC07).
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The object handle to rename
+    /// * `new_name` - The new filename
+    ///
+    /// # Note
+    ///
+    /// Not all devices support renaming. Check `supports_rename()` on DeviceInfo first.
+    pub async fn rename_object(&self, handle: ObjectHandle, new_name: &str) -> Result<(), Error> {
+        let name_bytes = pack_string(new_name);
+        self.set_object_prop_value(handle, ObjectPropertyCode::ObjectFileName, &name_bytes)
+            .await
+    }
+
     // =========================================================================
     // Event handling
     // =========================================================================
@@ -848,5 +923,114 @@ mod tests {
         let event3 = session.poll_event().await.unwrap().unwrap();
         assert_eq!(event3.code, EventCode::ObjectRemoved);
         assert_eq!(event3.params[0], 1);
+    }
+
+    // =========================================================================
+    // Object property and rename tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_get_object_prop_value() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+
+        // GetObjectPropValue data response (property value is raw bytes)
+        let prop_value = vec![0x05, 0x48, 0x00, 0x69, 0x00, 0x00, 0x00]; // Packed string "Hi"
+        mock.queue_response(data_container(
+            2,
+            OperationCode::GetObjectPropValue,
+            &prop_value,
+        ));
+        mock.queue_response(ok_response(2));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        let data = session
+            .get_object_prop_value(ObjectHandle(1), ObjectPropertyCode::ObjectFileName)
+            .await
+            .unwrap();
+
+        assert_eq!(data, prop_value);
+    }
+
+    #[tokio::test]
+    async fn test_set_object_prop_value() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(2)); // SetObjectPropValue
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        let prop_value = pack_string("newfile.txt");
+        session
+            .set_object_prop_value(
+                ObjectHandle(1),
+                ObjectPropertyCode::ObjectFileName,
+                &prop_value,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_object_prop_value_not_supported() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(response_with_params(
+            2,
+            ResponseCode::OperationNotSupported,
+            &[],
+        ));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        let prop_value = pack_string("newfile.txt");
+        let result = session
+            .set_object_prop_value(
+                ObjectHandle(1),
+                ObjectPropertyCode::ObjectFileName,
+                &prop_value,
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::Error::Protocol {
+                code: ResponseCode::OperationNotSupported,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_rename_object() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(2)); // SetObjectPropValue (for rename)
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        session
+            .rename_object(ObjectHandle(1), "renamed.txt")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rename_object_not_supported() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(response_with_params(
+            2,
+            ResponseCode::OperationNotSupported,
+            &[],
+        ));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        let result = session.rename_object(ObjectHandle(1), "renamed.txt").await;
+
+        assert!(matches!(
+            result,
+            Err(crate::Error::Protocol {
+                code: ResponseCode::OperationNotSupported,
+                ..
+            })
+        ));
     }
 }

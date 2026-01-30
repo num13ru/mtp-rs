@@ -44,6 +44,10 @@ pub enum OperationCode {
     CopyObject = 0x101A,
     /// Get partial object data (range request).
     GetPartialObject = 0x101B,
+    /// Get the value of an object property (MTP extension).
+    GetObjectPropValue = 0x9803,
+    /// Set the value of an object property (MTP extension).
+    SetObjectPropValue = 0x9804,
     /// Unknown or vendor-specific operation code.
     Unknown(u16),
 }
@@ -68,6 +72,8 @@ impl OperationCode {
             0x1019 => OperationCode::MoveObject,
             0x101A => OperationCode::CopyObject,
             0x101B => OperationCode::GetPartialObject,
+            0x9803 => OperationCode::GetObjectPropValue,
+            0x9804 => OperationCode::SetObjectPropValue,
             _ => OperationCode::Unknown(code),
         }
     }
@@ -91,6 +97,8 @@ impl OperationCode {
             OperationCode::MoveObject => 0x1019,
             OperationCode::CopyObject => 0x101A,
             OperationCode::GetPartialObject => 0x101B,
+            OperationCode::GetObjectPropValue => 0x9803,
+            OperationCode::SetObjectPropValue => 0x9804,
             OperationCode::Unknown(code) => code,
         }
     }
@@ -474,6 +482,68 @@ impl ObjectFormatCode {
     }
 }
 
+/// MTP object property codes.
+///
+/// These codes identify object properties that can be get/set via MTP operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u16)]
+pub enum ObjectPropertyCode {
+    /// Storage ID containing the object.
+    StorageId = 0xDC01,
+    /// Object format code.
+    ObjectFormat = 0xDC02,
+    /// Protection status (read-only, etc.).
+    ProtectionStatus = 0xDC03,
+    /// Object size in bytes.
+    ObjectSize = 0xDC04,
+    /// Object filename (key property for renaming).
+    ObjectFileName = 0xDC07,
+    /// Date the object was created.
+    DateCreated = 0xDC08,
+    /// Date the object was last modified.
+    DateModified = 0xDC09,
+    /// Parent object handle.
+    ParentObject = 0xDC0B,
+    /// Display name of the object.
+    Name = 0xDC44,
+    /// Unknown or vendor-specific property code.
+    Unknown(u16),
+}
+
+impl ObjectPropertyCode {
+    /// Convert a raw u16 code to an ObjectPropertyCode.
+    pub fn from_code(code: u16) -> Self {
+        match code {
+            0xDC01 => ObjectPropertyCode::StorageId,
+            0xDC02 => ObjectPropertyCode::ObjectFormat,
+            0xDC03 => ObjectPropertyCode::ProtectionStatus,
+            0xDC04 => ObjectPropertyCode::ObjectSize,
+            0xDC07 => ObjectPropertyCode::ObjectFileName,
+            0xDC08 => ObjectPropertyCode::DateCreated,
+            0xDC09 => ObjectPropertyCode::DateModified,
+            0xDC0B => ObjectPropertyCode::ParentObject,
+            0xDC44 => ObjectPropertyCode::Name,
+            _ => ObjectPropertyCode::Unknown(code),
+        }
+    }
+
+    /// Convert an ObjectPropertyCode to its raw u16 value.
+    pub fn to_code(self) -> u16 {
+        match self {
+            ObjectPropertyCode::StorageId => 0xDC01,
+            ObjectPropertyCode::ObjectFormat => 0xDC02,
+            ObjectPropertyCode::ProtectionStatus => 0xDC03,
+            ObjectPropertyCode::ObjectSize => 0xDC04,
+            ObjectPropertyCode::ObjectFileName => 0xDC07,
+            ObjectPropertyCode::DateCreated => 0xDC08,
+            ObjectPropertyCode::DateModified => 0xDC09,
+            ObjectPropertyCode::ParentObject => 0xDC0B,
+            ObjectPropertyCode::Name => 0xDC44,
+            ObjectPropertyCode::Unknown(code) => code,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,6 +598,14 @@ mod tests {
             OperationCode::from_code(0x101B),
             OperationCode::GetPartialObject
         );
+        assert_eq!(
+            OperationCode::from_code(0x9803),
+            OperationCode::GetObjectPropValue
+        );
+        assert_eq!(
+            OperationCode::from_code(0x9804),
+            OperationCode::SetObjectPropValue
+        );
     }
 
     #[test]
@@ -548,6 +626,8 @@ mod tests {
         assert_eq!(OperationCode::MoveObject.to_code(), 0x1019);
         assert_eq!(OperationCode::CopyObject.to_code(), 0x101A);
         assert_eq!(OperationCode::GetPartialObject.to_code(), 0x101B);
+        assert_eq!(OperationCode::GetObjectPropValue.to_code(), 0x9803);
+        assert_eq!(OperationCode::SetObjectPropValue.to_code(), 0x9804);
     }
 
     #[test]
@@ -577,6 +657,8 @@ mod tests {
             OperationCode::MoveObject,
             OperationCode::CopyObject,
             OperationCode::GetPartialObject,
+            OperationCode::GetObjectPropValue,
+            OperationCode::SetObjectPropValue,
         ];
 
         for code in codes {
@@ -1243,6 +1325,88 @@ mod tests {
                 format.is_video(),
                 format.is_image()
             );
+        }
+    }
+
+    // ==================== ObjectPropertyCode Tests ====================
+
+    #[test]
+    fn object_property_code_from_known_codes() {
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC01),
+            ObjectPropertyCode::StorageId
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC02),
+            ObjectPropertyCode::ObjectFormat
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC03),
+            ObjectPropertyCode::ProtectionStatus
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC04),
+            ObjectPropertyCode::ObjectSize
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC07),
+            ObjectPropertyCode::ObjectFileName
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC08),
+            ObjectPropertyCode::DateCreated
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC09),
+            ObjectPropertyCode::DateModified
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC0B),
+            ObjectPropertyCode::ParentObject
+        );
+        assert_eq!(
+            ObjectPropertyCode::from_code(0xDC44),
+            ObjectPropertyCode::Name
+        );
+    }
+
+    #[test]
+    fn object_property_code_to_known_codes() {
+        assert_eq!(ObjectPropertyCode::StorageId.to_code(), 0xDC01);
+        assert_eq!(ObjectPropertyCode::ObjectFormat.to_code(), 0xDC02);
+        assert_eq!(ObjectPropertyCode::ProtectionStatus.to_code(), 0xDC03);
+        assert_eq!(ObjectPropertyCode::ObjectSize.to_code(), 0xDC04);
+        assert_eq!(ObjectPropertyCode::ObjectFileName.to_code(), 0xDC07);
+        assert_eq!(ObjectPropertyCode::DateCreated.to_code(), 0xDC08);
+        assert_eq!(ObjectPropertyCode::DateModified.to_code(), 0xDC09);
+        assert_eq!(ObjectPropertyCode::ParentObject.to_code(), 0xDC0B);
+        assert_eq!(ObjectPropertyCode::Name.to_code(), 0xDC44);
+    }
+
+    #[test]
+    fn object_property_code_unknown_roundtrip() {
+        let unknown_code = 0xDCFF;
+        let prop = ObjectPropertyCode::from_code(unknown_code);
+        assert_eq!(prop, ObjectPropertyCode::Unknown(unknown_code));
+        assert_eq!(prop.to_code(), unknown_code);
+    }
+
+    #[test]
+    fn object_property_code_known_roundtrip() {
+        let codes = [
+            ObjectPropertyCode::StorageId,
+            ObjectPropertyCode::ObjectFormat,
+            ObjectPropertyCode::ProtectionStatus,
+            ObjectPropertyCode::ObjectSize,
+            ObjectPropertyCode::ObjectFileName,
+            ObjectPropertyCode::DateCreated,
+            ObjectPropertyCode::DateModified,
+            ObjectPropertyCode::ParentObject,
+            ObjectPropertyCode::Name,
+        ];
+
+        for code in codes {
+            assert_eq!(ObjectPropertyCode::from_code(code.to_code()), code);
         }
     }
 }

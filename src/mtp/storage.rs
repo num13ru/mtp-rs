@@ -53,8 +53,7 @@ impl Storage {
             .inner
             .session
             .get_object_handles(
-                self.id,
-                None,   // All formats
+                self.id, None,   // All formats
                 parent, // None means root (handle 0)
             )
             .await?;
@@ -325,6 +324,24 @@ impl Storage {
             .session
             .copy_object(handle, storage, new_parent)
             .await
+    }
+
+    /// Rename an object (file or folder).
+    ///
+    /// This changes the filename of an existing object using the MTP
+    /// SetObjectPropValue operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The object handle to rename
+    /// * `new_name` - The new filename
+    ///
+    /// # Note
+    ///
+    /// Not all devices support renaming. Use `MtpDevice::supports_rename()`
+    /// to check if this operation is available.
+    pub async fn rename(&self, handle: ObjectHandle, new_name: &str) -> Result<(), Error> {
+        self.inner.session.rename_object(handle, new_name).await
     }
 }
 

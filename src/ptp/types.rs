@@ -345,6 +345,31 @@ impl DeviceInfo {
             serial_number,
         })
     }
+
+    /// Check if the device supports a specific operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `operation` - The operation code to check
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the operation is in the device's supported operations list.
+    pub fn supports_operation(&self, operation: OperationCode) -> bool {
+        self.operations_supported.contains(&operation)
+    }
+
+    /// Check if the device supports renaming objects.
+    ///
+    /// This checks for support of the SetObjectPropValue operation (0x9804),
+    /// which is required to rename files and folders via the ObjectFileName property.
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the device advertises SetObjectPropValue support.
+    pub fn supports_rename(&self) -> bool {
+        self.supports_operation(OperationCode::SetObjectPropValue)
+    }
 }
 
 // =============================================================================
@@ -1350,5 +1375,59 @@ mod tests {
         assert_eq!(info.filename, "");
         assert!(info.created.is_none());
         assert!(info.modified.is_none());
+    }
+
+    // =========================================================================
+    // DeviceInfo capability tests
+    // =========================================================================
+
+    #[test]
+    fn device_info_supports_operation() {
+        let info = DeviceInfo {
+            operations_supported: vec![
+                OperationCode::GetDeviceInfo,
+                OperationCode::OpenSession,
+                OperationCode::SetObjectPropValue,
+            ],
+            ..Default::default()
+        };
+
+        assert!(info.supports_operation(OperationCode::GetDeviceInfo));
+        assert!(info.supports_operation(OperationCode::OpenSession));
+        assert!(info.supports_operation(OperationCode::SetObjectPropValue));
+        assert!(!info.supports_operation(OperationCode::DeleteObject));
+        assert!(!info.supports_operation(OperationCode::GetObjectPropValue));
+    }
+
+    #[test]
+    fn device_info_supports_rename_true() {
+        let info = DeviceInfo {
+            operations_supported: vec![
+                OperationCode::GetDeviceInfo,
+                OperationCode::SetObjectPropValue, // Required for rename
+            ],
+            ..Default::default()
+        };
+
+        assert!(info.supports_rename());
+    }
+
+    #[test]
+    fn device_info_supports_rename_false() {
+        let info = DeviceInfo {
+            operations_supported: vec![
+                OperationCode::GetDeviceInfo,
+                OperationCode::GetObjectPropValue, // Has Get but not Set
+            ],
+            ..Default::default()
+        };
+
+        assert!(!info.supports_rename());
+    }
+
+    #[test]
+    fn device_info_supports_rename_empty() {
+        let info = DeviceInfo::default();
+        assert!(!info.supports_rename());
     }
 }

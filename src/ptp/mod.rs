@@ -1,16 +1,46 @@
 //! Low-level PTP (Picture Transfer Protocol) implementation.
 //!
-//! This module provides the protocol-level types and functions for MTP/PTP communication.
-//! Most users should prefer the high-level `mtp` module instead.
+//! This module provides direct access to the PTP/MTP protocol layer. Use this module when:
+//!
+//! - Working with digital cameras that use PTP
+//! - You need fine-grained control over protocol operations
+//! - Implementing custom MTP extensions or vendor operations
+//! - You need access to raw response codes for error handling
+//! - Building your own high-level abstractions
+//!
+//! ## When to use `mtp` instead
+//!
+//! Most users working with Android devices should prefer the high-level [`crate::mtp`] module,
+//! which provides a simpler API for common operations like listing files, uploading, and
+//! downloading.
 //!
 //! ## Module structure
 //!
 //! - `codes`: Operation, response, event, and format code enums
 //! - `pack`: Binary serialization/deserialization primitives
-//! - `container`: USB container format (Phase 2)
-//! - `types`: DeviceInfo, StorageInfo, ObjectInfo structures (Phase 2)
-//! - `session`: PTP session management (Phase 4)
-//! - `device`: PtpDevice public API (Phase 5)
+//! - `container`: USB container format for PTP messages
+//! - `types`: DeviceInfo, StorageInfo, ObjectInfo structures
+//! - `session`: PTP session management
+//! - `device`: PtpDevice public API
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use mtp_rs::ptp::{PtpDevice, PtpSession};
+//! use mtp_rs::transport::NusbTransport;
+//!
+//! // Open device and start a session
+//! let transport = NusbTransport::open_first().await?;
+//! let device = PtpDevice::new(transport);
+//! let session = device.open_session().await?;
+//!
+//! // Get device info
+//! let info = session.get_device_info().await?;
+//! println!("Model: {}", info.model);
+//!
+//! // List storage IDs
+//! let storage_ids = session.get_storage_ids().await?;
+//! ```
 
 mod codes;
 mod container;
@@ -19,7 +49,7 @@ mod pack;
 mod session;
 mod types;
 
-pub use codes::{EventCode, ObjectFormatCode, OperationCode, ResponseCode};
+pub use codes::{EventCode, ObjectFormatCode, ObjectPropertyCode, OperationCode, ResponseCode};
 pub use container::{
     container_type, CommandContainer, ContainerType, DataContainer, EventContainer,
     ResponseContainer,
