@@ -171,6 +171,30 @@ For when you need raw protocol access (cameras, debugging, weird edge cases).
 - `OperationCode`, `ResponseCode` - Protocol constants
 - Container types for building/parsing protocol messages
 
+## Android MTP behaviors
+
+Android's MTP implementation has some quirks that this library handles automatically:
+
+| Behavior | What happens | How we handle it |
+|----------|--------------|------------------|
+| **Recursive listing broken** | `ObjectHandle::ALL` returns incomplete results (folders only, no files) | Auto-detected; uses manual folder traversal instead |
+| **Can't create in root** | Creating files/folders in storage root fails with `InvalidObjectHandle` | Use a subfolder like `Download/` as the parent |
+| **Large responses span transfers** | Data >64KB comes in multiple USB transfers | Automatically reassembled before parsing |
+| **Composite USB devices** | Most phones report as USB class 0 (composite) | We inspect interfaces to find MTP |
+
+The library detects Android devices via the `"android.com"` vendor extension and applies appropriate handling automatically. You generally don't need to worry about these details.
+
+**Tip**: When uploading files, use a known folder like `Download/` rather than the storage root:
+
+```rust
+// Find the Download folder
+let objects = storage.list_objects(None).await?;
+let download = objects.iter().find(|o| o.filename == "Download").unwrap();
+
+// Upload to Download folder (not root)
+storage.upload(Some(download.handle), file_info, data).await?;
+```
+
 ## Known limitations
 
 | Limitation | Details |
@@ -180,6 +204,7 @@ For when you need raw protocol access (cameras, debugging, weird edge cases).
 | Non-empty folder delete | Fails; delete contents first |
 | One connection per device | Can't open the same device twice |
 | Upload cancellation | Partial files may remain on device |
+| Recursive listing speed | Manual traversal is slower (~1 request per folder) |
 
 ## Runtime compatibility
 

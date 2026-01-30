@@ -1,10 +1,8 @@
-# mtp-rs Architecture
+# Architecture
 
-This document describes the internal architecture, module organization, and design decisions for `mtp-rs`.
+This document describes the internal architecture and design decisions for `mtp-rs`.
 
----
-
-## Layer Diagram
+## Layer diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -72,9 +70,7 @@ This document describes the internal architecture, module organization, and desi
 └─────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Module Organization
+## Module organization
 
 ```
 src/
@@ -101,14 +97,11 @@ src/
 │
 └── transport/             # USB transport abstraction
     ├── mod.rs             # Transport trait, exports
-    └── nusb.rs            # nusb implementation
+    ├── nusb.rs            # nusb implementation
+    └── mock.rs            # Mock for testing
 ```
 
----
-
-## Dependency Rules
-
-The layers have strict dependency rules to maintain separation:
+## Dependency rules
 
 ```
 ┌─────────────┐
@@ -132,26 +125,22 @@ The layers have strict dependency rules to maintain separation:
 - **error** depends on: nothing internal
 
 **Never**:
-
 - `ptp` imports from `mtp`
 - `transport` imports from `ptp` or `mtp`
 - Circular dependencies
 
----
+## Key design decisions
 
-## Key Design Decisions
-
-### 1. Two-Level API
+### 1. Two-level API
 
 **Decision**: Provide both high-level `mtp::` and low-level `ptp::` APIs.
 
 **Rationale**:
-
 - `mtp::` provides a clean, safe API for media device operations
 - `ptp::` allows camera support and advanced use cases
 - Users can drop down to `ptp::` when needed without reimplementing everything
 
-### 2. Transport Trait Abstraction
+### 2. Transport trait abstraction
 
 **Decision**: Abstract USB communication behind a `Transport` trait.
 
@@ -164,12 +153,11 @@ pub trait Transport: Send + Sync {
 ```
 
 **Rationale**:
-
 - Enables unit testing with mock transport
 - Future-proofs for alternative backends if needed
 - Clean separation of concerns
 
-### 3. Storage as First-Class Object
+### 3. Storage as first-class object
 
 **Decision**: Operations are methods on `Storage`, not `Device`.
 
@@ -182,117 +170,43 @@ let files = device.list_objects(storage_id, None).await?;
 ```
 
 **Rationale**:
-
 - Prevents accidentally mixing up storage IDs
 - More intuitive API
 - Storage holds reference to device, enforces lifetime
 
-### 4. Stream-Based Downloads
+### 4. Stream-based downloads
 
 **Decision**: Downloads return `Stream<Item = Result<Chunk, Error>>`.
 
 **Rationale**:
-
 - Memory efficient for large files
 - Natural progress tracking
 - User controls buffering strategy
 - Composable with async ecosystem
 
-### 5. No Runtime Dependency
+### 5. No runtime dependency
 
 **Decision**: Library uses only `futures` traits, no tokio/async-std dependency.
 
 **Rationale**:
-
 - Works with any async runtime
 - `nusb` is already runtime-agnostic
 - Smaller dependency footprint
 
-### 6. Newtype Wrappers for IDs
+### 6. Newtype wrappers for IDs
 
 **Decision**: `ObjectHandle(u32)`, `StorageId(u32)` instead of raw `u32`.
 
 **Rationale**:
-
 - Prevents mixing up object handles and storage IDs
 - Self-documenting code
 - Zero runtime cost
 
----
+## Concurrency model
 
-## Internal Data Flow
+### Session serialization
 
-### Download Flow
-
-```
-User calls storage.download(handle)
-         │
-         ▼
-┌─────────────────────────────────────┐
-│ MTP layer: Storage::download()      │
-│ - Validates handle                  │
-│ - Creates DownloadStream            │
-└──────────────────┬──────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────┐
-│ PTP layer: Session::get_object()    │
-│ - Builds GetObject command          │
-│ - Sends via transport               │
-│ - Receives data containers          │
-│ - Yields chunks to stream           │
-└──────────────────┬──────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────┐
-│ Transport: receive_bulk()           │
-│ - USB bulk IN transfer              │
-│ - Returns raw bytes                 │
-└─────────────────────────────────────┘
-```
-
-### Upload Flow
-
-```
-User calls storage.upload(parent, info, data_stream)
-         │
-         ▼
-┌─────────────────────────────────────┐
-│ MTP layer: Storage::upload()        │
-│ - Converts NewObjectInfo → ObjectInfo│
-└──────────────────┬──────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────┐
-│ PTP layer: Session::send_object_info│
-│ - Serializes ObjectInfo             │
-│ - Sends command + data phase        │
-│ - Gets assigned handle              │
-└──────────────────┬──────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────┐
-│ PTP layer: Session::send_object()   │
-│ - Streams data from user stream     │
-│ - Chunks into USB packets           │
-│ - Sends via transport               │
-└──────────────────┬──────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────┐
-│ Transport: send_bulk()              │
-│ - USB bulk OUT transfer             │
-└─────────────────────────────────────┘
-```
-
----
-
-## Concurrency Model
-
-### Session Serialization
-
-MTP transactions are synchronous at the protocol level - only one operation can be in progress at a time. The
-`PtpSession` ensures this:
+MTP transactions are synchronous at the protocol level - only one operation can be in progress at a time. The `PtpSession` ensures this:
 
 ```rust
 struct PtpSession {
@@ -309,53 +223,24 @@ impl PtpSession {
 }
 ```
 
-### Event Handling
-
-Events are received on a separate USB interrupt endpoint and can arrive anytime:
-
-```rust
-impl PtpSession {
-    fn events(&self) -> impl Stream<Item=DeviceEvent> {
-        // Spawns background task to poll interrupt endpoint
-        // Uses bounded broadcast channel (capacity 100)
-        // If buffer full, oldest events dropped
-        // Returns channel receiver as stream
-    }
-}
-```
-
-**Multiple subscribers**: Each call to `events()` returns an independent stream.
-All subscribers receive all events (broadcast pattern).
-
-**Backpressure**: Events are buffered up to 100 entries. If no consumer is keeping
-up, oldest events are dropped to prevent unbounded memory growth.
-
-### Thread Safety
+### Thread safety
 
 - `MtpDevice` is `Send + Sync`
 - Multiple `Storage` references can exist (they hold `Arc<Device>`)
 - Concurrent operations are serialized internally
 - Event stream can be polled from any task
 
-### Cancellation and Cleanup
+### Cancellation and cleanup
 
-**Download cancellation**: When a `DownloadStream` is dropped mid-transfer, the
-`Drop` implementation drains remaining data containers from the USB to maintain
-protocol consistency. This happens synchronously and may block briefly.
+**Download cancellation**: When a `DownloadStream` is dropped mid-transfer, the `Drop` implementation drains remaining data containers from the USB to maintain protocol consistency.
 
-**Upload cancellation**: If an upload future is dropped after `SendObjectInfo`
-succeeds but before `SendObject` completes, a partial/empty object may remain
-on the device. The protocol has no abort mechanism. Callers should track the
-handle and delete incomplete objects if needed.
+**Upload cancellation**: If an upload future is dropped after `SendObjectInfo` succeeds but before `SendObject` completes, a partial/empty object may remain on the device. The protocol has no abort mechanism. Callers should track the handle and delete incomplete objects if needed.
 
-**Session cleanup**: When `MtpDevice` is dropped, `CloseSession` is sent
-automatically. No USB reset is performed.
+**Session cleanup**: When `MtpDevice` is dropped, `CloseSession` is sent automatically.
 
----
+## Error handling
 
-## Error Handling Strategy
-
-### Error Propagation
+### Error propagation
 
 Errors bubble up through layers with context:
 
@@ -372,7 +257,7 @@ Protocol error (bad response code)
     Error::Protocol { code, operation }
 ```
 
-### Retryable Errors
+### Retryable errors
 
 Some errors are transient:
 
@@ -387,58 +272,7 @@ impl Error {
 }
 ```
 
-### Error Context
-
-Protocol errors include the operation that caused them:
-
-```rust
-Error::Protocol {
-code: ResponseCode::InvalidObjectHandle,
-operation: OperationCode::GetObject,
-}
-```
-
----
-
-## Testing Strategy
-
-### Unit Tests (no USB)
-
-```
-src/ptp/pack.rs        → test serialization with known byte sequences
-src/ptp/container.rs   → test container building/parsing
-src/ptp/types.rs       → test dataset serialization
-```
-
-### Protocol Tests (mock transport)
-
-```rust
-#[test]
-async fn test_open_session() {
-    let mut mock = MockTransport::new();
-    mock.expect_send(/* OpenSession command */);
-    mock.queue_response(/* OK response */);
-
-    let session = PtpSession::new(mock);
-    session.open(1).await.unwrap();
-}
-```
-
-### Integration Tests (real device)
-
-```rust
-#[test]
-#[ignore]  // Only run with --ignored
-async fn test_real_device() {
-    let device = MtpDevice::open_first().await.unwrap();
-    let storages = device.storages().await.unwrap();
-    assert!(!storages.is_empty());
-}
-```
-
----
-
-## File Ownership
+## File ownership
 
 | File                | Responsibility                                |
 |---------------------|-----------------------------------------------|
@@ -457,3 +291,4 @@ async fn test_real_device() {
 | `mtp/stream.rs`     | DownloadStream, upload helpers                |
 | `transport/mod.rs`  | Transport trait                               |
 | `transport/nusb.rs` | nusb implementation                           |
+| `transport/mock.rs` | Mock for testing                              |

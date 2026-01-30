@@ -1,6 +1,8 @@
-# USB Capture Process for MTP Test Fixtures
+# Debugging and USB capture
 
-## What You're Capturing
+This guide covers how to capture and analyze USB traffic for debugging MTP issues.
+
+## What you're capturing
 
 MTP runs over USB bulk transfers. When you connect your phone and browse files, the conversation looks like:
 
@@ -21,11 +23,9 @@ Your Computer                          Phone
 
 You're recording both sides of this conversation as raw bytes.
 
----
+## Tools
 
-## The Tools
-
-### Option A: Wireshark (Recommended - GUI, cross-platform)
+### Wireshark (recommended)
 
 - Works on Linux, macOS, Windows
 - Visual interface to see packets in real-time
@@ -34,20 +34,13 @@ You're recording both sides of this conversation as raw bytes.
 - On macOS: needs additional setup but works
 - On Windows: needs USBPcap
 
-### Option B: usbmon + tcpdump (Linux command-line)
+### usbmon + tcpdump (Linux)
 
 - Lower level, text-based
 - Good for scripting
 - Linux only
 
-### Option C: Dedicated MTP sniffers
-
-- Some exist but less common
-- Often just wrappers around the above
-
----
-
-## The Capture Session (Step by Step)
+## Capture process
 
 ### 1. Preparation
 
@@ -55,20 +48,20 @@ You're recording both sides of this conversation as raw bytes.
 - On Linux: stop `gvfs-mtp-volume-monitor` or similar
 - You want a clean slate - no background MTP traffic
 
-### 2. Start Capture
+### 2. Start capture
 
 - Open Wireshark
 - Select your USB bus (the one your phone will connect to)
 - Start recording
 
-### 3. Connect Phone
+### 3. Connect phone
 
 - Plug in USB cable
 - Phone shows "USB connected" notification
 - Select "File Transfer / MTP" mode on phone
 - You'll see initial handshake packets appear in Wireshark
 
-### 4. Perform Specific Operations
+### 4. Perform specific operations
 
 Do each operation **deliberately and one at a time** so you can label them later:
 
@@ -79,21 +72,19 @@ Do each operation **deliberately and one at a time** so you can label them later
 | **List storages**       | Open the device in file browser | GetStorageIDs, GetStorageInfo        |
 | **List root folder**    | Click into Internal Storage     | GetObjectHandles, GetObjectInfo (×N) |
 | **Navigate to folder**  | Click into DCIM                 | GetObjectHandles for that folder     |
-| **Read file metadata**  | Select a file (don't open)      | GetObjectInfo, GetObjectPropList     |
+| **Read file metadata**  | Select a file (don't open)      | GetObjectInfo                        |
 | **Download small file** | Copy a small file to PC         | GetObject                            |
 | **Upload small file**   | Copy a small text file to phone | SendObjectInfo, SendObject           |
 | **Delete file**         | Delete that test file           | DeleteObject                         |
 | **Close session**       | Safely eject / disconnect       | CloseSession                         |
 
-### 5. Stop Capture
+### 5. Stop capture
 
 - Disconnect phone cleanly (eject first)
 - Stop Wireshark recording
 - Save the raw capture file (.pcapng)
 
----
-
-## What the Raw Capture Looks Like
+## Reading raw captures
 
 Wireshark shows you something like:
 
@@ -120,18 +111,9 @@ Frame 42: URB_BULK out (host → device)
            Param1: 1 (session ID)
 ```
 
----
+## Processing captures
 
-## Processing Captures into Test Fixtures
-
-### Step 1: Filter to MTP-only traffic
-
-USB captures include lots of noise (USB control transfers, other devices). Filter to:
-
-- Your phone's USB address
-- Bulk transfers only (that's where MTP data lives)
-
-### Step 2: Group into request/response pairs
+### Group into request/response pairs
 
 Each MTP transaction is:
 
@@ -139,9 +121,9 @@ Each MTP transaction is:
 Command (out) → [Data (in/out)] → Response (in)
 ```
 
-You group these by transaction ID.
+Group these by transaction ID.
 
-### Step 3: Extract and label
+### Extract and label
 
 For each transaction, save:
 
@@ -150,34 +132,20 @@ For each transaction, save:
 - The response bytes
 - A human label ("GetStorageIDs", "ListRootFolder", etc.)
 
-### Step 4: Normalize (optional)
-
-Some things vary between captures:
-
-- Transaction IDs (always incrementing)
-- Timestamps in metadata
-- Object handles (device assigns these)
-
-You might want to note which fields are "variable" vs "fixed".
-
----
-
-## Example Fixture Output
+## Using captures for test fixtures
 
 After processing, you'd have something like:
 
 ```
-captures/
+fixtures/
 ├── pixel6_session.json        # Full session from connect to disconnect
 ├── operations/
 │   ├── open_session.json      # Just OpenSession request/response
 │   ├── get_storage_ids.json   # GetStorageIDs
-│   ├── list_root.json         # GetObjectHandles for root
 │   └── download_file.json     # GetObject for a specific file
 └── structures/
     ├── device_info.bin        # Raw DeviceInfo response payload
-    ├── storage_info.bin       # Raw StorageInfo response payload
-    └── object_info_mp3.bin    # Raw ObjectInfo for an MP3 file
+    └── object_info.bin        # Raw ObjectInfo response payload
 ```
 
 Each JSON file might look like:
@@ -194,9 +162,7 @@ Each JSON file might look like:
         "type": "Command",
         "code": "OpenSession",
         "transaction_id": 1,
-        "params": [
-          1
-        ]
+        "params": [1]
       }
     },
     "response": {
@@ -212,20 +178,16 @@ Each JSON file might look like:
 }
 ```
 
----
+## Safety notes
 
-## Safety Notes
+| Concern                  | Risk level   | Mitigation                                                |
+|--------------------------|--------------|-----------------------------------------------------------|
+| Capturing damages phone  | **None**     | You're just observing USB traffic                         |
+| Uploading corrupts data  | **Very low** | Only upload a test file you create, then delete it        |
+| Private data in captures | **Medium**   | Filenames, folder structure visible - don't share raw captures publicly |
+| Phone left in bad state  | **Very low** | Always cleanly eject before disconnecting                 |
 
-| Concern                  | Risk Level   | Mitigation                                                                          |
-|--------------------------|--------------|-------------------------------------------------------------------------------------|
-| Capturing damages phone  | **None**     | You're just observing USB traffic                                                   |
-| Uploading corrupts data  | **Very low** | Only upload a test file you create, then delete it                                  |
-| Private data in captures | **Medium**   | Filenames, folder structure visible in captures - don't share raw captures publicly |
-| Phone left in bad state  | **Very low** | Always cleanly eject before disconnecting                                           |
-
----
-
-## Recommended Capture Plan
+## Recommended capture sessions
 
 ### Session 1: Basic discovery (read-only, safest)
 
@@ -244,21 +206,8 @@ Each JSON file might look like:
 5. Delete it
 6. Disconnect
 
-### Session 3: Edge cases (if needed later)
+### Session 3: Edge cases (if needed)
 
 - Large file transfer (to test chunking)
 - File with unicode name
 - Deep folder navigation
-
----
-
-## Time Estimate
-
-| Task                                   | Time      |
-|----------------------------------------|-----------|
-| Install Wireshark + USB capture setup  | 15-30 min |
-| Capture session 1 (read-only)          | 10 min    |
-| Capture session 2 (with upload/delete) | 10 min    |
-| Process captures into fixtures         | 1-2 hours |
-
-After that initial investment, you never need the device again for testing.

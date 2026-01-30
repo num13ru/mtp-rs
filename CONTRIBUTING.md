@@ -99,12 +99,12 @@ We're not looking to add:
 
 ## The protocol
 
-If you need to understand MTP/PTP, the spec documents are in `docs/spec/`:
+If you need to understand MTP/PTP, see the docs:
 
-- `api-specification.md` - Our public API contract
-- `architecture.md` - Module structure and design
-- `protocol-reference.md` - Wire format, operations, data structures
-- `mtp-v1_1/` - The full MTP spec (reference only, it's dense)
+- [`docs/protocol.md`](docs/protocol.md) - Wire format, operations, data structures
+- [`docs/architecture.md`](docs/architecture.md) - Module structure and design decisions
+- [`docs/debugging.md`](docs/debugging.md) - USB capture for troubleshooting
+- [`docs/mtp-v1_1-spec/`](docs/mtp-v1_1-spec/) - The full MTP spec (reference only, it's dense)
 
 The protocol is essentially:
 

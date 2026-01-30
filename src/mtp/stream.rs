@@ -80,7 +80,7 @@ impl DownloadStream {
         self.total_size
     }
 
-    /// Collect all chunks into a Vec<u8>.
+    /// Collect all chunks into a `Vec<u8>`.
     pub async fn collect(self) -> Result<Vec<u8>, crate::Error> {
         Ok(self.data.unwrap_or_default())
     }

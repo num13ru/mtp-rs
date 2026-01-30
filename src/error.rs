@@ -12,13 +12,18 @@ pub enum Error {
     /// Protocol-level error from device
     #[error("Protocol error: {code:?} during {operation:?}")]
     Protocol {
+        /// The response code returned by the device.
         code: crate::ptp::ResponseCode,
+        /// The operation that triggered the error.
         operation: crate::ptp::OperationCode,
     },
 
     /// Invalid data received from device
     #[error("Invalid data: {message}")]
-    InvalidData { message: String },
+    InvalidData {
+        /// Description of what was invalid.
+        message: String,
+    },
 
     /// I/O error
     #[error("I/O error: {0}")]
@@ -74,5 +79,94 @@ impl Error {
             Error::Protocol { code, .. } => Some(*code),
             _ => None,
         }
+    }
+
+    /// Check if this error indicates another process has exclusive access to the device.
+    ///
+    /// This typically happens on macOS when `ptpcamerad` or another application
+    /// has already claimed the USB interface. Applications can use this to provide
+    /// platform-specific guidance to users.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// match device.open().await {
+    ///     Err(e) if e.is_exclusive_access() => {
+    ///         // On macOS, likely ptpcamerad interference
+    ///         // App can query IORegistry for UsbExclusiveOwner to get details
+    ///         show_exclusive_access_help();
+    ///     }
+    ///     Err(e) => handle_other_error(e),
+    ///     Ok(dev) => use_device(dev),
+    /// }
+    /// ```
+    pub fn is_exclusive_access(&self) -> bool {
+        match self {
+            Error::Usb(io_err) => {
+                let msg = io_err.to_string().to_lowercase();
+                // macOS: "could not be opened for exclusive access"
+                // Linux: typically EBUSY, but message varies
+                // Windows: "access denied" or similar
+                msg.contains("exclusive access")
+                    || msg.contains("device or resource busy")
+                    || (msg.contains("access") && msg.contains("denied"))
+            }
+            Error::Io(io_err) => {
+                let msg = io_err.to_string().to_lowercase();
+                msg.contains("exclusive access")
+                    || msg.contains("device or resource busy")
+                    || (msg.contains("access") && msg.contains("denied"))
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error as IoError, ErrorKind};
+
+    #[test]
+    fn test_is_exclusive_access_macos_message() {
+        // macOS nusb error message
+        let io_err = IoError::new(ErrorKind::Other, "could not be opened for exclusive access");
+        let err = Error::Usb(io_err);
+        assert!(err.is_exclusive_access());
+    }
+
+    #[test]
+    fn test_is_exclusive_access_linux_busy() {
+        // Linux EBUSY style message
+        let io_err = IoError::new(ErrorKind::Other, "Device or resource busy");
+        let err = Error::Usb(io_err);
+        assert!(err.is_exclusive_access());
+    }
+
+    #[test]
+    fn test_is_exclusive_access_windows_denied() {
+        // Windows access denied style message
+        let io_err = IoError::new(ErrorKind::PermissionDenied, "Access is denied");
+        let err = Error::Usb(io_err);
+        assert!(err.is_exclusive_access());
+    }
+
+    #[test]
+    fn test_is_exclusive_access_io_error() {
+        // Also works for Io variant
+        let io_err = IoError::new(ErrorKind::Other, "could not be opened for exclusive access");
+        let err = Error::Io(io_err);
+        assert!(err.is_exclusive_access());
+    }
+
+    #[test]
+    fn test_is_exclusive_access_false_for_other_errors() {
+        assert!(!Error::Timeout.is_exclusive_access());
+        assert!(!Error::Disconnected.is_exclusive_access());
+        assert!(!Error::NoDevice.is_exclusive_access());
+        assert!(!Error::invalid_data("some error").is_exclusive_access());
+
+        let io_err = IoError::new(ErrorKind::NotFound, "device not found");
+        assert!(!Error::Usb(io_err).is_exclusive_access());
     }
 }

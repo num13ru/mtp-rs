@@ -5,32 +5,55 @@ use crate::ptp::{EventCode, EventContainer, ObjectHandle, StorageId};
 /// Events from an MTP device.
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
-    /// A new object was added
-    ObjectAdded { handle: ObjectHandle },
+    /// A new object was added.
+    ObjectAdded {
+        /// Handle of the new object.
+        handle: ObjectHandle,
+    },
 
-    /// An object was removed
-    ObjectRemoved { handle: ObjectHandle },
+    /// An object was removed.
+    ObjectRemoved {
+        /// Handle of the removed object.
+        handle: ObjectHandle,
+    },
 
-    /// A storage was added (e.g., SD card inserted)
-    StoreAdded { storage_id: StorageId },
+    /// A storage was added (e.g., SD card inserted).
+    StoreAdded {
+        /// ID of the new storage.
+        storage_id: StorageId,
+    },
 
-    /// A storage was removed
-    StoreRemoved { storage_id: StorageId },
+    /// A storage was removed.
+    StoreRemoved {
+        /// ID of the removed storage.
+        storage_id: StorageId,
+    },
 
-    /// Storage info changed (e.g., free space)
-    StorageInfoChanged { storage_id: StorageId },
+    /// Storage info changed (e.g., free space).
+    StorageInfoChanged {
+        /// ID of the storage that changed.
+        storage_id: StorageId,
+    },
 
-    /// Object info changed
-    ObjectInfoChanged { handle: ObjectHandle },
+    /// Object info changed.
+    ObjectInfoChanged {
+        /// Handle of the object that changed.
+        handle: ObjectHandle,
+    },
 
-    /// Device info changed
+    /// Device info changed.
     DeviceInfoChanged,
 
-    /// Device is being reset
+    /// Device is being reset.
     DeviceReset,
 
-    /// Unknown event
-    Unknown { code: u16, params: [u32; 3] },
+    /// Unknown event.
+    Unknown {
+        /// Raw event code.
+        code: u16,
+        /// Event parameters.
+        params: [u32; 3],
+    },
 }
 
 impl DeviceEvent {
