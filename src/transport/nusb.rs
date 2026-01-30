@@ -46,18 +46,20 @@ impl NusbTransport {
             return true;
         }
 
-        // Many Android devices use class 0 at device level
-        // and have the MTP interface at the interface level.
-        // We need to open the device to check interface descriptors,
-        // but for listing we can check the device-level class.
-        // If class is 0 (composite device), we optimistically include it
-        // and will verify when opening.
+        // Many Android devices are composite (class 0) with MTP as one interface.
+        // We need to open the device and inspect the interfaces.
         if dev.class() == 0 {
-            // This might be a composite device with MTP interface
-            // We could try to open and check, but for listing purposes
-            // we'll be conservative and not include unknown devices.
-            // The user can always explicitly open a device.
-            return false;
+            if let Ok(device) = dev.open() {
+                if let Ok(config) = device.active_configuration() {
+                    for interface in config.interfaces() {
+                        if let Some(alt) = interface.alt_settings().next() {
+                            if Self::is_mtp_class(alt.class(), alt.subclass(), alt.protocol()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         false
