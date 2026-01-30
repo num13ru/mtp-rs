@@ -14,16 +14,17 @@
 
 mod codes;
 mod container;
+mod device;
 mod pack;
 mod session;
 mod types;
-// mod device;    // Phase 5
 
 pub use codes::{EventCode, ObjectFormatCode, OperationCode, ResponseCode};
 pub use container::{
     container_type, CommandContainer, ContainerType, DataContainer, EventContainer,
     ResponseContainer,
 };
+pub use device::PtpDevice;
 pub use pack::{
     pack_datetime, pack_string, pack_u16, pack_u16_array, pack_u32, pack_u32_array, pack_u64,
     pack_u8, unpack_datetime, unpack_string, unpack_u16, unpack_u16_array, unpack_u32,

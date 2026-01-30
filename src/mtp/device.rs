@@ -1,8 +1,8 @@
 //! MtpDevice - the main entry point for MTP operations.
 
+use crate::mtp::{DeviceEvent, Storage};
 use crate::ptp::{DeviceInfo, ObjectHandle, PtpSession, StorageId};
 use crate::transport::{NusbTransport, Transport};
-use crate::mtp::Storage;
 use crate::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -115,9 +115,42 @@ impl MtpDevice {
             .await
     }
 
-    // TODO: events() - returns impl Stream<Item=DeviceEvent>
-    // This requires spawning a background task to poll the interrupt endpoint
-    // For now, leave unimplemented
+    /// Receive the next event from the device.
+    ///
+    /// This method waits until an event is received from the USB interrupt endpoint.
+    /// Events include object added/removed, storage changes, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// loop {
+    ///     match device.next_event().await {
+    ///         Ok(event) => {
+    ///             match event {
+    ///                 DeviceEvent::ObjectAdded { handle } => {
+    ///                     println!("New object: {:?}", handle);
+    ///                 }
+    ///                 DeviceEvent::StoreRemoved { storage_id } => {
+    ///                     println!("Storage removed: {:?}", storage_id);
+    ///                 }
+    ///                 _ => {}
+    ///             }
+    ///         }
+    ///         Err(Error::Disconnected) => break,
+    ///         Err(Error::Timeout) => continue,  // No event, keep waiting
+    ///         Err(e) => {
+    ///             eprintln!("Error: {}", e);
+    ///             break;
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub async fn next_event(&self) -> Result<DeviceEvent, Error> {
+        match self.inner.session.poll_event().await? {
+            Some(container) => Ok(DeviceEvent::from_container(&container)),
+            None => Err(Error::Timeout),
+        }
+    }
 
     /// Close the connection (also happens on drop).
     pub async fn close(self) -> Result<(), Error> {

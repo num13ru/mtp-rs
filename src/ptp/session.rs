@@ -5,8 +5,8 @@
 
 use crate::ptp::{
     container_type, unpack_u32_array, CommandContainer, ContainerType, DataContainer, DeviceInfo,
-    ObjectFormatCode, ObjectHandle, ObjectInfo, OperationCode, ResponseCode, ResponseContainer,
-    SessionId, StorageId, StorageInfo, TransactionId,
+    EventContainer, ObjectFormatCode, ObjectHandle, ObjectInfo, OperationCode, ResponseCode,
+    ResponseContainer, SessionId, StorageId, StorageInfo, TransactionId,
 };
 use crate::transport::Transport;
 use crate::Error;
@@ -497,6 +497,35 @@ impl PtpSession {
     }
 
     // =========================================================================
+    // Event handling
+    // =========================================================================
+
+    /// Poll for a single event from the interrupt endpoint.
+    ///
+    /// This method waits until an event is received from the USB interrupt endpoint.
+    /// Events are asynchronous notifications from the device about changes such as
+    /// objects being added/removed, storage changes, etc.
+    ///
+    /// Note: This method does not require the operation lock since events are
+    /// received on the interrupt endpoint, which is independent of bulk transfers.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(container))` - An event was received
+    /// - `Ok(None)` - Timeout occurred (no event available)
+    /// - `Err(_)` - Communication error
+    pub async fn poll_event(&self) -> Result<Option<EventContainer>, Error> {
+        match self.transport.receive_interrupt().await {
+            Ok(bytes) => {
+                let container = EventContainer::from_bytes(&bytes)?;
+                Ok(Some(container))
+            }
+            Err(Error::Timeout) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    // =========================================================================
     // Helper methods
     // =========================================================================
 
@@ -726,5 +755,82 @@ mod tests {
         let session = PtpSession::open(transport, 1).await.unwrap();
         // Should succeed even if close fails
         session.close().await.unwrap();
+    }
+
+    // =========================================================================
+    // Event polling tests
+    // =========================================================================
+
+    fn event_container(code: u16, params: [u32; 3]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(24);
+        buf.extend_from_slice(&pack_u32(24)); // length = 24
+        buf.extend_from_slice(&pack_u16(ContainerType::Event.to_code()));
+        buf.extend_from_slice(&pack_u16(code));
+        buf.extend_from_slice(&pack_u32(0)); // transaction_id
+        buf.extend_from_slice(&pack_u32(params[0]));
+        buf.extend_from_slice(&pack_u32(params[1]));
+        buf.extend_from_slice(&pack_u32(params[2]));
+        buf
+    }
+
+    #[tokio::test]
+    async fn test_poll_event_object_added() {
+        use crate::ptp::EventCode;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+
+        // Queue an ObjectAdded event (code 0x4002)
+        mock.queue_interrupt(event_container(0x4002, [42, 0, 0]));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        let event = session.poll_event().await.unwrap().unwrap();
+
+        assert_eq!(event.code, EventCode::ObjectAdded);
+        assert_eq!(event.params[0], 42);
+    }
+
+    #[tokio::test]
+    async fn test_poll_event_store_removed() {
+        use crate::ptp::EventCode;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+
+        // Queue a StoreRemoved event (code 0x4005)
+        mock.queue_interrupt(event_container(0x4005, [0x00010001, 0, 0]));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        let event = session.poll_event().await.unwrap().unwrap();
+
+        assert_eq!(event.code, EventCode::StoreRemoved);
+        assert_eq!(event.params[0], 0x00010001);
+    }
+
+    #[tokio::test]
+    async fn test_poll_event_multiple_events() {
+        use crate::ptp::EventCode;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(1)); // OpenSession
+
+        // Queue multiple events
+        mock.queue_interrupt(event_container(0x4002, [1, 0, 0])); // ObjectAdded
+        mock.queue_interrupt(event_container(0x4002, [2, 0, 0])); // ObjectAdded
+        mock.queue_interrupt(event_container(0x4003, [1, 0, 0])); // ObjectRemoved
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+
+        let event1 = session.poll_event().await.unwrap().unwrap();
+        assert_eq!(event1.code, EventCode::ObjectAdded);
+        assert_eq!(event1.params[0], 1);
+
+        let event2 = session.poll_event().await.unwrap().unwrap();
+        assert_eq!(event2.code, EventCode::ObjectAdded);
+        assert_eq!(event2.params[0], 2);
+
+        let event3 = session.poll_event().await.unwrap().unwrap();
+        assert_eq!(event3.code, EventCode::ObjectRemoved);
+        assert_eq!(event3.params[0], 1);
     }
 }
