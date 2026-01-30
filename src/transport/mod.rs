@@ -1,7 +1,9 @@
 //! USB transport abstraction layer.
 
 pub mod mock;
-// pub mod nusb; // Phase 3
+pub mod nusb;
+
+pub use self::nusb::NusbTransport;
 
 use async_trait::async_trait;
 

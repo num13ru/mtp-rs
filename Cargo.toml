@@ -25,6 +25,7 @@ parking_lot = "0.12"
 
 # For thiserror derive
 thiserror = "1.0"
+futures-timer = "3.0.3"
 
 [dev-dependencies]
 # Testing
