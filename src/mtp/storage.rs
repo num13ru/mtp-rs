@@ -61,7 +61,8 @@ impl Storage {
 
         let mut objects = Vec::with_capacity(handles.len());
         for handle in handles {
-            let info = self.inner.session.get_object_info(handle).await?;
+            let mut info = self.inner.session.get_object_info(handle).await?;
+            info.handle = handle;
             objects.push(info);
         }
         Ok(objects)
@@ -87,7 +88,8 @@ impl Storage {
 
         let mut objects = Vec::with_capacity(handles.len());
         for handle in handles {
-            let info = self.inner.session.get_object_info(handle).await?;
+            let mut info = self.inner.session.get_object_info(handle).await?;
+            info.handle = handle;
             objects.push(info);
         }
         Ok(objects)
@@ -95,7 +97,9 @@ impl Storage {
 
     /// Get object metadata by handle.
     pub async fn get_object_info(&self, handle: ObjectHandle) -> Result<ObjectInfo, Error> {
-        self.inner.session.get_object_info(handle).await
+        let mut info = self.inner.session.get_object_info(handle).await?;
+        info.handle = handle;
+        Ok(info)
     }
 
     /// Download a file.

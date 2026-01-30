@@ -434,6 +434,8 @@ impl StorageInfo {
 /// Contains file/folder metadata including name, size, timestamps, and hierarchy info.
 #[derive(Debug, Clone, Default)]
 pub struct ObjectInfo {
+    /// Object handle (set after parsing, not part of protocol data).
+    pub handle: ObjectHandle,
     /// Storage containing this object.
     pub storage_id: StorageId,
     /// Object format code.
@@ -560,6 +562,7 @@ impl ObjectInfo {
         let (keywords, _consumed) = unpack_string(&buf[offset..])?;
 
         Ok(ObjectInfo {
+            handle: ObjectHandle::default(), // Set by caller after parsing
             storage_id,
             format,
             protection_status,
@@ -1226,6 +1229,7 @@ mod tests {
     #[test]
     fn object_info_to_bytes_roundtrip() {
         let original = ObjectInfo {
+            handle: ObjectHandle(42),
             storage_id: StorageId(0x00010001),
             format: ObjectFormatCode::Jpeg,
             protection_status: ProtectionStatus::None,
