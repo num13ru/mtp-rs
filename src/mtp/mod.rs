@@ -1,7 +1,33 @@
-//! High-level MTP (Media Transfer Protocol) API.
+//! High-level MTP (Media Transfer Protocol) API for Android devices and media players.
 //!
-//! This module provides a user-friendly API for interacting with MTP devices
-//! like Android phones and tablets.
+//! This module provides a convenient, batteries-included API for common file transfer
+//! operations. Use this module when:
+//!
+//! - Working with Android phones and tablets
+//! - You want simple file listing, upload, and download
+//! - You need storage enumeration and device info
+//! - You don't need camera-specific features (capture, live view, etc.)
+//!
+//! ## When to use `ptp` instead
+//!
+//! Use the lower-level [`crate::ptp`] module when you need:
+//! - Direct control over PTP operations and transactions
+//! - Camera-specific functionality
+//! - Custom protocol extensions
+//! - Access to raw response codes and error details
+//!
+//! ## Quick example
+//!
+//! ```rust,ignore
+//! use mtp_rs::mtp::MtpDevice;
+//!
+//! let device = MtpDevice::open_first().await?;
+//! for storage in device.storages().await? {
+//!     for obj in storage.list_objects(None).await? {
+//!         println!("{}", obj.filename);
+//!     }
+//! }
+//! ```
 
 mod device;
 mod event;
