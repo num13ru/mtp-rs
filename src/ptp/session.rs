@@ -4,9 +4,9 @@
 //! A session maintains the connection state and serializes concurrent operations.
 
 use crate::ptp::{
-    container_type, unpack_u32_array, CommandContainer, ContainerType, DataContainer, DeviceInfo,
-    EventContainer, ObjectFormatCode, ObjectHandle, ObjectInfo, OperationCode, ResponseCode,
-    ResponseContainer, SessionId, StorageId, StorageInfo, TransactionId,
+    container_type, unpack_u32, unpack_u32_array, CommandContainer, ContainerType, DataContainer,
+    DeviceInfo, EventContainer, ObjectFormatCode, ObjectHandle, ObjectInfo, OperationCode,
+    ResponseCode, ResponseContainer, SessionId, StorageId, StorageInfo, TransactionId,
 };
 use crate::transport::Transport;
 use crate::Error;
@@ -179,11 +179,12 @@ impl PtpSession {
         self.transport.send_bulk(&cmd.to_bytes()).await?;
 
         // Receive data container(s)
-        // MTP sends data in one or more containers, then response
+        // MTP sends data in one or more containers, then response.
+        // A single data container may span multiple USB transfers if larger than 64KB.
         let mut data = Vec::new();
 
         loop {
-            let bytes = self.transport.receive_bulk(64 * 1024).await?;
+            let mut bytes = self.transport.receive_bulk(64 * 1024).await?;
             if bytes.is_empty() {
                 return Err(Error::invalid_data("Empty response"));
             }
@@ -191,9 +192,24 @@ impl PtpSession {
             let ct = container_type(&bytes)?;
             match ct {
                 ContainerType::Data => {
+                    // Check if we need to receive more data for this container.
+                    // The length field in the header tells us the total container size.
+                    if bytes.len() >= 4 {
+                        let total_length = unpack_u32(&bytes[0..4])? as usize;
+                        // Keep receiving until we have the complete container
+                        while bytes.len() < total_length {
+                            let more = self.transport.receive_bulk(64 * 1024).await?;
+                            if more.is_empty() {
+                                return Err(Error::invalid_data(
+                                    "Incomplete data container: device stopped sending",
+                                ));
+                            }
+                            bytes.extend_from_slice(&more);
+                        }
+                    }
                     let container = DataContainer::from_bytes(&bytes)?;
                     data.extend_from_slice(&container.payload);
-                    // Continue to receive more or response
+                    // Continue to receive more containers or response
                 }
                 ContainerType::Response => {
                     let response = ResponseContainer::from_bytes(&bytes)?;
