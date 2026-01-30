@@ -25,12 +25,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root_files = root_objects.iter().filter(|o| o.is_file()).count();
     println!("Root contains: {} folders, {} files, {} total\n", root_folders, root_files, root_objects.len());
 
-    // Test 2: List recursive
-    println!("=== Test 2: Recursive listing (ObjectHandle::ALL) ===");
+    // Test 2: List recursive (smart - auto-detects Android)
+    println!("=== Test 2: Recursive listing (smart) ===");
+    println!("Device is Android: {}", device.device_info().vendor_extension_desc.contains("android.com"));
+    let start = std::time::Instant::now();
     let recursive_objects = storage.list_objects_recursive(None).await?;
+    let elapsed = start.elapsed();
     let rec_folders = recursive_objects.iter().filter(|o| o.is_folder()).count();
     let rec_files = recursive_objects.iter().filter(|o| o.is_file()).count();
-    println!("Recursive contains: {} folders, {} files, {} total\n", rec_folders, rec_files, recursive_objects.len());
+    println!("Recursive contains: {} folders, {} files, {} total", rec_folders, rec_files, recursive_objects.len());
+    println!("Time taken: {:.2}s\n", elapsed.as_secs_f64());
 
     // Test 3: Manual recursive listing of first folder
     if let Some(first_folder) = root_objects.iter().find(|o| o.is_folder()) {

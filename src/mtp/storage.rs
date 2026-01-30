@@ -69,7 +69,43 @@ impl Storage {
     }
 
     /// List objects recursively.
+    ///
+    /// This method automatically detects Android devices and uses manual traversal
+    /// for them, since Android's MTP implementation doesn't support the native
+    /// `ObjectHandle::ALL` recursive listing.
+    ///
+    /// For non-Android devices, it tries native recursive listing first and falls
+    /// back to manual traversal if the results look incomplete (e.g., only folders
+    /// returned with no files).
     pub async fn list_objects_recursive(
+        &self,
+        parent: Option<ObjectHandle>,
+    ) -> Result<Vec<ObjectInfo>, Error> {
+        if self.inner.is_android() {
+            // Android doesn't support native recursive listing
+            return self.list_objects_recursive_manual(parent).await;
+        }
+
+        // Try native recursive listing for non-Android devices
+        let native_result = self.list_objects_recursive_native(parent).await?;
+
+        // Heuristic: if we only got folders and no files, the native listing
+        // probably didn't work correctly - fall back to manual traversal
+        let has_files = native_result.iter().any(|o| o.is_file());
+        if !native_result.is_empty() && !has_files {
+            // Looks like native didn't work, try manual
+            return self.list_objects_recursive_manual(parent).await;
+        }
+
+        Ok(native_result)
+    }
+
+    /// List objects recursively using native MTP recursive listing.
+    ///
+    /// Uses `ObjectHandle::ALL` to request recursive listing from the device.
+    /// Note: This doesn't work on Android devices - use `list_objects_recursive()`
+    /// which handles this automatically.
+    pub async fn list_objects_recursive_native(
         &self,
         parent: Option<ObjectHandle>,
     ) -> Result<Vec<ObjectInfo>, Error> {
@@ -93,6 +129,33 @@ impl Storage {
             objects.push(info);
         }
         Ok(objects)
+    }
+
+    /// List objects recursively using manual folder traversal.
+    ///
+    /// This method traverses folders one by one, which works on all devices
+    /// including Android. It's slower than native recursive listing but
+    /// always works.
+    pub async fn list_objects_recursive_manual(
+        &self,
+        parent: Option<ObjectHandle>,
+    ) -> Result<Vec<ObjectInfo>, Error> {
+        let mut result = Vec::new();
+        let mut folders_to_visit = vec![parent];
+
+        while let Some(current_parent) = folders_to_visit.pop() {
+            let objects = self.list_objects(current_parent).await?;
+
+            for obj in objects {
+                if obj.is_folder() {
+                    // Add folder to visit list
+                    folders_to_visit.push(Some(obj.handle));
+                }
+                result.push(obj);
+            }
+        }
+
+        Ok(result)
     }
 
     /// Get object metadata by handle.

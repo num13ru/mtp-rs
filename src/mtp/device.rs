@@ -13,6 +13,20 @@ pub(crate) struct MtpDeviceInner {
     pub(crate) device_info: DeviceInfo,
 }
 
+impl MtpDeviceInner {
+    /// Check if the device is an Android device.
+    ///
+    /// Detected by looking for "android.com" in the vendor extension descriptor.
+    /// Android devices have known MTP quirks (e.g., ObjectHandle::ALL doesn't work
+    /// for recursive listing).
+    pub fn is_android(&self) -> bool {
+        self.device_info
+            .vendor_extension_desc
+            .to_lowercase()
+            .contains("android.com")
+    }
+}
+
 /// An MTP device connection.
 ///
 /// This is the main entry point for interacting with MTP devices.
