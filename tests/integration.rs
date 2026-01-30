@@ -283,6 +283,14 @@ mod destructive {
         let storages = device.storages().await.unwrap();
         let storage = &storages[0];
 
+        // Find Download folder (Android doesn't allow creating files in root)
+        let root_objects = storage.list_objects(None).await.unwrap();
+        let download_folder = root_objects
+            .iter()
+            .find(|o| o.filename == "Download")
+            .expect("Download folder not found");
+        println!("Using Download folder (handle: {:?})", download_folder.handle);
+
         // Create test content
         let test_content = format!(
             "Test file created by mtp-rs integration test at {:?}",
@@ -292,14 +300,14 @@ mod destructive {
 
         println!("Uploading test file ({} bytes)...", content_bytes.len());
 
-        // Upload
+        // Upload to Download folder
         let info = NewObjectInfo::file("mtp-rs-test.txt", content_bytes.len() as u64);
         let data_stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
             content_bytes.to_vec(),
         ))]);
 
         let handle = storage
-            .upload(None, info, Box::pin(data_stream))
+            .upload(Some(download_folder.handle), info, Box::pin(data_stream))
             .await
             .expect("Upload failed");
 
@@ -349,12 +357,20 @@ mod destructive {
         let storages = device.storages().await.unwrap();
         let storage = &storages[0];
 
+        // Find Download folder (Android doesn't allow creating folders in root)
+        let root_objects = storage.list_objects(None).await.unwrap();
+        let download_folder = root_objects
+            .iter()
+            .find(|o| o.filename == "Download")
+            .expect("Download folder not found");
+        println!("Using Download folder (handle: {:?})", download_folder.handle);
+
         let folder_name = format!("mtp-rs-test-{}", std::process::id());
         println!("Creating folder: {}", folder_name);
 
-        // Create folder
+        // Create folder inside Download
         let handle = storage
-            .create_folder(None, &folder_name)
+            .create_folder(Some(download_folder.handle), &folder_name)
             .await
             .expect("Create folder failed");
 
