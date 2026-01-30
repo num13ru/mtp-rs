@@ -1,0 +1,38 @@
+[package]
+name = "mtp-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Pure-Rust MTP (Media Transfer Protocol) library for modern Android devices"
+repository = "https://github.com/vdavid/mtp-rs"
+keywords = ["mtp", "android", "usb", "media", "transfer"]
+categories = ["hardware-support", "filesystem"]
+
+[dependencies]
+# USB transport (Phase 3+)
+nusb = "0.1"
+
+# Async runtime agnostic
+futures = "0.3"
+async-trait = "0.1"
+
+# Byte handling
+bytes = "1.5"
+
+# Synchronization primitives
+parking_lot = "0.12"
+
+# For thiserror derive
+thiserror = "1.0"
+
+[dev-dependencies]
+# Testing
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
+proptest = "1.4"
+tokio-util = { version = "0.7", features = ["io"] }
+
+[features]
+default = []
+# Enable property-based tests
+proptest = []
