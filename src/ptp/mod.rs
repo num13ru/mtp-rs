@@ -13,17 +13,25 @@
 //! - `device`: PtpDevice public API (Phase 5)
 
 mod codes;
+mod container;
 mod pack;
-// mod container; // Phase 2
-// mod types;     // Phase 2
+mod types;
 // mod session;   // Phase 4
 // mod device;    // Phase 5
 
 pub use codes::{EventCode, ObjectFormatCode, OperationCode, ResponseCode};
+pub use container::{
+    container_type, CommandContainer, ContainerType, DataContainer, EventContainer,
+    ResponseContainer,
+};
 pub use pack::{
     pack_datetime, pack_string, pack_u16, pack_u16_array, pack_u32, pack_u32_array, pack_u64,
     pack_u8, unpack_datetime, unpack_string, unpack_u16, unpack_u16_array, unpack_u32,
     unpack_u32_array, unpack_u64, unpack_u8, DateTime,
+};
+pub use types::{
+    AccessCapability, AssociationType, DeviceInfo, FilesystemType, ObjectInfo, ProtectionStatus,
+    StorageInfo, StorageType,
 };
 
 /// 32-bit object handle assigned by the device.

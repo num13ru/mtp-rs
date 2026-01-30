@@ -263,10 +263,11 @@ impl EventCode {
 /// PTP/MTP object format codes.
 ///
 /// These codes identify the format/type of objects stored on the device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u16)]
 pub enum ObjectFormatCode {
     /// Undefined/unknown format.
+    #[default]
     Undefined = 0x3000,
     /// Association (folder/directory).
     Association = 0x3001,

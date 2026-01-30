@@ -40,8 +40,8 @@
 
 pub mod error;
 pub mod ptp;
+pub mod transport;
 // pub mod mtp;      // Phase 4
-// pub mod transport; // Phase 2-3
 
 pub use error::Error;
 
