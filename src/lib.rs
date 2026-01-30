@@ -39,9 +39,9 @@
 //! ```
 
 pub mod error;
+pub mod mtp;
 pub mod ptp;
 pub mod transport;
-// pub mod mtp;      // Phase 4
 
 pub use error::Error;
 
@@ -49,4 +49,10 @@ pub use error::Error;
 pub use ptp::{
     DateTime, EventCode, ObjectFormatCode, ObjectHandle, OperationCode, ResponseCode, SessionId,
     StorageId, TransactionId,
+};
+
+// Re-export high-level MTP types
+pub use mtp::{
+    DeviceEvent, DownloadChunk, DownloadStream, MtpDevice, MtpDeviceBuilder, NewObjectInfo,
+    Progress, Storage,
 };

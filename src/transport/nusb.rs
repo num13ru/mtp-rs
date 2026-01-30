@@ -81,9 +81,9 @@ impl NusbTransport {
         timeout: Duration,
     ) -> Result<Self, crate::Error> {
         // Find the MTP interface
-        let config = device
-            .active_configuration()
-            .map_err(|e| crate::Error::invalid_data(format!("Failed to get configuration: {}", e)))?;
+        let config = device.active_configuration().map_err(|e| {
+            crate::Error::invalid_data(format!("Failed to get configuration: {}", e))
+        })?;
 
         let mut mtp_interface_number = None;
         let mut bulk_in = None;

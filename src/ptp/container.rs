@@ -13,9 +13,7 @@
 //!
 //! After header: parameters (each u32) or payload bytes.
 
-use super::{
-    pack_u16, pack_u32, unpack_u16, unpack_u32, EventCode, OperationCode, ResponseCode,
-};
+use super::{pack_u16, pack_u32, unpack_u16, unpack_u32, EventCode, OperationCode, ResponseCode};
 
 /// Minimum container header size in bytes.
 const HEADER_SIZE: usize = 12;
@@ -65,9 +63,8 @@ pub fn container_type(buf: &[u8]) -> Result<ContainerType, crate::Error> {
     }
 
     let type_code = unpack_u16(&buf[4..6])?;
-    ContainerType::from_code(type_code).ok_or_else(|| {
-        crate::Error::invalid_data(format!("invalid container type: {}", type_code))
-    })
+    ContainerType::from_code(type_code)
+        .ok_or_else(|| crate::Error::invalid_data(format!("invalid container type: {}", type_code)))
 }
 
 /// Command container sent to the device.
@@ -734,7 +731,7 @@ mod tests {
             0x04, 0x00, // type = Event
             0x02, 0x40, // code
             0x00, 0x00, 0x00, 0x00, // transaction_id
-            // Missing params
+                  // Missing params
         ];
         assert!(EventContainer::from_bytes(&bytes).is_err());
     }

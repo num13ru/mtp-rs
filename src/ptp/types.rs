@@ -783,7 +783,10 @@ mod tests {
             AccessCapability::from_code(2),
             AccessCapability::ReadOnlyWithDeletion
         );
-        assert_eq!(AccessCapability::from_code(99), AccessCapability::Unknown(99));
+        assert_eq!(
+            AccessCapability::from_code(99),
+            AccessCapability::Unknown(99)
+        );
     }
 
     #[test]
@@ -819,7 +822,10 @@ mod tests {
     fn protection_status_from_code() {
         assert_eq!(ProtectionStatus::from_code(0), ProtectionStatus::None);
         assert_eq!(ProtectionStatus::from_code(1), ProtectionStatus::ReadOnly);
-        assert_eq!(ProtectionStatus::from_code(99), ProtectionStatus::Unknown(99));
+        assert_eq!(
+            ProtectionStatus::from_code(99),
+            ProtectionStatus::Unknown(99)
+        );
     }
 
     #[test]
@@ -849,7 +855,10 @@ mod tests {
     #[test]
     fn association_type_from_code() {
         assert_eq!(AssociationType::from_code(0), AssociationType::None);
-        assert_eq!(AssociationType::from_code(1), AssociationType::GenericFolder);
+        assert_eq!(
+            AssociationType::from_code(1),
+            AssociationType::GenericFolder
+        );
         assert_eq!(AssociationType::from_code(99), AssociationType::Unknown(99));
     }
 

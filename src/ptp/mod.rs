@@ -15,8 +15,8 @@
 mod codes;
 mod container;
 mod pack;
+mod session;
 mod types;
-// mod session;   // Phase 4
 // mod device;    // Phase 5
 
 pub use codes::{EventCode, ObjectFormatCode, OperationCode, ResponseCode};
@@ -29,6 +29,7 @@ pub use pack::{
     pack_u8, unpack_datetime, unpack_string, unpack_u16, unpack_u16_array, unpack_u32,
     unpack_u32_array, unpack_u64, unpack_u8, DateTime,
 };
+pub use session::PtpSession;
 pub use types::{
     AccessCapability, AssociationType, DeviceInfo, FilesystemType, ObjectInfo, ProtectionStatus,
     StorageInfo, StorageType,
