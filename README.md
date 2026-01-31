@@ -195,22 +195,20 @@ let download = objects.iter().find(|o| o.filename == "Download").unwrap();
 storage.upload(Some(download.handle), file_info, data).await?;
 ```
 
-## Known limitations
+## Tested devices
 
-| Limitation | Details |
-|------------|---------|
-| Files >4GB | Size reported as 4GB due to protocol limitation |
-| Filename length | Max 254 characters |
-| Non-empty folder delete | Fails; delete contents first |
-| One connection per device | Can't open the same device twice |
-| Upload cancellation | Partial files may remain on device |
-| Recursive listing speed | Manual traversal is slower (~1 request per folder) |
+"Full support" really means "Full support, except for general Android quirks listed above".
 
-## Runtime compatibility
+| Device                              | Android | Notes           |
+|-------------------------------------|---------|-----------------|
+| Google Pixel 9 Pro XL               | 15      | Full support    |
+| Samsung Galaxy S23 Ultra (SM-S918B) | 14      | No root listing |
 
-The library uses `futures` traits and is runtime-agnostic. It's tested with tokio but should work with async-std or any other runtime.
+**Samsung quirk**: Samsung devices return `InvalidObjectHandle` when listing the root folder with handle 0.
+The library automatically detects this and falls back to recursive listing with filtering. This is transparent to users.
 
-We use `nusb` for USB access, which is also runtime-agnostic.
+We welcome reports of other tested devices! Please open an issue or PR with your device model, Android version,
+and any issues encountered.
 
 ## Why not libmtp?
 

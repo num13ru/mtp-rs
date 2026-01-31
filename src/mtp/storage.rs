@@ -45,24 +45,67 @@ impl Storage {
     }
 
     /// List objects in a folder (None = root).
+    ///
+    /// Some devices (notably Samsung) don't support listing root with handle 0.
+    /// This method automatically falls back to recursive listing and filtering
+    /// when the standard approach fails.
     pub async fn list_objects(
         &self,
         parent: Option<ObjectHandle>,
     ) -> Result<Vec<ObjectInfo>, Error> {
-        let handles = self
+        let result = self
             .inner
             .session
             .get_object_handles(
                 self.id, None,   // All formats
                 parent, // None means root (handle 0)
             )
-            .await?;
+            .await;
+
+        let handles = match result {
+            Ok(h) => h,
+            Err(Error::Protocol {
+                code: crate::ptp::ResponseCode::InvalidObjectHandle,
+                ..
+            }) if parent.is_none() => {
+                // Samsung fallback: use recursive listing and filter to root items
+                return self.list_objects_samsung_fallback().await;
+            }
+            Err(e) => return Err(e),
+        };
 
         let mut objects = Vec::with_capacity(handles.len());
         for handle in handles {
             let mut info = self.inner.session.get_object_info(handle).await?;
             info.handle = handle;
             objects.push(info);
+        }
+        Ok(objects)
+    }
+
+    /// Samsung fallback: list all objects recursively and filter to root level.
+    ///
+    /// Samsung devices return InvalidObjectHandle when trying to list root (handle 0).
+    /// Instead, we list all objects recursively (handle 0xFFFFFFFF) and filter to
+    /// those at the root level (parent_handle == 0 or parent_handle == 0xFFFFFFFF).
+    async fn list_objects_samsung_fallback(&self) -> Result<Vec<ObjectInfo>, Error> {
+        // Get all object handles recursively
+        let handles = self
+            .inner
+            .session
+            .get_object_handles(self.id, None, Some(ObjectHandle::ALL))
+            .await?;
+
+        // Get info for each and filter to root level
+        let mut objects = Vec::new();
+        for handle in handles {
+            let mut info = self.inner.session.get_object_info(handle).await?;
+            info.handle = handle;
+
+            // Root items have parent 0 or 0xFFFFFFFF (depending on device)
+            if info.parent.0 == 0 || info.parent.0 == 0xFFFFFFFF {
+                objects.push(info);
+            }
         }
         Ok(objects)
     }
