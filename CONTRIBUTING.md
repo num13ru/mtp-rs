@@ -17,27 +17,27 @@ You don't need an MTP device for most development. The test suite uses mock tran
 
 ```
 src/
-├── ptp/           # Low-level protocol implementation
-│   ├── codes.rs   # Operation/response/event code enums
-│   ├── pack.rs    # Binary serialization (little-endian, UTF-16LE strings)
+├── ptp/             # Low-level protocol implementation
+│   ├── codes.rs     # Operation/response/event code enums
+│   ├── pack.rs      # Binary serialization (little-endian, UTF-16LE strings)
 │   ├── container.rs # USB container format
-│   ├── types.rs   # DeviceInfo, StorageInfo, ObjectInfo structs
-│   ├── session.rs # Session management and operations
-│   └── device.rs  # PtpDevice public API
-├── mtp/           # High-level API
-│   ├── device.rs  # MtpDevice and builder
-│   ├── storage.rs # Storage and file operations
-│   ├── stream.rs  # Streaming downloads
-│   ├── object.rs  # NewObjectInfo for uploads
-│   └── event.rs   # Device events
-├── transport/     # USB abstraction
-│   ├── mock.rs    # Mock for testing
-│   └── nusb.rs    # Real USB implementation
-├── error.rs       # Error types
-└── lib.rs         # Crate root
+│   ├── types.rs     # DeviceInfo, StorageInfo, ObjectInfo structs
+│   ├── session.rs   # Session management and operations
+│   └── device.rs    # PtpDevice public API
+├── mtp/             # High-level API
+│   ├── device.rs    # MtpDevice and builder
+│   ├── storage.rs   # Storage and file operations
+│   ├── stream.rs    # Streaming downloads
+│   ├── object.rs    # NewObjectInfo for uploads
+│   └── event.rs     # Device events
+├── transport/       # USB abstraction
+│   ├── mock.rs      # Mock for testing
+│   └── nusb.rs      # Real USB implementation
+├── error.rs         # Error types
+└── lib.rs           # Crate root
 
 tests/
-└── integration.rs # Tests that need a real device
+└── integration.rs   # Tests that need a real device
 ```
 
 ## Running tests
@@ -50,7 +50,10 @@ cargo test
 cargo test --test integration -- --ignored --nocapture
 ```
 
-The integration tests are split into read-only (safe) and destructive (creates/deletes files). They run serially to avoid race conditions.
+The integration tests are split into read-only (safe) and destructive (creates/deletes files) to avoid messing up
+your phone if you don't trust the lib too much but still want to run some tests.
+
+Integration tests run serially to avoid the obvious collisions.
 
 ## Code style
 
@@ -67,35 +70,30 @@ No need to over-document internal code. If the code is clear, a brief comment or
 
 A few things that might not be obvious:
 
-**Two-layer API**: The `ptp::` module is the protocol implementation, `mtp::` is the user-friendly wrapper. Most changes to user-facing behavior go in `mtp::`, protocol fixes go in `ptp::`.
-
-**Runtime agnostic**: We don't depend on tokio directly. Use `futures` traits and `futures-timer` for timeouts. This lets users bring their own runtime.
-
-**No device quirks**: Unlike libmtp, we don't have a quirks database. Modern Android devices all behave the same way. If you find a device that doesn't work, let's understand why before adding workarounds.
-
-**Mock transport for testing**: `transport::mock::MockTransport` lets you test protocol logic without USB. Queue expected responses and verify sent commands.
+- **Two-layer API**: The `ptp::` module is the protocol implementation, `mtp::` is the user-friendly wrapper. Most
+  changes to user-facing behavior go in `mtp::`, protocol fixes go in `ptp::`.
+- **Runtime agnostic**: We don't depend on tokio directly. Use `futures` traits and `futures-timer` for timeouts. This
+  lets users bring their own runtime.
+- **No device quirks**: Unlike libmtp, we don't have a quirks database. Modern Android devices all behave the same way.
+  If you find a device that doesn't work, let's understand why before adding workarounds.
+- **Mock transport for testing**: `transport::mock::MockTransport` lets you test protocol logic without USB. Queue
+  expected responses and verify sent commands.
 
 ## What we're looking for
 
-Good first contributions:
+- Testing with real devices and updating [README.md](README.md#tested-devices) with more device info
+- Bug reports (with reproduction steps)
+- Docs improvements
+- Maybe some more PTP implementations like battery level, I'm unsure if we really want it or we should focus on MTP
 
-- Bug fixes with test cases
-- Documentation improvements
-- New integration tests
-- Error message improvements
-
-Larger contributions (please open an issue first):
-
-- New MTP operations
-- Performance improvements
-- Platform-specific fixes
-
-We're not looking to add:
+We're not really looking to add legacy stuff like:
 
 - MTPZ support
 - Legacy device quirks
 - Playlist/metadata syncing
 - Vendor extensions
+
+These don't seem that useful.
 
 ## The protocol
 
@@ -104,7 +102,7 @@ If you need to understand MTP/PTP, see the docs:
 - [`docs/protocol.md`](docs/protocol.md) - Wire format, operations, data structures
 - [`docs/architecture.md`](docs/architecture.md) - Module structure and design decisions
 - [`docs/debugging.md`](docs/debugging.md) - USB capture for troubleshooting
-- [`docs/mtp-v1_1-spec/`](docs/mtp-v1_1-spec/) - The full MTP spec (reference only, it's dense)
+- [`mtp-v1_1-spec-md`](https://github.com/vdavid/mtp-v1_1-spec-md) - Separate repo. The full MTP spec. Reference only, it's dense.
 
 The protocol is essentially:
 
@@ -121,10 +119,10 @@ Everything is little-endian. Strings are UTF-16LE with a length prefix.
 3. Run `cargo fmt` and `cargo clippy`
 4. Run `cargo test`
 5. If you have a device, run integration tests
-6. Open a PR with a clear description
+6. Open a PR with a clear description incl. how you tested your changes
 
 For non-trivial changes, consider opening an issue first to discuss the approach.
 
 ## Questions?
 
-Open an issue. We don't bite.
+Open an issue. We're happy to chat!

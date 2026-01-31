@@ -1,25 +1,39 @@
 # mtp-rs
 
-A pure-Rust library for talking to Android devices over MTP (Media Transfer Protocol).
+The first pure-Rust MTP/PTP library with no C dependencies.
 
-No C dependencies. No libmtp. Just Rust and USB.
+Talk to Android phones, e-book readers incl. Kindle, and digital cameras over USB.
+No libmtp, no libusb, no FFI—just async Rust built on [`nusb`](https://crates.io/crates/nusb).
+
+**Why this matters:**
+- Cross-compile without system library headaches
+- No `pkg-config`, no `-sys` crates, no build.rs surprises
+- Works anywhere Rust compiles (including musl, cross-compilation targets)
+- Fully async and runtime-agnostic
 
 ## What it does
 
-- Connect to Android phones/tablets over USB
-- List, download, upload, delete, move, and copy files
-- Create and delete folders
-- Stream large file downloads with progress
+- Connect to devices over USB
+- List, download, upload, delete, move, copy, and rename files
+- Create, delete, and rename folders
+- Stream large file downloads with continued progress indication
 - Listen for device events (file added, storage removed, etc.)
+- Also exposes a lower-level interface for PTP, so it can be used for cameras too.
 
 ## What it doesn't do
 
 - MTPZ (the DRM extension some old devices used)
-- Playlists and metadata syncing
+- Playlists, tracks, albums, and custom operations
 - Vendor-specific extensions
-- Legacy device quirks (we target modern Android only)
+- Legacy Android device quirks (pre-5.0 devices)
+
+We intentionally didn't want to support these because they're rarely needed now, and it'd be a nightmare to test.
+[libmtp](https://github.com/libmtp/libmtp/) has an impressive collection of device quirks, but it's LGPL-1.1 licensed,
+and I wanted to do MIT/Apache-2.0 for broader access. So copying that code was also not an option.
 
 ## Quick start
+
+A simple test would be this:
 
 ```rust
 use mtp_rs::mtp::MtpDevice;
@@ -59,7 +73,7 @@ Add to your `Cargo.toml`:
 mtp-rs = "0.1"
 ```
 
-You'll also need an async runtime. The library is runtime-agnostic, but tokio is the most common choice:
+You'll also need an async runtime. The library is runtime-agnostic, but [tokio](https://github.com/tokio-rs/tokio) is the most common choice:
 
 ```toml
 [dependencies]
@@ -68,7 +82,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 ### Platform notes
 
-**Linux**: You may need udev rules to access USB devices without root. Create `/etc/udev/rules.d/99-mtp.rules`:
+#### Linux
+
+You may need udev rules to access USB devices without root. Create `/etc/udev/rules.d/99-mtp.rules`:
 
 ```
 SUBSYSTEM=="usb", ATTR{idVendor}=="*",  MODE="0666"
@@ -76,11 +92,48 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="*",  MODE="0666"
 
 Then run `sudo udevadm control --reload-rules`.
 
-**macOS**: Should work out of the box. If you have Android File Transfer installed, you may need to quit it first (it grabs the device exclusively).
+#### macOS
 
-**Windows**: Should work, but hasn't been extensively tested yet.
+It's a bit of a nightmare because macOS's built-in `ptpcamerad` daemon automatically claims MTP/PTP devices right on
+connection, blocking other apps. This sucks because it it NOT `MTP`, just `PTP`, so Android phones, Kindles, etc.
+won't be able to sync files through it, and at the same time, other apps (like potentially yours if you're looking at
+this) will be unable to access the device. 🤯
+
+One more potential offender is [Android File Transfer](https://www.android-file-transfer-mac.com/): If installed, it
+spawns a process that also grabs devices. You must quit it before trying to connect to an MTP device using this (or,
+honestly, any) library.
+
+**Workarounds:**
+
+1. **Kill loop**: Run this in Terminal while using your app:
+   ```bash
+   while true; do pkill -9 ptpcamerad 2>/dev/null; sleep 1; done
+   ```
+
+2. **Disable `ptpcamerad`**: Persistent, but may break Photos.app:
+
+   ```bash
+   sudo launchctl disable system/com.apple.ptpcamerad
+   ```
+
+**Other tips for app developers:**
+
+- This library provides `Error::is_exclusive_access()`. Use this to detect this condition and guide users to apply
+  one of the workarounds above.
+- Query IORegistry for `UsbExclusiveOwner` to show which process (pid, name) holds the device for even more helpful info
+- App Store sandboxed apps cannot kill processes. If your app is such, then provide the command for users to run manually.
+  If your app isn't in the App Store, then you're in a better position and may be able to use the workarounds, BUT
+  it's a bit murky territory with Apple.
+- See [Cmdr](https://github.com/vdavid/cmdr) and [Commander One](https://mac.eltima.com/file-manager.html) for UX
+  inspiration on handling this gracefully.
+
+#### Windows
+
+Should work, and no dependencies needed, but we haven't tested it.
 
 ## Examples
+
+These might come in handy:
 
 ### Download a file
 
@@ -164,25 +217,55 @@ This is what most people want. Friendly types, automatic session management, str
 
 ### Low-level API (`ptp::`)
 
-For when you need raw protocol access (cameras, debugging, weird edge cases).
+For when you need raw protocol access (for cameras or maybe debugging).
 
 - `PtpDevice` - Raw device connection
 - `PtpSession` - Manual session control, raw operations
 - `OperationCode`, `ResponseCode` - Protocol constants
 - Container types for building/parsing protocol messages
 
-## Android MTP behaviors
+With this, you can copy stuff to/from cameras, but there are no other features like reading the battery level,
+trigger capture, read supported formats/sizes, etc. This is intentional, didn't want to bloat the library with
+camera-specific code because this is mainly for MTP and file transfer.
+
+## Runtime compatibility
+
+The library uses `futures` traits and is runtime-agnostic. It's tested with tokio but should work with async-std or any other runtime.
+
+We use `nusb` for USB access, which is also runtime-agnostic.
+
+## Known limitations
+
+| Limitation                | Details                                            |
+|---------------------------|----------------------------------------------------|
+| Files >4GB                | Size reported as 4GB due to protocol limitation    |
+| Filename length           | Max 254 characters                                 |
+| Non-empty folder delete   | Fails; delete contents first                       |
+| One connection per device | Can't open the same device twice                   |
+| Upload cancellation       | Partial files may remain on device                 |
+| Recursive listing speed   | Manual traversal is slower (~1 request per folder) |
+
+## Android weirdnesses
 
 Android's MTP implementation has some quirks that this library handles automatically:
 
-| Behavior | What happens | How we handle it |
-|----------|--------------|------------------|
-| **Recursive listing broken** | `ObjectHandle::ALL` returns incomplete results (folders only, no files) | Auto-detected; uses manual folder traversal instead |
-| **Can't create in root** | Creating files/folders in storage root fails with `InvalidObjectHandle` | Use a subfolder like `Download/` as the parent |
-| **Large responses span transfers** | Data >64KB comes in multiple USB transfers | Automatically reassembled before parsing |
-| **Composite USB devices** | Most phones report as USB class 0 (composite) | We inspect interfaces to find MTP |
+- **Behavior:** Recursive listing broken
+    - **What happens:** `ObjectHandle::ALL` returns incomplete results (folders only, no files)
+    - **How we handle it:** Auto-detected; uses manual folder traversal instead. Although, note that it takes a lot more
+      time! Like, if the device supported this, it'd be pretty fast, while with the workaround, in the tests it took
+      9 minutes to list ~20k files in ~2k folders.
+- **Behavior:** Can't create in root
+    - **What happens:** Creating files/folders in storage root fails with `InvalidObjectHandle`
+    - **How we handle it:** Use a subfolder like `Download/` as the parent
+- **Behavior:** Large responses span transfers
+    - **What happens:** Data >64KB comes in multiple USB transfers
+    - **How we handle it:** Automatically reassembled before parsing
+- **Behavior:** Composite USB devices
+    - **What happens:** Most phones report as USB class 0 (composite)
+    - **How we handle it:** We inspect interfaces to find MTP
 
-The library detects Android devices via the `"android.com"` vendor extension and applies appropriate handling automatically. You generally don't need to worry about these details.
+The library detects Android devices via the `"android.com"` vendor extension and applies appropriate handling automatically.
+You generally don't need to worry about these details.
 
 **Tip**: When uploading files, use a known folder like `Download/` rather than the storage root:
 
@@ -210,16 +293,45 @@ The library automatically detects this and falls back to recursive listing with 
 We welcome reports of other tested devices! Please open an issue or PR with your device model, Android version,
 and any issues encountered.
 
-## Why not libmtp?
+## Comparison with other libraries
 
-libmtp is battle-tested and comprehensive, but:
+### vs libmtp / libmtp-rs
 
-- It's a C library with all the FFI pain that entails
+[libmtp](https://github.com/libmtp/libmtp/) is 20+ years old, battle-tested, and very comprehensive.
+[libmtp-rs](https://github.com/quebin31/libmtp-rs) provides a Rust interface to it. But:
+
+- `libmtp` is a C library with all the FFI pain that entails
 - It has a massive device quirks database for hardware from 2006
 - The API is synchronous and callback-heavy
-- It pulls in libusb, libudev, and other system dependencies
+- It pulls in `libusb`, `libudev`, and other system dependencies
 
-mtp-rs is pure Rust, async-native, and targets modern Android devices that all behave the same way. If you need to support a weird MP3 player from 2008, use libmtp. If you're building a modern Android sync tool, mtp-rs might be a better fit.
+In contrast, `mtp-rs` targets modern Android devices that all behave the same way. If you need to support a weird
+MP3 player from 2008, use libmtp. If you're building a modern Android sync tool, mtp-rs is a better fit.
+
+### vs existing Rust PTP crates
+
+[ptp](https://crates.io/crates/ptp) and [libptp](https://crates.io/crates/libptp) both use
+[libusb](https://github.com/libusb/libusb) v0.3 for USB access, which is a C dependency.
+
+`mtp-rs` uses [nusb](https://crates.io/crates/nusb) instead, which is pure Rust.
+
+Note that `libptp` is much more mature, though!
+
+### vs winmtp
+
+[winmtp](https://crates.io/crates/winmtp) wraps the Windows COM API—Windows only. `mtp-rs` works on Linux, macOS, and Windows.
+
+## Implementation notes
+
+- I used Opus 4.5 extensively for this implementation. I know it's controversial these days, but the bottom line to me
+  is that the implementation WORKS, it has a bunch of integration tests which pass, and hey, I can use it to copy data
+  to/from my phone and other phones and I can display async progress and I don't need to rely on C libraries. So no hate,
+  please. If you dislike or distrust AI-gen code, use the alternatives listed above (if you can live with the libmtp
+  dependency), handcraft your own Rust implementation, or fork this repo and add your human thing and use it.
+  PRs are also welcome.
+- For the protocol spec, I tried to use usb.org's [Media Transfer Protocol v.1.1 Spec](https://www.usb.org/document-library/media-transfer-protocol-v11-spec-and-mtp-v11-adopters-agreement)
+  but it was a pain to get AI agents to work from it, so I've converted it to Markdown. You can find it here: https://github.com/vdavid/mtp-v1_1-spec-md
+  I've also shared it back with the USB.org team, so they might link it on the official page.
 
 ## Contributing
 
