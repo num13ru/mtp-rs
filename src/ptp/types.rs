@@ -4,10 +4,14 @@
 //! - [`DeviceInfo`]: Device capabilities and identification
 //! - [`StorageInfo`]: Storage characteristics and capacity
 //! - [`ObjectInfo`]: File/folder metadata
+//! - [`DevicePropDesc`]: Device property descriptors
+//! - [`PropertyValue`]: Property values of various types
 
+use super::codes::{DevicePropertyCode, PropertyDataType};
 use super::pack::{
-    pack_datetime, pack_string, pack_u16, pack_u32, unpack_datetime, unpack_string, unpack_u16,
-    unpack_u16_array, unpack_u32, unpack_u64, DateTime,
+    pack_datetime, pack_i16, pack_i32, pack_i64, pack_i8, pack_string, pack_u16, pack_u32,
+    pack_u64, pack_u8, unpack_datetime, unpack_i16, unpack_i32, unpack_i64, unpack_i8,
+    unpack_string, unpack_u16, unpack_u16_array, unpack_u32, unpack_u64, unpack_u8, DateTime,
 };
 use super::{EventCode, ObjectFormatCode, ObjectHandle, OperationCode, StorageId};
 
@@ -212,6 +216,320 @@ impl AssociationType {
             AssociationType::GenericFolder => 1,
             AssociationType::Unknown(code) => code,
         }
+    }
+}
+
+// =============================================================================
+// PropertyValue Enum
+// =============================================================================
+
+/// A property value with its associated type.
+///
+/// Used for device property values in `DevicePropDesc`, as well as
+/// for get/set device property operations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyValue {
+    /// Signed 8-bit integer.
+    Int8(i8),
+    /// Unsigned 8-bit integer.
+    Uint8(u8),
+    /// Signed 16-bit integer.
+    Int16(i16),
+    /// Unsigned 16-bit integer.
+    Uint16(u16),
+    /// Signed 32-bit integer.
+    Int32(i32),
+    /// Unsigned 32-bit integer.
+    Uint32(u32),
+    /// Signed 64-bit integer.
+    Int64(i64),
+    /// Unsigned 64-bit integer.
+    Uint64(u64),
+    /// UTF-16LE encoded string.
+    String(String),
+}
+
+impl PropertyValue {
+    /// Serialize this property value to bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            PropertyValue::Int8(v) => pack_i8(*v).to_vec(),
+            PropertyValue::Uint8(v) => pack_u8(*v).to_vec(),
+            PropertyValue::Int16(v) => pack_i16(*v).to_vec(),
+            PropertyValue::Uint16(v) => pack_u16(*v).to_vec(),
+            PropertyValue::Int32(v) => pack_i32(*v).to_vec(),
+            PropertyValue::Uint32(v) => pack_u32(*v).to_vec(),
+            PropertyValue::Int64(v) => pack_i64(*v).to_vec(),
+            PropertyValue::Uint64(v) => pack_u64(*v).to_vec(),
+            PropertyValue::String(v) => pack_string(v),
+        }
+    }
+
+    /// Parse a property value from bytes given the expected data type.
+    ///
+    /// Returns the parsed value and the number of bytes consumed.
+    pub fn from_bytes(
+        buf: &[u8],
+        data_type: PropertyDataType,
+    ) -> Result<(Self, usize), crate::Error> {
+        match data_type {
+            PropertyDataType::Int8 => {
+                let val = unpack_i8(buf)?;
+                Ok((PropertyValue::Int8(val), 1))
+            }
+            PropertyDataType::Uint8 => {
+                let val = unpack_u8(buf)?;
+                Ok((PropertyValue::Uint8(val), 1))
+            }
+            PropertyDataType::Int16 => {
+                let val = unpack_i16(buf)?;
+                Ok((PropertyValue::Int16(val), 2))
+            }
+            PropertyDataType::Uint16 => {
+                let val = unpack_u16(buf)?;
+                Ok((PropertyValue::Uint16(val), 2))
+            }
+            PropertyDataType::Int32 => {
+                let val = unpack_i32(buf)?;
+                Ok((PropertyValue::Int32(val), 4))
+            }
+            PropertyDataType::Uint32 => {
+                let val = unpack_u32(buf)?;
+                Ok((PropertyValue::Uint32(val), 4))
+            }
+            PropertyDataType::Int64 => {
+                let val = unpack_i64(buf)?;
+                Ok((PropertyValue::Int64(val), 8))
+            }
+            PropertyDataType::Uint64 => {
+                let val = unpack_u64(buf)?;
+                Ok((PropertyValue::Uint64(val), 8))
+            }
+            PropertyDataType::String => {
+                let (val, consumed) = unpack_string(buf)?;
+                Ok((PropertyValue::String(val), consumed))
+            }
+            PropertyDataType::Undefined
+            | PropertyDataType::Int128
+            | PropertyDataType::Uint128
+            | PropertyDataType::Unknown(_) => Err(crate::Error::invalid_data(format!(
+                "unsupported property data type: {:?}",
+                data_type
+            ))),
+        }
+    }
+
+    /// Get the data type of this property value.
+    pub fn data_type(&self) -> PropertyDataType {
+        match self {
+            PropertyValue::Int8(_) => PropertyDataType::Int8,
+            PropertyValue::Uint8(_) => PropertyDataType::Uint8,
+            PropertyValue::Int16(_) => PropertyDataType::Int16,
+            PropertyValue::Uint16(_) => PropertyDataType::Uint16,
+            PropertyValue::Int32(_) => PropertyDataType::Int32,
+            PropertyValue::Uint32(_) => PropertyDataType::Uint32,
+            PropertyValue::Int64(_) => PropertyDataType::Int64,
+            PropertyValue::Uint64(_) => PropertyDataType::Uint64,
+            PropertyValue::String(_) => PropertyDataType::String,
+        }
+    }
+}
+
+// =============================================================================
+// PropertyFormType Enum
+// =============================================================================
+
+/// Form type for property value constraints.
+///
+/// Describes how allowed values are specified for a property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PropertyFormType {
+    /// No constraints (any value valid).
+    #[default]
+    None,
+    /// Value must be within a range (min, max, step).
+    Range,
+    /// Value must be one of an enumerated set.
+    Enumeration,
+    /// Unknown form type.
+    Unknown(u8),
+}
+
+impl PropertyFormType {
+    /// Convert a raw u8 code to a PropertyFormType.
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            0x00 => PropertyFormType::None,
+            0x01 => PropertyFormType::Range,
+            0x02 => PropertyFormType::Enumeration,
+            _ => PropertyFormType::Unknown(code),
+        }
+    }
+
+    /// Convert a PropertyFormType to its raw u8 value.
+    pub fn to_code(self) -> u8 {
+        match self {
+            PropertyFormType::None => 0x00,
+            PropertyFormType::Range => 0x01,
+            PropertyFormType::Enumeration => 0x02,
+            PropertyFormType::Unknown(code) => code,
+        }
+    }
+}
+
+// =============================================================================
+// PropertyRange Struct
+// =============================================================================
+
+/// Range constraint for a property value.
+///
+/// Used when `PropertyFormType::Range` is specified.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyRange {
+    /// Minimum allowed value.
+    pub min: PropertyValue,
+    /// Maximum allowed value.
+    pub max: PropertyValue,
+    /// Step size between allowed values.
+    pub step: PropertyValue,
+}
+
+impl PropertyRange {
+    /// Parse a PropertyRange from bytes given the data type.
+    ///
+    /// Returns the parsed range and the number of bytes consumed.
+    pub fn from_bytes(
+        buf: &[u8],
+        data_type: PropertyDataType,
+    ) -> Result<(Self, usize), crate::Error> {
+        let mut offset = 0;
+
+        let (min, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
+        offset += consumed;
+
+        let (max, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
+        offset += consumed;
+
+        let (step, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
+        offset += consumed;
+
+        Ok((PropertyRange { min, max, step }, offset))
+    }
+
+    /// Serialize this property range to bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&self.min.to_bytes());
+        buf.extend_from_slice(&self.max.to_bytes());
+        buf.extend_from_slice(&self.step.to_bytes());
+        buf
+    }
+}
+
+// =============================================================================
+// DevicePropDesc Structure
+// =============================================================================
+
+/// Device property descriptor.
+///
+/// Describes a device property including its type, current value,
+/// default value, and allowed values/ranges.
+///
+/// Returned by the GetDevicePropDesc operation.
+#[derive(Debug, Clone)]
+pub struct DevicePropDesc {
+    /// Property code identifying this property.
+    pub property_code: DevicePropertyCode,
+    /// Data type of the property value.
+    pub data_type: PropertyDataType,
+    /// Whether the property is writable (true) or read-only (false).
+    pub writable: bool,
+    /// Default/factory value.
+    pub default_value: PropertyValue,
+    /// Current value.
+    pub current_value: PropertyValue,
+    /// Form type (None, Range, or Enumeration).
+    pub form_type: PropertyFormType,
+    /// Allowed values (if form_type is Enumeration).
+    pub enum_values: Option<Vec<PropertyValue>>,
+    /// Value range (if form_type is Range).
+    pub range: Option<PropertyRange>,
+}
+
+impl DevicePropDesc {
+    /// Parse a DevicePropDesc from bytes.
+    ///
+    /// The buffer should contain the DevicePropDesc dataset as returned
+    /// by GetDevicePropDesc.
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
+        let mut offset = 0;
+
+        // 1. PropertyCode (u16)
+        let property_code = DevicePropertyCode::from_code(unpack_u16(&buf[offset..])?);
+        offset += 2;
+
+        // 2. DataType (u16)
+        let data_type = PropertyDataType::from_code(unpack_u16(&buf[offset..])?);
+        offset += 2;
+
+        // 3. GetSet (u8): 0x00 = read-only, 0x01 = read-write
+        if buf.len() <= offset {
+            return Err(crate::Error::invalid_data(
+                "DevicePropDesc: insufficient bytes for GetSet",
+            ));
+        }
+        let writable = buf[offset] != 0x00;
+        offset += 1;
+
+        // 4. DefaultValue (variable size based on data type)
+        let (default_value, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
+        offset += consumed;
+
+        // 5. CurrentValue (variable size based on data type)
+        let (current_value, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
+        offset += consumed;
+
+        // 6. FormFlag (u8)
+        if buf.len() <= offset {
+            return Err(crate::Error::invalid_data(
+                "DevicePropDesc: insufficient bytes for FormFlag",
+            ));
+        }
+        let form_type = PropertyFormType::from_code(buf[offset]);
+        offset += 1;
+
+        // 7. Form data (depends on form_type)
+        let (enum_values, range) = match form_type {
+            PropertyFormType::None | PropertyFormType::Unknown(_) => (None, None),
+            PropertyFormType::Range => {
+                let (range, _consumed) = PropertyRange::from_bytes(&buf[offset..], data_type)?;
+                (None, Some(range))
+            }
+            PropertyFormType::Enumeration => {
+                // Number of values (u16)
+                let count = unpack_u16(&buf[offset..])? as usize;
+                offset += 2;
+
+                let mut values = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let (val, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
+                    values.push(val);
+                    offset += consumed;
+                }
+                (Some(values), None)
+            }
+        };
+
+        Ok(DevicePropDesc {
+            property_code,
+            data_type,
+            writable,
+            default_value,
+            current_value,
+            form_type,
+            enum_values,
+            range,
+        })
     }
 }
 
@@ -1429,5 +1747,480 @@ mod tests {
     fn device_info_supports_rename_empty() {
         let info = DeviceInfo::default();
         assert!(!info.supports_rename());
+    }
+
+    // =========================================================================
+    // PropertyValue Tests
+    // =========================================================================
+
+    #[test]
+    fn property_value_to_bytes_int8() {
+        assert_eq!(PropertyValue::Int8(0).to_bytes(), vec![0x00]);
+        assert_eq!(PropertyValue::Int8(127).to_bytes(), vec![0x7F]);
+        assert_eq!(PropertyValue::Int8(-1).to_bytes(), vec![0xFF]);
+        assert_eq!(PropertyValue::Int8(-128).to_bytes(), vec![0x80]);
+    }
+
+    #[test]
+    fn property_value_to_bytes_uint8() {
+        assert_eq!(PropertyValue::Uint8(0).to_bytes(), vec![0x00]);
+        assert_eq!(PropertyValue::Uint8(255).to_bytes(), vec![0xFF]);
+    }
+
+    #[test]
+    fn property_value_to_bytes_int16() {
+        assert_eq!(PropertyValue::Int16(0).to_bytes(), vec![0x00, 0x00]);
+        assert_eq!(PropertyValue::Int16(-1).to_bytes(), vec![0xFF, 0xFF]);
+        assert_eq!(PropertyValue::Int16(0x1234).to_bytes(), vec![0x34, 0x12]);
+    }
+
+    #[test]
+    fn property_value_to_bytes_uint16() {
+        assert_eq!(PropertyValue::Uint16(0).to_bytes(), vec![0x00, 0x00]);
+        assert_eq!(PropertyValue::Uint16(0x1234).to_bytes(), vec![0x34, 0x12]);
+    }
+
+    #[test]
+    fn property_value_to_bytes_int32() {
+        assert_eq!(
+            PropertyValue::Int32(0x12345678).to_bytes(),
+            vec![0x78, 0x56, 0x34, 0x12]
+        );
+        assert_eq!(
+            PropertyValue::Int32(-1).to_bytes(),
+            vec![0xFF, 0xFF, 0xFF, 0xFF]
+        );
+    }
+
+    #[test]
+    fn property_value_to_bytes_uint32() {
+        assert_eq!(
+            PropertyValue::Uint32(0x12345678).to_bytes(),
+            vec![0x78, 0x56, 0x34, 0x12]
+        );
+    }
+
+    #[test]
+    fn property_value_to_bytes_string() {
+        // Empty string
+        assert_eq!(PropertyValue::String("".to_string()).to_bytes(), vec![0x00]);
+        // Non-empty string
+        let bytes = PropertyValue::String("Hi".to_string()).to_bytes();
+        assert_eq!(bytes[0], 3); // length including null
+    }
+
+    #[test]
+    fn property_value_from_bytes_int8() {
+        let (val, consumed) =
+            PropertyValue::from_bytes(&[0x80], PropertyDataType::Int8).unwrap();
+        assert_eq!(val, PropertyValue::Int8(-128));
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn property_value_from_bytes_uint8() {
+        let (val, consumed) =
+            PropertyValue::from_bytes(&[0x64], PropertyDataType::Uint8).unwrap();
+        assert_eq!(val, PropertyValue::Uint8(100));
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn property_value_from_bytes_int16() {
+        let (val, consumed) =
+            PropertyValue::from_bytes(&[0xFE, 0xFF], PropertyDataType::Int16).unwrap();
+        assert_eq!(val, PropertyValue::Int16(-2));
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn property_value_from_bytes_uint16() {
+        let (val, consumed) =
+            PropertyValue::from_bytes(&[0x90, 0x01], PropertyDataType::Uint16).unwrap();
+        assert_eq!(val, PropertyValue::Uint16(400));
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn property_value_from_bytes_int32() {
+        let (val, consumed) =
+            PropertyValue::from_bytes(&[0xFF, 0xFF, 0xFF, 0xFF], PropertyDataType::Int32)
+                .unwrap();
+        assert_eq!(val, PropertyValue::Int32(-1));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn property_value_from_bytes_uint32() {
+        let (val, consumed) =
+            PropertyValue::from_bytes(&[0x78, 0x56, 0x34, 0x12], PropertyDataType::Uint32)
+                .unwrap();
+        assert_eq!(val, PropertyValue::Uint32(0x12345678));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn property_value_from_bytes_int64() {
+        let (val, consumed) = PropertyValue::from_bytes(
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            PropertyDataType::Int64,
+        )
+        .unwrap();
+        assert_eq!(val, PropertyValue::Int64(-1));
+        assert_eq!(consumed, 8);
+    }
+
+    #[test]
+    fn property_value_from_bytes_uint64() {
+        let (val, consumed) = PropertyValue::from_bytes(
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01],
+            PropertyDataType::Uint64,
+        )
+        .unwrap();
+        assert_eq!(val, PropertyValue::Uint64(0x0102030405060708));
+        assert_eq!(consumed, 8);
+    }
+
+    #[test]
+    fn property_value_from_bytes_string() {
+        let buf = vec![
+            0x03, // length = 3
+            0x48, 0x00, // 'H'
+            0x69, 0x00, // 'i'
+            0x00, 0x00, // null
+        ];
+        let (val, consumed) = PropertyValue::from_bytes(&buf, PropertyDataType::String).unwrap();
+        assert_eq!(val, PropertyValue::String("Hi".to_string()));
+        assert_eq!(consumed, 7);
+    }
+
+    #[test]
+    fn property_value_roundtrip() {
+        let values = [
+            PropertyValue::Int8(-42),
+            PropertyValue::Uint8(100),
+            PropertyValue::Int16(-1000),
+            PropertyValue::Uint16(5000),
+            PropertyValue::Int32(-100000),
+            PropertyValue::Uint32(100000),
+            PropertyValue::Int64(-1_000_000_000),
+            PropertyValue::Uint64(1_000_000_000),
+            PropertyValue::String("Test".to_string()),
+        ];
+
+        for val in &values {
+            let bytes = val.to_bytes();
+            let (parsed, _) = PropertyValue::from_bytes(&bytes, val.data_type()).unwrap();
+            assert_eq!(&parsed, val);
+        }
+    }
+
+    #[test]
+    fn property_value_data_type() {
+        assert_eq!(PropertyValue::Int8(0).data_type(), PropertyDataType::Int8);
+        assert_eq!(PropertyValue::Uint8(0).data_type(), PropertyDataType::Uint8);
+        assert_eq!(PropertyValue::Int16(0).data_type(), PropertyDataType::Int16);
+        assert_eq!(
+            PropertyValue::Uint16(0).data_type(),
+            PropertyDataType::Uint16
+        );
+        assert_eq!(PropertyValue::Int32(0).data_type(), PropertyDataType::Int32);
+        assert_eq!(
+            PropertyValue::Uint32(0).data_type(),
+            PropertyDataType::Uint32
+        );
+        assert_eq!(PropertyValue::Int64(0).data_type(), PropertyDataType::Int64);
+        assert_eq!(
+            PropertyValue::Uint64(0).data_type(),
+            PropertyDataType::Uint64
+        );
+        assert_eq!(
+            PropertyValue::String("".to_string()).data_type(),
+            PropertyDataType::String
+        );
+    }
+
+    #[test]
+    fn property_value_from_bytes_unsupported_type() {
+        assert!(PropertyValue::from_bytes(&[0x00], PropertyDataType::Undefined).is_err());
+        assert!(PropertyValue::from_bytes(&[0x00], PropertyDataType::Int128).is_err());
+        assert!(PropertyValue::from_bytes(&[0x00], PropertyDataType::Uint128).is_err());
+        assert!(PropertyValue::from_bytes(&[0x00], PropertyDataType::Unknown(0x99)).is_err());
+    }
+
+    #[test]
+    fn property_value_from_bytes_insufficient_bytes() {
+        assert!(PropertyValue::from_bytes(&[], PropertyDataType::Int8).is_err());
+        assert!(PropertyValue::from_bytes(&[0x00], PropertyDataType::Int16).is_err());
+        assert!(PropertyValue::from_bytes(&[0x00, 0x00], PropertyDataType::Int32).is_err());
+        assert!(PropertyValue::from_bytes(&[0x00; 7], PropertyDataType::Int64).is_err());
+    }
+
+    // =========================================================================
+    // PropertyFormType Tests
+    // =========================================================================
+
+    #[test]
+    fn property_form_type_from_code() {
+        assert_eq!(PropertyFormType::from_code(0x00), PropertyFormType::None);
+        assert_eq!(PropertyFormType::from_code(0x01), PropertyFormType::Range);
+        assert_eq!(
+            PropertyFormType::from_code(0x02),
+            PropertyFormType::Enumeration
+        );
+        assert_eq!(
+            PropertyFormType::from_code(0x99),
+            PropertyFormType::Unknown(0x99)
+        );
+    }
+
+    #[test]
+    fn property_form_type_to_code() {
+        assert_eq!(PropertyFormType::None.to_code(), 0x00);
+        assert_eq!(PropertyFormType::Range.to_code(), 0x01);
+        assert_eq!(PropertyFormType::Enumeration.to_code(), 0x02);
+        assert_eq!(PropertyFormType::Unknown(0x99).to_code(), 0x99);
+    }
+
+    #[test]
+    fn property_form_type_roundtrip() {
+        let forms = [
+            PropertyFormType::None,
+            PropertyFormType::Range,
+            PropertyFormType::Enumeration,
+        ];
+        for f in forms {
+            assert_eq!(PropertyFormType::from_code(f.to_code()), f);
+        }
+    }
+
+    // =========================================================================
+    // PropertyRange Tests
+    // =========================================================================
+
+    #[test]
+    fn property_range_from_bytes_uint8() {
+        // Range: min=0, max=100, step=1
+        let buf = vec![0x00, 0x64, 0x01];
+        let (range, consumed) = PropertyRange::from_bytes(&buf, PropertyDataType::Uint8).unwrap();
+        assert_eq!(range.min, PropertyValue::Uint8(0));
+        assert_eq!(range.max, PropertyValue::Uint8(100));
+        assert_eq!(range.step, PropertyValue::Uint8(1));
+        assert_eq!(consumed, 3);
+    }
+
+    #[test]
+    fn property_range_from_bytes_uint16() {
+        // Range: min=100 (0x0064), max=6400 (0x1900), step=100 (0x0064)
+        let buf = vec![0x64, 0x00, 0x00, 0x19, 0x64, 0x00];
+        let (range, consumed) = PropertyRange::from_bytes(&buf, PropertyDataType::Uint16).unwrap();
+        assert_eq!(range.min, PropertyValue::Uint16(100));
+        assert_eq!(range.max, PropertyValue::Uint16(6400));
+        assert_eq!(range.step, PropertyValue::Uint16(100));
+        assert_eq!(consumed, 6);
+    }
+
+    #[test]
+    fn property_range_to_bytes() {
+        let range = PropertyRange {
+            min: PropertyValue::Uint8(0),
+            max: PropertyValue::Uint8(100),
+            step: PropertyValue::Uint8(1),
+        };
+        assert_eq!(range.to_bytes(), vec![0x00, 0x64, 0x01]);
+    }
+
+    #[test]
+    fn property_range_roundtrip() {
+        let range = PropertyRange {
+            min: PropertyValue::Uint16(100),
+            max: PropertyValue::Uint16(6400),
+            step: PropertyValue::Uint16(100),
+        };
+        let bytes = range.to_bytes();
+        let (parsed, _) = PropertyRange::from_bytes(&bytes, PropertyDataType::Uint16).unwrap();
+        assert_eq!(parsed.min, range.min);
+        assert_eq!(parsed.max, range.max);
+        assert_eq!(parsed.step, range.step);
+    }
+
+    // =========================================================================
+    // DevicePropDesc Tests
+    // =========================================================================
+
+    /// Build a BatteryLevel property descriptor bytes for testing.
+    fn build_battery_level_prop_desc(current: u8) -> Vec<u8> {
+        let mut buf = Vec::new();
+        // PropertyCode: 0x5001 (BatteryLevel)
+        buf.extend_from_slice(&pack_u16(0x5001));
+        // DataType: UINT8 (0x0002)
+        buf.extend_from_slice(&pack_u16(0x0002));
+        // GetSet: read-only (0x00)
+        buf.push(0x00);
+        // DefaultValue: 100
+        buf.push(100);
+        // CurrentValue
+        buf.push(current);
+        // FormFlag: Range (0x01)
+        buf.push(0x01);
+        // Range: min=0, max=100, step=1
+        buf.push(0);   // min
+        buf.push(100); // max
+        buf.push(1);   // step
+        buf
+    }
+
+    #[test]
+    fn device_prop_desc_parse_battery_level() {
+        let buf = build_battery_level_prop_desc(75);
+        let desc = DevicePropDesc::from_bytes(&buf).unwrap();
+
+        assert_eq!(desc.property_code, DevicePropertyCode::BatteryLevel);
+        assert_eq!(desc.data_type, PropertyDataType::Uint8);
+        assert!(!desc.writable);
+        assert_eq!(desc.default_value, PropertyValue::Uint8(100));
+        assert_eq!(desc.current_value, PropertyValue::Uint8(75));
+        assert_eq!(desc.form_type, PropertyFormType::Range);
+        assert!(desc.enum_values.is_none());
+        assert!(desc.range.is_some());
+
+        let range = desc.range.unwrap();
+        assert_eq!(range.min, PropertyValue::Uint8(0));
+        assert_eq!(range.max, PropertyValue::Uint8(100));
+        assert_eq!(range.step, PropertyValue::Uint8(1));
+    }
+
+    /// Build an ISO property descriptor with enumeration form.
+    fn build_iso_prop_desc() -> Vec<u8> {
+        let mut buf = Vec::new();
+        // PropertyCode: 0x500F (ExposureIndex/ISO)
+        buf.extend_from_slice(&pack_u16(0x500F));
+        // DataType: UINT16 (0x0004)
+        buf.extend_from_slice(&pack_u16(0x0004));
+        // GetSet: read-write (0x01)
+        buf.push(0x01);
+        // DefaultValue: 400
+        buf.extend_from_slice(&pack_u16(400));
+        // CurrentValue: 800
+        buf.extend_from_slice(&pack_u16(800));
+        // FormFlag: Enumeration (0x02)
+        buf.push(0x02);
+        // NumberOfValues: 4
+        buf.extend_from_slice(&pack_u16(4));
+        // Values: 100, 200, 400, 800
+        buf.extend_from_slice(&pack_u16(100));
+        buf.extend_from_slice(&pack_u16(200));
+        buf.extend_from_slice(&pack_u16(400));
+        buf.extend_from_slice(&pack_u16(800));
+        buf
+    }
+
+    #[test]
+    fn device_prop_desc_parse_iso_enumeration() {
+        let buf = build_iso_prop_desc();
+        let desc = DevicePropDesc::from_bytes(&buf).unwrap();
+
+        assert_eq!(desc.property_code, DevicePropertyCode::ExposureIndex);
+        assert_eq!(desc.data_type, PropertyDataType::Uint16);
+        assert!(desc.writable);
+        assert_eq!(desc.default_value, PropertyValue::Uint16(400));
+        assert_eq!(desc.current_value, PropertyValue::Uint16(800));
+        assert_eq!(desc.form_type, PropertyFormType::Enumeration);
+        assert!(desc.range.is_none());
+        assert!(desc.enum_values.is_some());
+
+        let values = desc.enum_values.unwrap();
+        assert_eq!(values.len(), 4);
+        assert_eq!(values[0], PropertyValue::Uint16(100));
+        assert_eq!(values[1], PropertyValue::Uint16(200));
+        assert_eq!(values[2], PropertyValue::Uint16(400));
+        assert_eq!(values[3], PropertyValue::Uint16(800));
+    }
+
+    /// Build a DateTime property descriptor with no form.
+    fn build_datetime_prop_desc() -> Vec<u8> {
+        let mut buf = Vec::new();
+        // PropertyCode: 0x5011 (DateTime)
+        buf.extend_from_slice(&pack_u16(0x5011));
+        // DataType: String (0xFFFF)
+        buf.extend_from_slice(&pack_u16(0xFFFF));
+        // GetSet: read-write (0x01)
+        buf.push(0x01);
+        // DefaultValue: empty string
+        buf.push(0x00);
+        // CurrentValue: "20240315T120000"
+        buf.extend_from_slice(&pack_string("20240315T120000"));
+        // FormFlag: None (0x00)
+        buf.push(0x00);
+        buf
+    }
+
+    #[test]
+    fn device_prop_desc_parse_datetime_no_form() {
+        let buf = build_datetime_prop_desc();
+        let desc = DevicePropDesc::from_bytes(&buf).unwrap();
+
+        assert_eq!(desc.property_code, DevicePropertyCode::DateTime);
+        assert_eq!(desc.data_type, PropertyDataType::String);
+        assert!(desc.writable);
+        assert_eq!(desc.default_value, PropertyValue::String("".to_string()));
+        assert_eq!(
+            desc.current_value,
+            PropertyValue::String("20240315T120000".to_string())
+        );
+        assert_eq!(desc.form_type, PropertyFormType::None);
+        assert!(desc.range.is_none());
+        assert!(desc.enum_values.is_none());
+    }
+
+    /// Build an exposure bias property descriptor with signed int16 range.
+    fn build_exposure_bias_prop_desc() -> Vec<u8> {
+        let mut buf = Vec::new();
+        // PropertyCode: 0x5010 (ExposureBiasCompensation)
+        buf.extend_from_slice(&pack_u16(0x5010));
+        // DataType: INT16 (0x0003)
+        buf.extend_from_slice(&pack_u16(0x0003));
+        // GetSet: read-write (0x01)
+        buf.push(0x01);
+        // DefaultValue: 0
+        buf.extend_from_slice(&pack_i16(0));
+        // CurrentValue: -1000 (-1 EV)
+        buf.extend_from_slice(&pack_i16(-1000));
+        // FormFlag: Range (0x01)
+        buf.push(0x01);
+        // Range: min=-3000, max=3000, step=333
+        buf.extend_from_slice(&pack_i16(-3000));
+        buf.extend_from_slice(&pack_i16(3000));
+        buf.extend_from_slice(&pack_i16(333));
+        buf
+    }
+
+    #[test]
+    fn device_prop_desc_parse_exposure_bias_signed() {
+        let buf = build_exposure_bias_prop_desc();
+        let desc = DevicePropDesc::from_bytes(&buf).unwrap();
+
+        assert_eq!(
+            desc.property_code,
+            DevicePropertyCode::ExposureBiasCompensation
+        );
+        assert_eq!(desc.data_type, PropertyDataType::Int16);
+        assert!(desc.writable);
+        assert_eq!(desc.default_value, PropertyValue::Int16(0));
+        assert_eq!(desc.current_value, PropertyValue::Int16(-1000));
+        assert_eq!(desc.form_type, PropertyFormType::Range);
+
+        let range = desc.range.unwrap();
+        assert_eq!(range.min, PropertyValue::Int16(-3000));
+        assert_eq!(range.max, PropertyValue::Int16(3000));
+        assert_eq!(range.step, PropertyValue::Int16(333));
+    }
+
+    #[test]
+    fn device_prop_desc_parse_insufficient_bytes() {
+        // Too short to contain even the property code
+        assert!(DevicePropDesc::from_bytes(&[0x01]).is_err());
+        // Missing data type
+        assert!(DevicePropDesc::from_bytes(&[0x01, 0x50]).is_err());
     }
 }

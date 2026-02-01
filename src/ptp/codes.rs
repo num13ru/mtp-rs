@@ -38,6 +38,16 @@ pub enum OperationCode {
     SendObjectInfo = 0x100C,
     /// Send object data (after SendObjectInfo).
     SendObject = 0x100D,
+    /// Initiate image capture on a camera.
+    InitiateCapture = 0x100E,
+    /// Get device property descriptor.
+    GetDevicePropDesc = 0x1014,
+    /// Get current device property value.
+    GetDevicePropValue = 0x1015,
+    /// Set device property value.
+    SetDevicePropValue = 0x1016,
+    /// Reset device property to default value.
+    ResetDevicePropValue = 0x1017,
     /// Move an object to a different location.
     MoveObject = 0x1019,
     /// Copy an object.
@@ -69,6 +79,11 @@ impl OperationCode {
             0x100B => OperationCode::DeleteObject,
             0x100C => OperationCode::SendObjectInfo,
             0x100D => OperationCode::SendObject,
+            0x100E => OperationCode::InitiateCapture,
+            0x1014 => OperationCode::GetDevicePropDesc,
+            0x1015 => OperationCode::GetDevicePropValue,
+            0x1016 => OperationCode::SetDevicePropValue,
+            0x1017 => OperationCode::ResetDevicePropValue,
             0x1019 => OperationCode::MoveObject,
             0x101A => OperationCode::CopyObject,
             0x101B => OperationCode::GetPartialObject,
@@ -94,6 +109,11 @@ impl OperationCode {
             OperationCode::DeleteObject => 0x100B,
             OperationCode::SendObjectInfo => 0x100C,
             OperationCode::SendObject => 0x100D,
+            OperationCode::InitiateCapture => 0x100E,
+            OperationCode::GetDevicePropDesc => 0x1014,
+            OperationCode::GetDevicePropValue => 0x1015,
+            OperationCode::SetDevicePropValue => 0x1016,
+            OperationCode::ResetDevicePropValue => 0x1017,
             OperationCode::MoveObject => 0x1019,
             OperationCode::CopyObject => 0x101A,
             OperationCode::GetPartialObject => 0x101B,
@@ -128,6 +148,10 @@ pub enum ResponseCode {
     InvalidStorageId = 0x2008,
     /// Invalid object handle.
     InvalidObjectHandle = 0x2009,
+    /// Device property not supported.
+    DevicePropNotSupported = 0x200A,
+    /// Invalid object format code.
+    InvalidObjectFormatCode = 0x200B,
     /// Storage is full.
     StoreFull = 0x200C,
     /// Object is write-protected.
@@ -142,6 +166,10 @@ pub enum ResponseCode {
     DeviceBusy = 0x2019,
     /// Invalid parent object.
     InvalidParentObject = 0x201A,
+    /// Invalid device property format.
+    InvalidDevicePropFormat = 0x201B,
+    /// Invalid device property value.
+    InvalidDevicePropValue = 0x201C,
     /// Invalid parameter value.
     InvalidParameter = 0x201D,
     /// Session is already open.
@@ -167,6 +195,8 @@ impl ResponseCode {
             0x2007 => ResponseCode::IncompleteTransfer,
             0x2008 => ResponseCode::InvalidStorageId,
             0x2009 => ResponseCode::InvalidObjectHandle,
+            0x200A => ResponseCode::DevicePropNotSupported,
+            0x200B => ResponseCode::InvalidObjectFormatCode,
             0x200C => ResponseCode::StoreFull,
             0x200D => ResponseCode::ObjectWriteProtected,
             0x200E => ResponseCode::StoreReadOnly,
@@ -174,6 +204,8 @@ impl ResponseCode {
             0x2010 => ResponseCode::NoThumbnailPresent,
             0x2019 => ResponseCode::DeviceBusy,
             0x201A => ResponseCode::InvalidParentObject,
+            0x201B => ResponseCode::InvalidDevicePropFormat,
+            0x201C => ResponseCode::InvalidDevicePropValue,
             0x201D => ResponseCode::InvalidParameter,
             0x201E => ResponseCode::SessionAlreadyOpen,
             0x201F => ResponseCode::TransactionCancelled,
@@ -194,6 +226,8 @@ impl ResponseCode {
             ResponseCode::IncompleteTransfer => 0x2007,
             ResponseCode::InvalidStorageId => 0x2008,
             ResponseCode::InvalidObjectHandle => 0x2009,
+            ResponseCode::DevicePropNotSupported => 0x200A,
+            ResponseCode::InvalidObjectFormatCode => 0x200B,
             ResponseCode::StoreFull => 0x200C,
             ResponseCode::ObjectWriteProtected => 0x200D,
             ResponseCode::StoreReadOnly => 0x200E,
@@ -201,6 +235,8 @@ impl ResponseCode {
             ResponseCode::NoThumbnailPresent => 0x2010,
             ResponseCode::DeviceBusy => 0x2019,
             ResponseCode::InvalidParentObject => 0x201A,
+            ResponseCode::InvalidDevicePropFormat => 0x201B,
+            ResponseCode::InvalidDevicePropValue => 0x201C,
             ResponseCode::InvalidParameter => 0x201D,
             ResponseCode::SessionAlreadyOpen => 0x201E,
             ResponseCode::TransactionCancelled => 0x201F,
@@ -232,6 +268,8 @@ pub enum EventCode {
     DeviceInfoChanged = 0x4008,
     /// Storage information changed.
     StorageInfoChanged = 0x400C,
+    /// Capture operation completed.
+    CaptureComplete = 0x400D,
     /// Unknown or vendor-specific event code.
     Unknown(u16),
 }
@@ -248,6 +286,7 @@ impl EventCode {
             0x4007 => EventCode::ObjectInfoChanged,
             0x4008 => EventCode::DeviceInfoChanged,
             0x400C => EventCode::StorageInfoChanged,
+            0x400D => EventCode::CaptureComplete,
             _ => EventCode::Unknown(code),
         }
     }
@@ -263,6 +302,7 @@ impl EventCode {
             EventCode::ObjectInfoChanged => 0x4007,
             EventCode::DeviceInfoChanged => 0x4008,
             EventCode::StorageInfoChanged => 0x400C,
+            EventCode::CaptureComplete => 0x400D,
             EventCode::Unknown(code) => code,
         }
     }
@@ -540,6 +580,256 @@ impl ObjectPropertyCode {
             ObjectPropertyCode::ParentObject => 0xDC0B,
             ObjectPropertyCode::Name => 0xDC44,
             ObjectPropertyCode::Unknown(code) => code,
+        }
+    }
+}
+
+/// PTP property data type codes.
+///
+/// These codes identify the data type of property values in property descriptors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PropertyDataType {
+    /// Undefined type (0x0000).
+    Undefined,
+    /// Signed 8-bit integer (0x0001).
+    Int8,
+    /// Unsigned 8-bit integer (0x0002).
+    Uint8,
+    /// Signed 16-bit integer (0x0003).
+    Int16,
+    /// Unsigned 16-bit integer (0x0004).
+    Uint16,
+    /// Signed 32-bit integer (0x0005).
+    Int32,
+    /// Unsigned 32-bit integer (0x0006).
+    Uint32,
+    /// Signed 64-bit integer (0x0007).
+    Int64,
+    /// Unsigned 64-bit integer (0x0008).
+    Uint64,
+    /// Signed 128-bit integer (0x0009, rarely used).
+    Int128,
+    /// Unsigned 128-bit integer (0x000A, rarely used).
+    Uint128,
+    /// UTF-16LE string (0xFFFF).
+    String,
+    /// Unknown type code.
+    Unknown(u16),
+}
+
+impl PropertyDataType {
+    /// Convert a raw u16 code to a PropertyDataType.
+    pub fn from_code(code: u16) -> Self {
+        match code {
+            0x0000 => PropertyDataType::Undefined,
+            0x0001 => PropertyDataType::Int8,
+            0x0002 => PropertyDataType::Uint8,
+            0x0003 => PropertyDataType::Int16,
+            0x0004 => PropertyDataType::Uint16,
+            0x0005 => PropertyDataType::Int32,
+            0x0006 => PropertyDataType::Uint32,
+            0x0007 => PropertyDataType::Int64,
+            0x0008 => PropertyDataType::Uint64,
+            0x0009 => PropertyDataType::Int128,
+            0x000A => PropertyDataType::Uint128,
+            0xFFFF => PropertyDataType::String,
+            _ => PropertyDataType::Unknown(code),
+        }
+    }
+
+    /// Convert a PropertyDataType to its raw u16 value.
+    pub fn to_code(self) -> u16 {
+        match self {
+            PropertyDataType::Undefined => 0x0000,
+            PropertyDataType::Int8 => 0x0001,
+            PropertyDataType::Uint8 => 0x0002,
+            PropertyDataType::Int16 => 0x0003,
+            PropertyDataType::Uint16 => 0x0004,
+            PropertyDataType::Int32 => 0x0005,
+            PropertyDataType::Uint32 => 0x0006,
+            PropertyDataType::Int64 => 0x0007,
+            PropertyDataType::Uint64 => 0x0008,
+            PropertyDataType::Int128 => 0x0009,
+            PropertyDataType::Uint128 => 0x000A,
+            PropertyDataType::String => 0xFFFF,
+            PropertyDataType::Unknown(code) => code,
+        }
+    }
+
+    /// Returns the byte size of this data type.
+    ///
+    /// Returns `None` for variable-length types (String) and unsupported types
+    /// (Undefined, Int128, Uint128, Unknown).
+    pub fn byte_size(&self) -> Option<usize> {
+        match self {
+            PropertyDataType::Int8 | PropertyDataType::Uint8 => Some(1),
+            PropertyDataType::Int16 | PropertyDataType::Uint16 => Some(2),
+            PropertyDataType::Int32 | PropertyDataType::Uint32 => Some(4),
+            PropertyDataType::Int64 | PropertyDataType::Uint64 => Some(8),
+            PropertyDataType::Int128 | PropertyDataType::Uint128 => Some(16),
+            PropertyDataType::String
+            | PropertyDataType::Undefined
+            | PropertyDataType::Unknown(_) => None,
+        }
+    }
+}
+
+/// Standard PTP device property codes (0x5000 range).
+///
+/// These codes identify device-level properties that can be read or modified
+/// using the GetDevicePropDesc, GetDevicePropValue, SetDevicePropValue, and
+/// ResetDevicePropValue operations.
+///
+/// Device properties are primarily used with digital cameras for settings
+/// like ISO, aperture, shutter speed, etc. Most Android MTP devices do not
+/// support device properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u16)]
+pub enum DevicePropertyCode {
+    /// Undefined property.
+    Undefined = 0x5000,
+    /// Battery level (UINT8, 0-100 percent).
+    BatteryLevel = 0x5001,
+    /// Device functional mode (UINT16).
+    FunctionalMode = 0x5002,
+    /// Image size setting (String, e.g., "1920x1080").
+    ImageSize = 0x5003,
+    /// Compression setting (UINT8).
+    CompressionSetting = 0x5004,
+    /// White balance (UINT16).
+    WhiteBalance = 0x5005,
+    /// RGB gain (String).
+    RgbGain = 0x5006,
+    /// F-Number/Aperture (UINT16, value/100 = f-stop).
+    FNumber = 0x5007,
+    /// Focal length (UINT32, units of 0.01mm).
+    FocalLength = 0x5008,
+    /// Focus distance (UINT16, mm).
+    FocusDistance = 0x5009,
+    /// Focus mode (UINT16).
+    FocusMode = 0x500A,
+    /// Exposure metering mode (UINT16).
+    ExposureMeteringMode = 0x500B,
+    /// Flash mode (UINT16).
+    FlashMode = 0x500C,
+    /// Exposure time/shutter speed (UINT32, units of 0.0001s).
+    ExposureTime = 0x500D,
+    /// Exposure program mode (UINT16).
+    ExposureProgramMode = 0x500E,
+    /// Exposure index/ISO (UINT16).
+    ExposureIndex = 0x500F,
+    /// Exposure bias compensation (INT16, units of 0.001 EV).
+    ExposureBiasCompensation = 0x5010,
+    /// Date and time (String, "YYYYMMDDThhmmss").
+    DateTime = 0x5011,
+    /// Capture delay (UINT32, ms).
+    CaptureDelay = 0x5012,
+    /// Still capture mode (UINT16).
+    StillCaptureMode = 0x5013,
+    /// Contrast (UINT8).
+    Contrast = 0x5014,
+    /// Sharpness (UINT8).
+    Sharpness = 0x5015,
+    /// Digital zoom (UINT8).
+    DigitalZoom = 0x5016,
+    /// Effect mode (UINT16).
+    EffectMode = 0x5017,
+    /// Burst number (UINT16).
+    BurstNumber = 0x5018,
+    /// Burst interval (UINT16, ms).
+    BurstInterval = 0x5019,
+    /// Timelapse number (UINT16).
+    TimelapseNumber = 0x501A,
+    /// Timelapse interval (UINT32, ms).
+    TimelapseInterval = 0x501B,
+    /// Focus metering mode (UINT16).
+    FocusMeteringMode = 0x501C,
+    /// Upload URL (String).
+    UploadUrl = 0x501D,
+    /// Artist name (String).
+    Artist = 0x501E,
+    /// Copyright info (String).
+    CopyrightInfo = 0x501F,
+    /// Unknown/vendor-specific property code.
+    Unknown(u16),
+}
+
+impl DevicePropertyCode {
+    /// Convert a raw u16 code to a DevicePropertyCode.
+    pub fn from_code(code: u16) -> Self {
+        match code {
+            0x5000 => DevicePropertyCode::Undefined,
+            0x5001 => DevicePropertyCode::BatteryLevel,
+            0x5002 => DevicePropertyCode::FunctionalMode,
+            0x5003 => DevicePropertyCode::ImageSize,
+            0x5004 => DevicePropertyCode::CompressionSetting,
+            0x5005 => DevicePropertyCode::WhiteBalance,
+            0x5006 => DevicePropertyCode::RgbGain,
+            0x5007 => DevicePropertyCode::FNumber,
+            0x5008 => DevicePropertyCode::FocalLength,
+            0x5009 => DevicePropertyCode::FocusDistance,
+            0x500A => DevicePropertyCode::FocusMode,
+            0x500B => DevicePropertyCode::ExposureMeteringMode,
+            0x500C => DevicePropertyCode::FlashMode,
+            0x500D => DevicePropertyCode::ExposureTime,
+            0x500E => DevicePropertyCode::ExposureProgramMode,
+            0x500F => DevicePropertyCode::ExposureIndex,
+            0x5010 => DevicePropertyCode::ExposureBiasCompensation,
+            0x5011 => DevicePropertyCode::DateTime,
+            0x5012 => DevicePropertyCode::CaptureDelay,
+            0x5013 => DevicePropertyCode::StillCaptureMode,
+            0x5014 => DevicePropertyCode::Contrast,
+            0x5015 => DevicePropertyCode::Sharpness,
+            0x5016 => DevicePropertyCode::DigitalZoom,
+            0x5017 => DevicePropertyCode::EffectMode,
+            0x5018 => DevicePropertyCode::BurstNumber,
+            0x5019 => DevicePropertyCode::BurstInterval,
+            0x501A => DevicePropertyCode::TimelapseNumber,
+            0x501B => DevicePropertyCode::TimelapseInterval,
+            0x501C => DevicePropertyCode::FocusMeteringMode,
+            0x501D => DevicePropertyCode::UploadUrl,
+            0x501E => DevicePropertyCode::Artist,
+            0x501F => DevicePropertyCode::CopyrightInfo,
+            _ => DevicePropertyCode::Unknown(code),
+        }
+    }
+
+    /// Convert a DevicePropertyCode to its raw u16 value.
+    pub fn to_code(self) -> u16 {
+        match self {
+            DevicePropertyCode::Undefined => 0x5000,
+            DevicePropertyCode::BatteryLevel => 0x5001,
+            DevicePropertyCode::FunctionalMode => 0x5002,
+            DevicePropertyCode::ImageSize => 0x5003,
+            DevicePropertyCode::CompressionSetting => 0x5004,
+            DevicePropertyCode::WhiteBalance => 0x5005,
+            DevicePropertyCode::RgbGain => 0x5006,
+            DevicePropertyCode::FNumber => 0x5007,
+            DevicePropertyCode::FocalLength => 0x5008,
+            DevicePropertyCode::FocusDistance => 0x5009,
+            DevicePropertyCode::FocusMode => 0x500A,
+            DevicePropertyCode::ExposureMeteringMode => 0x500B,
+            DevicePropertyCode::FlashMode => 0x500C,
+            DevicePropertyCode::ExposureTime => 0x500D,
+            DevicePropertyCode::ExposureProgramMode => 0x500E,
+            DevicePropertyCode::ExposureIndex => 0x500F,
+            DevicePropertyCode::ExposureBiasCompensation => 0x5010,
+            DevicePropertyCode::DateTime => 0x5011,
+            DevicePropertyCode::CaptureDelay => 0x5012,
+            DevicePropertyCode::StillCaptureMode => 0x5013,
+            DevicePropertyCode::Contrast => 0x5014,
+            DevicePropertyCode::Sharpness => 0x5015,
+            DevicePropertyCode::DigitalZoom => 0x5016,
+            DevicePropertyCode::EffectMode => 0x5017,
+            DevicePropertyCode::BurstNumber => 0x5018,
+            DevicePropertyCode::BurstInterval => 0x5019,
+            DevicePropertyCode::TimelapseNumber => 0x501A,
+            DevicePropertyCode::TimelapseInterval => 0x501B,
+            DevicePropertyCode::FocusMeteringMode => 0x501C,
+            DevicePropertyCode::UploadUrl => 0x501D,
+            DevicePropertyCode::Artist => 0x501E,
+            DevicePropertyCode::CopyrightInfo => 0x501F,
+            DevicePropertyCode::Unknown(code) => code,
         }
     }
 }
@@ -1408,5 +1698,255 @@ mod tests {
         for code in codes {
             assert_eq!(ObjectPropertyCode::from_code(code.to_code()), code);
         }
+    }
+
+    // ==================== PropertyDataType Tests ====================
+
+    #[test]
+    fn property_data_type_from_code() {
+        assert_eq!(
+            PropertyDataType::from_code(0x0000),
+            PropertyDataType::Undefined
+        );
+        assert_eq!(PropertyDataType::from_code(0x0001), PropertyDataType::Int8);
+        assert_eq!(PropertyDataType::from_code(0x0002), PropertyDataType::Uint8);
+        assert_eq!(PropertyDataType::from_code(0x0003), PropertyDataType::Int16);
+        assert_eq!(PropertyDataType::from_code(0x0004), PropertyDataType::Uint16);
+        assert_eq!(PropertyDataType::from_code(0x0005), PropertyDataType::Int32);
+        assert_eq!(PropertyDataType::from_code(0x0006), PropertyDataType::Uint32);
+        assert_eq!(PropertyDataType::from_code(0x0007), PropertyDataType::Int64);
+        assert_eq!(PropertyDataType::from_code(0x0008), PropertyDataType::Uint64);
+        assert_eq!(PropertyDataType::from_code(0x0009), PropertyDataType::Int128);
+        assert_eq!(
+            PropertyDataType::from_code(0x000A),
+            PropertyDataType::Uint128
+        );
+        assert_eq!(PropertyDataType::from_code(0xFFFF), PropertyDataType::String);
+        assert_eq!(
+            PropertyDataType::from_code(0x1234),
+            PropertyDataType::Unknown(0x1234)
+        );
+    }
+
+    #[test]
+    fn property_data_type_to_code() {
+        assert_eq!(PropertyDataType::Undefined.to_code(), 0x0000);
+        assert_eq!(PropertyDataType::Int8.to_code(), 0x0001);
+        assert_eq!(PropertyDataType::Uint8.to_code(), 0x0002);
+        assert_eq!(PropertyDataType::Int16.to_code(), 0x0003);
+        assert_eq!(PropertyDataType::Uint16.to_code(), 0x0004);
+        assert_eq!(PropertyDataType::Int32.to_code(), 0x0005);
+        assert_eq!(PropertyDataType::Uint32.to_code(), 0x0006);
+        assert_eq!(PropertyDataType::Int64.to_code(), 0x0007);
+        assert_eq!(PropertyDataType::Uint64.to_code(), 0x0008);
+        assert_eq!(PropertyDataType::Int128.to_code(), 0x0009);
+        assert_eq!(PropertyDataType::Uint128.to_code(), 0x000A);
+        assert_eq!(PropertyDataType::String.to_code(), 0xFFFF);
+        assert_eq!(PropertyDataType::Unknown(0x1234).to_code(), 0x1234);
+    }
+
+    #[test]
+    fn property_data_type_roundtrip() {
+        let types = [
+            PropertyDataType::Undefined,
+            PropertyDataType::Int8,
+            PropertyDataType::Uint8,
+            PropertyDataType::Int16,
+            PropertyDataType::Uint16,
+            PropertyDataType::Int32,
+            PropertyDataType::Uint32,
+            PropertyDataType::Int64,
+            PropertyDataType::Uint64,
+            PropertyDataType::Int128,
+            PropertyDataType::Uint128,
+            PropertyDataType::String,
+        ];
+
+        for t in types {
+            assert_eq!(PropertyDataType::from_code(t.to_code()), t);
+        }
+    }
+
+    #[test]
+    fn property_data_type_byte_size() {
+        assert_eq!(PropertyDataType::Int8.byte_size(), Some(1));
+        assert_eq!(PropertyDataType::Uint8.byte_size(), Some(1));
+        assert_eq!(PropertyDataType::Int16.byte_size(), Some(2));
+        assert_eq!(PropertyDataType::Uint16.byte_size(), Some(2));
+        assert_eq!(PropertyDataType::Int32.byte_size(), Some(4));
+        assert_eq!(PropertyDataType::Uint32.byte_size(), Some(4));
+        assert_eq!(PropertyDataType::Int64.byte_size(), Some(8));
+        assert_eq!(PropertyDataType::Uint64.byte_size(), Some(8));
+        assert_eq!(PropertyDataType::Int128.byte_size(), Some(16));
+        assert_eq!(PropertyDataType::Uint128.byte_size(), Some(16));
+        assert_eq!(PropertyDataType::String.byte_size(), None);
+        assert_eq!(PropertyDataType::Undefined.byte_size(), None);
+        assert_eq!(PropertyDataType::Unknown(0x1234).byte_size(), None);
+    }
+
+    // ==================== DevicePropertyCode Tests ====================
+
+    #[test]
+    fn device_property_code_from_known_codes() {
+        assert_eq!(
+            DevicePropertyCode::from_code(0x5000),
+            DevicePropertyCode::Undefined
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x5001),
+            DevicePropertyCode::BatteryLevel
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x5007),
+            DevicePropertyCode::FNumber
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x500D),
+            DevicePropertyCode::ExposureTime
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x500F),
+            DevicePropertyCode::ExposureIndex
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x5010),
+            DevicePropertyCode::ExposureBiasCompensation
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x5011),
+            DevicePropertyCode::DateTime
+        );
+        assert_eq!(
+            DevicePropertyCode::from_code(0x501F),
+            DevicePropertyCode::CopyrightInfo
+        );
+    }
+
+    #[test]
+    fn device_property_code_to_known_codes() {
+        assert_eq!(DevicePropertyCode::Undefined.to_code(), 0x5000);
+        assert_eq!(DevicePropertyCode::BatteryLevel.to_code(), 0x5001);
+        assert_eq!(DevicePropertyCode::FNumber.to_code(), 0x5007);
+        assert_eq!(DevicePropertyCode::ExposureTime.to_code(), 0x500D);
+        assert_eq!(DevicePropertyCode::ExposureIndex.to_code(), 0x500F);
+        assert_eq!(
+            DevicePropertyCode::ExposureBiasCompensation.to_code(),
+            0x5010
+        );
+        assert_eq!(DevicePropertyCode::DateTime.to_code(), 0x5011);
+        assert_eq!(DevicePropertyCode::CopyrightInfo.to_code(), 0x501F);
+    }
+
+    #[test]
+    fn device_property_code_unknown_roundtrip() {
+        let unknown_code = 0xD123; // Vendor extension range
+        let prop = DevicePropertyCode::from_code(unknown_code);
+        assert_eq!(prop, DevicePropertyCode::Unknown(unknown_code));
+        assert_eq!(prop.to_code(), unknown_code);
+    }
+
+    #[test]
+    fn device_property_code_known_roundtrip() {
+        let codes = [
+            DevicePropertyCode::Undefined,
+            DevicePropertyCode::BatteryLevel,
+            DevicePropertyCode::FunctionalMode,
+            DevicePropertyCode::ImageSize,
+            DevicePropertyCode::CompressionSetting,
+            DevicePropertyCode::WhiteBalance,
+            DevicePropertyCode::RgbGain,
+            DevicePropertyCode::FNumber,
+            DevicePropertyCode::FocalLength,
+            DevicePropertyCode::FocusDistance,
+            DevicePropertyCode::FocusMode,
+            DevicePropertyCode::ExposureMeteringMode,
+            DevicePropertyCode::FlashMode,
+            DevicePropertyCode::ExposureTime,
+            DevicePropertyCode::ExposureProgramMode,
+            DevicePropertyCode::ExposureIndex,
+            DevicePropertyCode::ExposureBiasCompensation,
+            DevicePropertyCode::DateTime,
+            DevicePropertyCode::CaptureDelay,
+            DevicePropertyCode::StillCaptureMode,
+            DevicePropertyCode::Contrast,
+            DevicePropertyCode::Sharpness,
+            DevicePropertyCode::DigitalZoom,
+            DevicePropertyCode::EffectMode,
+            DevicePropertyCode::BurstNumber,
+            DevicePropertyCode::BurstInterval,
+            DevicePropertyCode::TimelapseNumber,
+            DevicePropertyCode::TimelapseInterval,
+            DevicePropertyCode::FocusMeteringMode,
+            DevicePropertyCode::UploadUrl,
+            DevicePropertyCode::Artist,
+            DevicePropertyCode::CopyrightInfo,
+        ];
+
+        for code in codes {
+            assert_eq!(DevicePropertyCode::from_code(code.to_code()), code);
+        }
+    }
+
+    // ==================== New OperationCode/ResponseCode/EventCode Tests ====================
+
+    #[test]
+    fn operation_code_device_property_codes() {
+        assert_eq!(
+            OperationCode::from_code(0x100E),
+            OperationCode::InitiateCapture
+        );
+        assert_eq!(
+            OperationCode::from_code(0x1014),
+            OperationCode::GetDevicePropDesc
+        );
+        assert_eq!(
+            OperationCode::from_code(0x1015),
+            OperationCode::GetDevicePropValue
+        );
+        assert_eq!(
+            OperationCode::from_code(0x1016),
+            OperationCode::SetDevicePropValue
+        );
+        assert_eq!(
+            OperationCode::from_code(0x1017),
+            OperationCode::ResetDevicePropValue
+        );
+
+        assert_eq!(OperationCode::InitiateCapture.to_code(), 0x100E);
+        assert_eq!(OperationCode::GetDevicePropDesc.to_code(), 0x1014);
+        assert_eq!(OperationCode::GetDevicePropValue.to_code(), 0x1015);
+        assert_eq!(OperationCode::SetDevicePropValue.to_code(), 0x1016);
+        assert_eq!(OperationCode::ResetDevicePropValue.to_code(), 0x1017);
+    }
+
+    #[test]
+    fn response_code_device_property_codes() {
+        assert_eq!(
+            ResponseCode::from_code(0x200A),
+            ResponseCode::DevicePropNotSupported
+        );
+        assert_eq!(
+            ResponseCode::from_code(0x200B),
+            ResponseCode::InvalidObjectFormatCode
+        );
+        assert_eq!(
+            ResponseCode::from_code(0x201B),
+            ResponseCode::InvalidDevicePropFormat
+        );
+        assert_eq!(
+            ResponseCode::from_code(0x201C),
+            ResponseCode::InvalidDevicePropValue
+        );
+
+        assert_eq!(ResponseCode::DevicePropNotSupported.to_code(), 0x200A);
+        assert_eq!(ResponseCode::InvalidObjectFormatCode.to_code(), 0x200B);
+        assert_eq!(ResponseCode::InvalidDevicePropFormat.to_code(), 0x201B);
+        assert_eq!(ResponseCode::InvalidDevicePropValue.to_code(), 0x201C);
+    }
+
+    #[test]
+    fn event_code_capture_complete() {
+        assert_eq!(EventCode::from_code(0x400D), EventCode::CaptureComplete);
+        assert_eq!(EventCode::CaptureComplete.to_code(), 0x400D);
     }
 }

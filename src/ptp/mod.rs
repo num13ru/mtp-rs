@@ -49,21 +49,25 @@ mod pack;
 mod session;
 mod types;
 
-pub use codes::{EventCode, ObjectFormatCode, ObjectPropertyCode, OperationCode, ResponseCode};
+pub use codes::{
+    DevicePropertyCode, EventCode, ObjectFormatCode, ObjectPropertyCode, OperationCode,
+    PropertyDataType, ResponseCode,
+};
 pub use container::{
     container_type, CommandContainer, ContainerType, DataContainer, EventContainer,
     ResponseContainer,
 };
 pub use device::PtpDevice;
 pub use pack::{
-    pack_datetime, pack_string, pack_u16, pack_u16_array, pack_u32, pack_u32_array, pack_u64,
-    pack_u8, unpack_datetime, unpack_string, unpack_u16, unpack_u16_array, unpack_u32,
+    pack_datetime, pack_i16, pack_i32, pack_i64, pack_i8, pack_string, pack_u16, pack_u16_array,
+    pack_u32, pack_u32_array, pack_u64, pack_u8, unpack_datetime, unpack_i16, unpack_i32,
+    unpack_i64, unpack_i8, unpack_string, unpack_u16, unpack_u16_array, unpack_u32,
     unpack_u32_array, unpack_u64, unpack_u8, DateTime,
 };
 pub use session::PtpSession;
 pub use types::{
-    AccessCapability, AssociationType, DeviceInfo, FilesystemType, ObjectInfo, ProtectionStatus,
-    StorageInfo, StorageType,
+    AccessCapability, AssociationType, DeviceInfo, DevicePropDesc, FilesystemType, ObjectInfo,
+    PropertyFormType, PropertyRange, PropertyValue, ProtectionStatus, StorageInfo, StorageType,
 };
 
 /// 32-bit object handle assigned by the device.

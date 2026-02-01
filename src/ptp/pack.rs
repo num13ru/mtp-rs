@@ -111,6 +111,30 @@ pub fn pack_u64(val: u64) -> [u8; 8] {
     val.to_le_bytes()
 }
 
+/// Pack a signed 8-bit integer.
+#[inline]
+pub fn pack_i8(val: i8) -> [u8; 1] {
+    [val as u8]
+}
+
+/// Pack a signed 16-bit integer (little-endian).
+#[inline]
+pub fn pack_i16(val: i16) -> [u8; 2] {
+    val.to_le_bytes()
+}
+
+/// Pack a signed 32-bit integer (little-endian).
+#[inline]
+pub fn pack_i32(val: i32) -> [u8; 4] {
+    val.to_le_bytes()
+}
+
+/// Pack a signed 64-bit integer (little-endian).
+#[inline]
+pub fn pack_i64(val: i64) -> [u8; 8] {
+    val.to_le_bytes()
+}
+
 // =============================================================================
 // Primitive unpacking functions
 // =============================================================================
@@ -156,6 +180,51 @@ pub fn unpack_u64(buf: &[u8]) -> Result<u64, crate::Error> {
         )));
     }
     Ok(u64::from_le_bytes([
+        buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ]))
+}
+
+/// Unpack a signed 8-bit integer from a buffer.
+pub fn unpack_i8(buf: &[u8]) -> Result<i8, crate::Error> {
+    if buf.is_empty() {
+        return Err(crate::Error::invalid_data(
+            "insufficient bytes for i8: need 1, have 0",
+        ));
+    }
+    Ok(buf[0] as i8)
+}
+
+/// Unpack a signed 16-bit integer from a buffer (little-endian).
+pub fn unpack_i16(buf: &[u8]) -> Result<i16, crate::Error> {
+    if buf.len() < 2 {
+        return Err(crate::Error::invalid_data(format!(
+            "insufficient bytes for i16: need 2, have {}",
+            buf.len()
+        )));
+    }
+    Ok(i16::from_le_bytes([buf[0], buf[1]]))
+}
+
+/// Unpack a signed 32-bit integer from a buffer (little-endian).
+pub fn unpack_i32(buf: &[u8]) -> Result<i32, crate::Error> {
+    if buf.len() < 4 {
+        return Err(crate::Error::invalid_data(format!(
+            "insufficient bytes for i32: need 4, have {}",
+            buf.len()
+        )));
+    }
+    Ok(i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]))
+}
+
+/// Unpack a signed 64-bit integer from a buffer (little-endian).
+pub fn unpack_i64(buf: &[u8]) -> Result<i64, crate::Error> {
+    if buf.len() < 8 {
+        return Err(crate::Error::invalid_data(format!(
+            "insufficient bytes for i64: need 8, have {}",
+            buf.len()
+        )));
+    }
+    Ok(i64::from_le_bytes([
         buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
     ]))
 }
@@ -509,6 +578,156 @@ mod tests {
     fn roundtrip_u64() {
         for val in [0u64, 1, 255, 256, 0x0102030405060708, 0xFFFFFFFFFFFFFFFF] {
             assert_eq!(unpack_u64(&pack_u64(val)).unwrap(), val);
+        }
+    }
+
+    // =========================================================================
+    // Signed integer packing tests
+    // =========================================================================
+
+    #[test]
+    fn pack_i8_test() {
+        assert_eq!(pack_i8(0), [0x00]);
+        assert_eq!(pack_i8(1), [0x01]);
+        assert_eq!(pack_i8(-1), [0xFF]);
+        assert_eq!(pack_i8(127), [0x7F]);
+        assert_eq!(pack_i8(-128), [0x80]);
+    }
+
+    #[test]
+    fn pack_i16_little_endian() {
+        assert_eq!(pack_i16(0), [0x00, 0x00]);
+        assert_eq!(pack_i16(1), [0x01, 0x00]);
+        assert_eq!(pack_i16(-1), [0xFF, 0xFF]);
+        assert_eq!(pack_i16(0x1234), [0x34, 0x12]);
+        assert_eq!(pack_i16(-2), [0xFE, 0xFF]);
+        assert_eq!(pack_i16(32767), [0xFF, 0x7F]);
+        assert_eq!(pack_i16(-32768), [0x00, 0x80]);
+    }
+
+    #[test]
+    fn pack_i32_little_endian() {
+        assert_eq!(pack_i32(0), [0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(pack_i32(1), [0x01, 0x00, 0x00, 0x00]);
+        assert_eq!(pack_i32(-1), [0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(pack_i32(0x12345678), [0x78, 0x56, 0x34, 0x12]);
+        assert_eq!(pack_i32(-2), [0xFE, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn pack_i64_little_endian() {
+        assert_eq!(
+            pack_i64(0x0102030405060708),
+            [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
+        assert_eq!(
+            pack_i64(-1),
+            [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
+    }
+
+    // =========================================================================
+    // Signed integer unpacking tests
+    // =========================================================================
+
+    #[test]
+    fn unpack_i8_test() {
+        assert_eq!(unpack_i8(&[0x00]).unwrap(), 0);
+        assert_eq!(unpack_i8(&[0x01]).unwrap(), 1);
+        assert_eq!(unpack_i8(&[0xFF]).unwrap(), -1);
+        assert_eq!(unpack_i8(&[0x7F]).unwrap(), 127);
+        assert_eq!(unpack_i8(&[0x80]).unwrap(), -128);
+        assert_eq!(unpack_i8(&[0x80, 0x00]).unwrap(), -128); // Extra bytes ignored
+    }
+
+    #[test]
+    fn unpack_i16_little_endian() {
+        assert_eq!(unpack_i16(&[0x00, 0x00]).unwrap(), 0);
+        assert_eq!(unpack_i16(&[0xFF, 0xFF]).unwrap(), -1);
+        assert_eq!(unpack_i16(&[0x34, 0x12]).unwrap(), 0x1234);
+        assert_eq!(unpack_i16(&[0xFE, 0xFF]).unwrap(), -2);
+        assert_eq!(unpack_i16(&[0xFF, 0x7F]).unwrap(), 32767);
+        assert_eq!(unpack_i16(&[0x00, 0x80]).unwrap(), -32768);
+    }
+
+    #[test]
+    fn unpack_i32_little_endian() {
+        assert_eq!(unpack_i32(&[0x00, 0x00, 0x00, 0x00]).unwrap(), 0);
+        assert_eq!(unpack_i32(&[0xFF, 0xFF, 0xFF, 0xFF]).unwrap(), -1);
+        assert_eq!(unpack_i32(&[0x78, 0x56, 0x34, 0x12]).unwrap(), 0x12345678);
+        assert_eq!(unpack_i32(&[0xFE, 0xFF, 0xFF, 0xFF]).unwrap(), -2);
+    }
+
+    #[test]
+    fn unpack_i64_little_endian() {
+        assert_eq!(
+            unpack_i64(&[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]).unwrap(),
+            0x0102030405060708
+        );
+        assert_eq!(
+            unpack_i64(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]).unwrap(),
+            -1
+        );
+    }
+
+    // =========================================================================
+    // Signed integer unpacking error tests
+    // =========================================================================
+
+    #[test]
+    fn unpack_i8_insufficient_bytes() {
+        assert!(unpack_i8(&[]).is_err());
+    }
+
+    #[test]
+    fn unpack_i16_insufficient_bytes() {
+        assert!(unpack_i16(&[]).is_err());
+        assert!(unpack_i16(&[0x00]).is_err());
+    }
+
+    #[test]
+    fn unpack_i32_insufficient_bytes() {
+        assert!(unpack_i32(&[]).is_err());
+        assert!(unpack_i32(&[0x00]).is_err());
+        assert!(unpack_i32(&[0x00, 0x00]).is_err());
+        assert!(unpack_i32(&[0x00, 0x00, 0x00]).is_err());
+    }
+
+    #[test]
+    fn unpack_i64_insufficient_bytes() {
+        assert!(unpack_i64(&[]).is_err());
+        assert!(unpack_i64(&[0x00; 7]).is_err());
+    }
+
+    // =========================================================================
+    // Signed integer round-trip tests
+    // =========================================================================
+
+    #[test]
+    fn roundtrip_i8() {
+        for val in [0i8, 1, -1, 127, -128, 42, -42] {
+            assert_eq!(unpack_i8(&pack_i8(val)).unwrap(), val);
+        }
+    }
+
+    #[test]
+    fn roundtrip_i16() {
+        for val in [0i16, 1, -1, 255, -255, 32767, -32768, 0x1234, -0x1234] {
+            assert_eq!(unpack_i16(&pack_i16(val)).unwrap(), val);
+        }
+    }
+
+    #[test]
+    fn roundtrip_i32() {
+        for val in [0i32, 1, -1, 255, -255, 0x12345678, -0x12345678] {
+            assert_eq!(unpack_i32(&pack_i32(val)).unwrap(), val);
+        }
+    }
+
+    #[test]
+    fn roundtrip_i64() {
+        for val in [0i64, 1, -1, 255, -255, 0x0102030405060708, -0x0102030405060708] {
+            assert_eq!(unpack_i64(&pack_i64(val)).unwrap(), val);
         }
     }
 

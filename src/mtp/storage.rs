@@ -75,10 +75,18 @@ impl Storage {
         };
 
         let mut objects = Vec::with_capacity(handles.len());
+        let expected_parent = parent.unwrap_or(ObjectHandle::ROOT);
+
         for handle in handles {
             let mut info = self.inner.session.get_object_info(handle).await?;
             info.handle = handle;
-            objects.push(info);
+
+            // Filter: only include objects whose parent matches the requested parent.
+            // Some devices (like Fuji X-T4) return all objects when asked for root,
+            // not just root-level objects.
+            if info.parent == expected_parent {
+                objects.push(info);
+            }
         }
         Ok(objects)
     }

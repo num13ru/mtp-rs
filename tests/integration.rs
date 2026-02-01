@@ -284,6 +284,229 @@ mod readonly {
     }
 }
 
+/// Camera control tests for PTP devices with camera functionality.
+///
+/// These tests work with digital cameras and devices that support
+/// device properties and capture operations.
+mod camera {
+    use super::*;
+    use mtp_rs::ptp::{
+        DevicePropertyCode, ObjectFormatCode, PropertyDataType, PropertyValue, PtpDevice, StorageId,
+    };
+
+    /// Test reading battery level property.
+    #[tokio::test]
+    #[ignore] // Requires real PTP device with battery level support
+    #[serial]
+    async fn test_get_battery_level() {
+        let device = PtpDevice::open_first().await.expect("No PTP device found");
+        let session = device.open_session().await.expect("Failed to open session");
+
+        // Check if device supports GetDevicePropDesc
+        let info = device.get_device_info().await.unwrap();
+        if !info.supports_operation(mtp_rs::ptp::OperationCode::GetDevicePropDesc) {
+            println!("Device does not support GetDevicePropDesc, skipping test");
+            session.close().await.unwrap();
+            return;
+        }
+
+        // Try to get battery level property descriptor
+        match session
+            .get_device_prop_desc(DevicePropertyCode::BatteryLevel)
+            .await
+        {
+            Ok(desc) => {
+                println!("Battery level property descriptor:");
+                println!("  Property code: {:?}", desc.property_code);
+                println!("  Data type: {:?}", desc.data_type);
+                println!("  Writable: {}", desc.writable);
+                println!("  Current value: {:?}", desc.current_value);
+                println!("  Default value: {:?}", desc.default_value);
+                println!("  Form type: {:?}", desc.form_type);
+
+                if let Some(ref range) = desc.range {
+                    println!("  Range: {:?} to {:?}, step {:?}", range.min, range.max, range.step);
+                }
+
+                // Verify the data type is UINT8 as per PTP spec
+                assert_eq!(desc.data_type, PropertyDataType::Uint8);
+            }
+            Err(mtp_rs::Error::Protocol { code, .. })
+                if code == mtp_rs::ptp::ResponseCode::DevicePropNotSupported =>
+            {
+                println!("Device does not support BatteryLevel property");
+            }
+            Err(e) => {
+                println!("Error getting battery level: {:?}", e);
+            }
+        }
+
+        session.close().await.unwrap();
+    }
+
+    /// Test reading device properties by getting values directly.
+    #[tokio::test]
+    #[ignore] // Requires real PTP device
+    #[serial]
+    async fn test_get_device_property_value() {
+        let device = PtpDevice::open_first().await.expect("No PTP device found");
+        let session = device.open_session().await.expect("Failed to open session");
+
+        // Check if device supports GetDevicePropValue
+        let info = device.get_device_info().await.unwrap();
+        if !info.supports_operation(mtp_rs::ptp::OperationCode::GetDevicePropValue) {
+            println!("Device does not support GetDevicePropValue, skipping test");
+            session.close().await.unwrap();
+            return;
+        }
+
+        // Try to get a simple property value (battery level is UINT8)
+        match session
+            .get_device_prop_value_typed(DevicePropertyCode::BatteryLevel, PropertyDataType::Uint8)
+            .await
+        {
+            Ok(value) => {
+                if let PropertyValue::Uint8(level) = value {
+                    println!("Battery level: {}%", level);
+                    assert!(level <= 100, "Battery level should be 0-100");
+                } else {
+                    println!("Unexpected value type: {:?}", value);
+                }
+            }
+            Err(e) => {
+                println!("Could not get battery level: {:?}", e);
+            }
+        }
+
+        session.close().await.unwrap();
+    }
+
+    /// Test reading device datetime property (string type).
+    #[tokio::test]
+    #[ignore] // Requires real PTP device with datetime support
+    #[serial]
+    async fn test_get_datetime_property() {
+        let device = PtpDevice::open_first().await.expect("No PTP device found");
+        let session = device.open_session().await.expect("Failed to open session");
+
+        // Check if device supports GetDevicePropDesc
+        let info = device.get_device_info().await.unwrap();
+        if !info.supports_operation(mtp_rs::ptp::OperationCode::GetDevicePropDesc) {
+            println!("Device does not support GetDevicePropDesc, skipping test");
+            session.close().await.unwrap();
+            return;
+        }
+
+        // Try to get datetime property
+        match session
+            .get_device_prop_desc(DevicePropertyCode::DateTime)
+            .await
+        {
+            Ok(desc) => {
+                println!("DateTime property descriptor:");
+                println!("  Data type: {:?}", desc.data_type);
+                println!("  Current value: {:?}", desc.current_value);
+                println!("  Writable: {}", desc.writable);
+
+                assert_eq!(desc.data_type, PropertyDataType::String);
+            }
+            Err(mtp_rs::Error::Protocol { code, .. })
+                if code == mtp_rs::ptp::ResponseCode::DevicePropNotSupported =>
+            {
+                println!("Device does not support DateTime property");
+            }
+            Err(e) => {
+                println!("Error getting datetime: {:?}", e);
+            }
+        }
+
+        session.close().await.unwrap();
+    }
+
+    /// Test resetting a device property.
+    #[tokio::test]
+    #[ignore] // Requires real PTP device - may modify device state
+    #[serial]
+    async fn test_reset_device_property() {
+        let device = PtpDevice::open_first().await.expect("No PTP device found");
+        let session = device.open_session().await.expect("Failed to open session");
+
+        // Check if device supports ResetDevicePropValue
+        let info = device.get_device_info().await.unwrap();
+        if !info.supports_operation(mtp_rs::ptp::OperationCode::ResetDevicePropValue) {
+            println!("Device does not support ResetDevicePropValue, skipping test");
+            session.close().await.unwrap();
+            return;
+        }
+
+        // Try to reset a safe property (exposure bias is commonly available and resettable)
+        match session
+            .reset_device_prop_value(DevicePropertyCode::ExposureBiasCompensation)
+            .await
+        {
+            Ok(()) => {
+                println!("Successfully reset exposure bias compensation to default");
+            }
+            Err(mtp_rs::Error::Protocol { code, .. })
+                if code == mtp_rs::ptp::ResponseCode::DevicePropNotSupported =>
+            {
+                println!("Device does not support ExposureBiasCompensation property");
+            }
+            Err(mtp_rs::Error::Protocol { code, .. })
+                if code == mtp_rs::ptp::ResponseCode::OperationNotSupported =>
+            {
+                println!("Device does not support resetting properties");
+            }
+            Err(e) => {
+                println!("Error resetting property: {:?}", e);
+            }
+        }
+
+        session.close().await.unwrap();
+    }
+
+    /// Test initiating a capture (destructive - triggers camera shutter).
+    #[tokio::test]
+    #[ignore] // Requires real camera - TRIGGERS CAPTURE
+    #[serial]
+    async fn test_initiate_capture() {
+        let device = PtpDevice::open_first().await.expect("No PTP device found");
+        let session = device.open_session().await.expect("Failed to open session");
+
+        // Check if device supports InitiateCapture
+        let info = device.get_device_info().await.unwrap();
+        if !info.supports_operation(mtp_rs::ptp::OperationCode::InitiateCapture) {
+            println!("Device does not support InitiateCapture, skipping test");
+            println!("This operation is typically only available on cameras.");
+            session.close().await.unwrap();
+            return;
+        }
+
+        println!("Initiating capture (this will trigger the camera shutter)...");
+
+        match session
+            .initiate_capture(StorageId(0), ObjectFormatCode::Undefined)
+            .await
+        {
+            Ok(()) => {
+                println!("Capture initiated successfully");
+                println!("Note: The camera should take a photo now.");
+                println!("You may want to poll for CaptureComplete and ObjectAdded events.");
+            }
+            Err(mtp_rs::Error::Protocol { code, .. })
+                if code == mtp_rs::ptp::ResponseCode::OperationNotSupported =>
+            {
+                println!("Device reports InitiateCapture not supported");
+            }
+            Err(e) => {
+                println!("Error initiating capture: {:?}", e);
+            }
+        }
+
+        session.close().await.unwrap();
+    }
+}
+
 /// Destructive tests that create/modify/delete files on the device.
 ///
 /// **Warning**: These tests write to the device. Use with caution.
