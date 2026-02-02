@@ -774,10 +774,16 @@ impl PtpSession {
         storage_id: StorageId,
         format: ObjectFormatCode,
     ) -> Result<(), Error> {
+        // Per PTP spec, 0x00000000 means "any format" / "use device default".
+        // ObjectFormatCode::Undefined (0x3000) is different and may not be accepted.
+        let format_code = match format {
+            ObjectFormatCode::Undefined => 0,
+            other => other.to_code() as u32,
+        };
         let response = self
             .execute(
                 OperationCode::InitiateCapture,
-                &[storage_id.0, format.to_code() as u32],
+                &[storage_id.0, format_code],
             )
             .await?;
         Self::check_response(response, OperationCode::InitiateCapture)?;

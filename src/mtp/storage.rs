@@ -46,19 +46,30 @@ impl Storage {
 
     /// List objects in a folder (None = root).
     ///
-    /// Some devices (notably Samsung) don't support listing root with handle 0.
-    /// This method automatically falls back to recursive listing and filtering
-    /// when the standard approach fails.
+    /// This method handles various device quirks:
+    /// - Android devices: parent=0 returns ALL objects, so we use parent=0xFFFFFFFF instead
+    /// - Samsung devices: return InvalidObjectHandle for parent=0, so we fall back to recursive
+    /// - Fuji devices: return all objects for root, so we filter by parent handle
     pub async fn list_objects(
         &self,
         parent: Option<ObjectHandle>,
     ) -> Result<Vec<ObjectInfo>, Error> {
+        // Android quirk: When listing root (parent=None/0), Android returns ALL objects
+        // on the device instead of just root-level objects. This makes listing extremely slow.
+        // Counter-intuitively, using parent=0xFFFFFFFF (ObjectHandle::ALL) returns the
+        // actual root-level objects on Android devices.
+        let effective_parent = if parent.is_none() && self.inner.is_android() {
+            Some(ObjectHandle::ALL)
+        } else {
+            parent
+        };
+
         let result = self
             .inner
             .session
             .get_object_handles(
                 self.id, None,   // All formats
-                parent, // None means root (handle 0)
+                effective_parent,
             )
             .await;
 
@@ -84,7 +95,14 @@ impl Storage {
             // Filter: only include objects whose parent matches the requested parent.
             // Some devices (like Fuji X-T4) return all objects when asked for root,
             // not just root-level objects.
-            if info.parent == expected_parent {
+            // For Android root listing (where we used ALL), accept both 0 and 0xFFFFFFFF as parent.
+            let parent_matches = if parent.is_none() && self.inner.is_android() {
+                info.parent.0 == 0 || info.parent.0 == 0xFFFFFFFF
+            } else {
+                info.parent == expected_parent
+            };
+
+            if parent_matches {
                 objects.push(info);
             }
         }
