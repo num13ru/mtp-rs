@@ -27,6 +27,9 @@ parking_lot = "0.12"
 # For thiserror derive
 thiserror = "1.0"
 
+# Enum conversion derives (from_code/to_code)
+num_enum = "0.7"
+
 # Async timeout utilities
 futures-timer = "3.0.3"
 

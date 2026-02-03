@@ -6,10 +6,12 @@
 //! - [`EventCode`]: Asynchronous events from the device
 //! - [`ObjectFormatCode`]: File format identifiers
 
+use num_enum::{FromPrimitive, IntoPrimitive};
+
 /// PTP operation codes (commands sent to device).
 ///
 /// These codes identify the operation being requested in a PTP command container.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum OperationCode {
     /// Get device information (capabilities, manufacturer, etc.).
@@ -59,75 +61,26 @@ pub enum OperationCode {
     /// Set the value of an object property (MTP extension).
     SetObjectPropValue = 0x9804,
     /// Unknown or vendor-specific operation code.
+    #[num_enum(catch_all)]
     Unknown(u16),
 }
 
 impl OperationCode {
     /// Convert a raw u16 code to an OperationCode.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0x1001 => OperationCode::GetDeviceInfo,
-            0x1002 => OperationCode::OpenSession,
-            0x1003 => OperationCode::CloseSession,
-            0x1004 => OperationCode::GetStorageIds,
-            0x1005 => OperationCode::GetStorageInfo,
-            0x1006 => OperationCode::GetNumObjects,
-            0x1007 => OperationCode::GetObjectHandles,
-            0x1008 => OperationCode::GetObjectInfo,
-            0x1009 => OperationCode::GetObject,
-            0x100A => OperationCode::GetThumb,
-            0x100B => OperationCode::DeleteObject,
-            0x100C => OperationCode::SendObjectInfo,
-            0x100D => OperationCode::SendObject,
-            0x100E => OperationCode::InitiateCapture,
-            0x1014 => OperationCode::GetDevicePropDesc,
-            0x1015 => OperationCode::GetDevicePropValue,
-            0x1016 => OperationCode::SetDevicePropValue,
-            0x1017 => OperationCode::ResetDevicePropValue,
-            0x1019 => OperationCode::MoveObject,
-            0x101A => OperationCode::CopyObject,
-            0x101B => OperationCode::GetPartialObject,
-            0x9803 => OperationCode::GetObjectPropValue,
-            0x9804 => OperationCode::SetObjectPropValue,
-            _ => OperationCode::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert an OperationCode to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            OperationCode::GetDeviceInfo => 0x1001,
-            OperationCode::OpenSession => 0x1002,
-            OperationCode::CloseSession => 0x1003,
-            OperationCode::GetStorageIds => 0x1004,
-            OperationCode::GetStorageInfo => 0x1005,
-            OperationCode::GetNumObjects => 0x1006,
-            OperationCode::GetObjectHandles => 0x1007,
-            OperationCode::GetObjectInfo => 0x1008,
-            OperationCode::GetObject => 0x1009,
-            OperationCode::GetThumb => 0x100A,
-            OperationCode::DeleteObject => 0x100B,
-            OperationCode::SendObjectInfo => 0x100C,
-            OperationCode::SendObject => 0x100D,
-            OperationCode::InitiateCapture => 0x100E,
-            OperationCode::GetDevicePropDesc => 0x1014,
-            OperationCode::GetDevicePropValue => 0x1015,
-            OperationCode::SetDevicePropValue => 0x1016,
-            OperationCode::ResetDevicePropValue => 0x1017,
-            OperationCode::MoveObject => 0x1019,
-            OperationCode::CopyObject => 0x101A,
-            OperationCode::GetPartialObject => 0x101B,
-            OperationCode::GetObjectPropValue => 0x9803,
-            OperationCode::SetObjectPropValue => 0x9804,
-            OperationCode::Unknown(code) => code,
-        }
+        self.into()
     }
 }
 
 /// PTP response codes (status returned by device).
 ///
 /// These codes indicate the result of an operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum ResponseCode {
     /// Operation completed successfully.
@@ -179,77 +132,26 @@ pub enum ResponseCode {
     /// Object is too large for the storage.
     ObjectTooLarge = 0xA809,
     /// Unknown or vendor-specific response code.
+    #[num_enum(catch_all)]
     Unknown(u16),
 }
 
 impl ResponseCode {
     /// Convert a raw u16 code to a ResponseCode.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0x2001 => ResponseCode::Ok,
-            0x2002 => ResponseCode::GeneralError,
-            0x2003 => ResponseCode::SessionNotOpen,
-            0x2004 => ResponseCode::InvalidTransactionId,
-            0x2005 => ResponseCode::OperationNotSupported,
-            0x2006 => ResponseCode::ParameterNotSupported,
-            0x2007 => ResponseCode::IncompleteTransfer,
-            0x2008 => ResponseCode::InvalidStorageId,
-            0x2009 => ResponseCode::InvalidObjectHandle,
-            0x200A => ResponseCode::DevicePropNotSupported,
-            0x200B => ResponseCode::InvalidObjectFormatCode,
-            0x200C => ResponseCode::StoreFull,
-            0x200D => ResponseCode::ObjectWriteProtected,
-            0x200E => ResponseCode::StoreReadOnly,
-            0x200F => ResponseCode::AccessDenied,
-            0x2010 => ResponseCode::NoThumbnailPresent,
-            0x2019 => ResponseCode::DeviceBusy,
-            0x201A => ResponseCode::InvalidParentObject,
-            0x201B => ResponseCode::InvalidDevicePropFormat,
-            0x201C => ResponseCode::InvalidDevicePropValue,
-            0x201D => ResponseCode::InvalidParameter,
-            0x201E => ResponseCode::SessionAlreadyOpen,
-            0x201F => ResponseCode::TransactionCancelled,
-            0xA809 => ResponseCode::ObjectTooLarge,
-            _ => ResponseCode::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert a ResponseCode to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            ResponseCode::Ok => 0x2001,
-            ResponseCode::GeneralError => 0x2002,
-            ResponseCode::SessionNotOpen => 0x2003,
-            ResponseCode::InvalidTransactionId => 0x2004,
-            ResponseCode::OperationNotSupported => 0x2005,
-            ResponseCode::ParameterNotSupported => 0x2006,
-            ResponseCode::IncompleteTransfer => 0x2007,
-            ResponseCode::InvalidStorageId => 0x2008,
-            ResponseCode::InvalidObjectHandle => 0x2009,
-            ResponseCode::DevicePropNotSupported => 0x200A,
-            ResponseCode::InvalidObjectFormatCode => 0x200B,
-            ResponseCode::StoreFull => 0x200C,
-            ResponseCode::ObjectWriteProtected => 0x200D,
-            ResponseCode::StoreReadOnly => 0x200E,
-            ResponseCode::AccessDenied => 0x200F,
-            ResponseCode::NoThumbnailPresent => 0x2010,
-            ResponseCode::DeviceBusy => 0x2019,
-            ResponseCode::InvalidParentObject => 0x201A,
-            ResponseCode::InvalidDevicePropFormat => 0x201B,
-            ResponseCode::InvalidDevicePropValue => 0x201C,
-            ResponseCode::InvalidParameter => 0x201D,
-            ResponseCode::SessionAlreadyOpen => 0x201E,
-            ResponseCode::TransactionCancelled => 0x201F,
-            ResponseCode::ObjectTooLarge => 0xA809,
-            ResponseCode::Unknown(code) => code,
-        }
+        self.into()
     }
 }
 
 /// PTP event codes (asynchronous notifications from device).
 ///
 /// These codes identify events that the device sends asynchronously.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum EventCode {
     /// A new object was added.
@@ -271,51 +173,29 @@ pub enum EventCode {
     /// Capture operation completed.
     CaptureComplete = 0x400D,
     /// Unknown or vendor-specific event code.
+    #[num_enum(catch_all)]
     Unknown(u16),
 }
 
 impl EventCode {
     /// Convert a raw u16 code to an EventCode.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0x4002 => EventCode::ObjectAdded,
-            0x4003 => EventCode::ObjectRemoved,
-            0x4004 => EventCode::StoreAdded,
-            0x4005 => EventCode::StoreRemoved,
-            0x4006 => EventCode::DevicePropChanged,
-            0x4007 => EventCode::ObjectInfoChanged,
-            0x4008 => EventCode::DeviceInfoChanged,
-            0x400C => EventCode::StorageInfoChanged,
-            0x400D => EventCode::CaptureComplete,
-            _ => EventCode::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert an EventCode to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            EventCode::ObjectAdded => 0x4002,
-            EventCode::ObjectRemoved => 0x4003,
-            EventCode::StoreAdded => 0x4004,
-            EventCode::StoreRemoved => 0x4005,
-            EventCode::DevicePropChanged => 0x4006,
-            EventCode::ObjectInfoChanged => 0x4007,
-            EventCode::DeviceInfoChanged => 0x4008,
-            EventCode::StorageInfoChanged => 0x400C,
-            EventCode::CaptureComplete => 0x400D,
-            EventCode::Unknown(code) => code,
-        }
+        self.into()
     }
 }
 
 /// PTP/MTP object format codes.
 ///
 /// These codes identify the format/type of objects stored on the device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum ObjectFormatCode {
     /// Undefined/unknown format.
-    #[default]
     Undefined = 0x3000,
     /// Association (folder/directory).
     Association = 0x3001,
@@ -368,74 +248,19 @@ pub enum ObjectFormatCode {
     /// M4A audio.
     M4aAudio = 0xB984,
     /// Unknown or vendor-specific format code.
+    #[num_enum(catch_all)]
     Unknown(u16),
 }
 
 impl ObjectFormatCode {
     /// Convert a raw u16 code to an ObjectFormatCode.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0x3000 => ObjectFormatCode::Undefined,
-            0x3001 => ObjectFormatCode::Association,
-            0x3002 => ObjectFormatCode::Script,
-            0x3003 => ObjectFormatCode::Executable,
-            0x3004 => ObjectFormatCode::Text,
-            0x3005 => ObjectFormatCode::Html,
-            0x3006 => ObjectFormatCode::Dpof,
-            0x3007 => ObjectFormatCode::Aiff,
-            0x3008 => ObjectFormatCode::Wav,
-            0x3009 => ObjectFormatCode::Mp3,
-            0x300A => ObjectFormatCode::Avi,
-            0x300B => ObjectFormatCode::Mpeg,
-            0x300C => ObjectFormatCode::Asf,
-            0x3801 => ObjectFormatCode::Jpeg,
-            0x3804 => ObjectFormatCode::Tiff,
-            0x3807 => ObjectFormatCode::Gif,
-            0x3808 => ObjectFormatCode::Bmp,
-            0x380A => ObjectFormatCode::Pict,
-            0x380B => ObjectFormatCode::Png,
-            0xB901 => ObjectFormatCode::WmaAudio,
-            0xB902 => ObjectFormatCode::OggAudio,
-            0xB903 => ObjectFormatCode::AacAudio,
-            0xB906 => ObjectFormatCode::FlacAudio,
-            0xB981 => ObjectFormatCode::WmvVideo,
-            0xB982 => ObjectFormatCode::Mp4Container,
-            0xB984 => ObjectFormatCode::M4aAudio,
-            _ => ObjectFormatCode::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert an ObjectFormatCode to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            ObjectFormatCode::Undefined => 0x3000,
-            ObjectFormatCode::Association => 0x3001,
-            ObjectFormatCode::Script => 0x3002,
-            ObjectFormatCode::Executable => 0x3003,
-            ObjectFormatCode::Text => 0x3004,
-            ObjectFormatCode::Html => 0x3005,
-            ObjectFormatCode::Dpof => 0x3006,
-            ObjectFormatCode::Aiff => 0x3007,
-            ObjectFormatCode::Wav => 0x3008,
-            ObjectFormatCode::Mp3 => 0x3009,
-            ObjectFormatCode::Avi => 0x300A,
-            ObjectFormatCode::Mpeg => 0x300B,
-            ObjectFormatCode::Asf => 0x300C,
-            ObjectFormatCode::Jpeg => 0x3801,
-            ObjectFormatCode::Tiff => 0x3804,
-            ObjectFormatCode::Gif => 0x3807,
-            ObjectFormatCode::Bmp => 0x3808,
-            ObjectFormatCode::Pict => 0x380A,
-            ObjectFormatCode::Png => 0x380B,
-            ObjectFormatCode::WmaAudio => 0xB901,
-            ObjectFormatCode::OggAudio => 0xB902,
-            ObjectFormatCode::AacAudio => 0xB903,
-            ObjectFormatCode::FlacAudio => 0xB906,
-            ObjectFormatCode::WmvVideo => 0xB981,
-            ObjectFormatCode::Mp4Container => 0xB982,
-            ObjectFormatCode::M4aAudio => 0xB984,
-            ObjectFormatCode::Unknown(code) => code,
-        }
+        self.into()
     }
 
     /// Detect object format from file extension (case insensitive).
@@ -522,10 +347,18 @@ impl ObjectFormatCode {
     }
 }
 
+// Manual impl required because #[default] attribute conflicts with num_enum's #[num_enum(catch_all)]
+#[allow(clippy::derivable_impls)]
+impl Default for ObjectFormatCode {
+    fn default() -> Self {
+        ObjectFormatCode::Undefined
+    }
+}
+
 /// MTP object property codes.
 ///
 /// These codes identify object properties that can be get/set via MTP operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum ObjectPropertyCode {
     /// Storage ID containing the object.
@@ -547,113 +380,66 @@ pub enum ObjectPropertyCode {
     /// Display name of the object.
     Name = 0xDC44,
     /// Unknown or vendor-specific property code.
+    #[num_enum(catch_all)]
     Unknown(u16),
 }
 
 impl ObjectPropertyCode {
     /// Convert a raw u16 code to an ObjectPropertyCode.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0xDC01 => ObjectPropertyCode::StorageId,
-            0xDC02 => ObjectPropertyCode::ObjectFormat,
-            0xDC03 => ObjectPropertyCode::ProtectionStatus,
-            0xDC04 => ObjectPropertyCode::ObjectSize,
-            0xDC07 => ObjectPropertyCode::ObjectFileName,
-            0xDC08 => ObjectPropertyCode::DateCreated,
-            0xDC09 => ObjectPropertyCode::DateModified,
-            0xDC0B => ObjectPropertyCode::ParentObject,
-            0xDC44 => ObjectPropertyCode::Name,
-            _ => ObjectPropertyCode::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert an ObjectPropertyCode to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            ObjectPropertyCode::StorageId => 0xDC01,
-            ObjectPropertyCode::ObjectFormat => 0xDC02,
-            ObjectPropertyCode::ProtectionStatus => 0xDC03,
-            ObjectPropertyCode::ObjectSize => 0xDC04,
-            ObjectPropertyCode::ObjectFileName => 0xDC07,
-            ObjectPropertyCode::DateCreated => 0xDC08,
-            ObjectPropertyCode::DateModified => 0xDC09,
-            ObjectPropertyCode::ParentObject => 0xDC0B,
-            ObjectPropertyCode::Name => 0xDC44,
-            ObjectPropertyCode::Unknown(code) => code,
-        }
+        self.into()
     }
 }
 
 /// PTP property data type codes.
 ///
 /// These codes identify the data type of property values in property descriptors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
+#[repr(u16)]
 pub enum PropertyDataType {
     /// Undefined type (0x0000).
-    Undefined,
+    Undefined = 0x0000,
     /// Signed 8-bit integer (0x0001).
-    Int8,
+    Int8 = 0x0001,
     /// Unsigned 8-bit integer (0x0002).
-    Uint8,
+    Uint8 = 0x0002,
     /// Signed 16-bit integer (0x0003).
-    Int16,
+    Int16 = 0x0003,
     /// Unsigned 16-bit integer (0x0004).
-    Uint16,
+    Uint16 = 0x0004,
     /// Signed 32-bit integer (0x0005).
-    Int32,
+    Int32 = 0x0005,
     /// Unsigned 32-bit integer (0x0006).
-    Uint32,
+    Uint32 = 0x0006,
     /// Signed 64-bit integer (0x0007).
-    Int64,
+    Int64 = 0x0007,
     /// Unsigned 64-bit integer (0x0008).
-    Uint64,
+    Uint64 = 0x0008,
     /// Signed 128-bit integer (0x0009, rarely used).
-    Int128,
+    Int128 = 0x0009,
     /// Unsigned 128-bit integer (0x000A, rarely used).
-    Uint128,
-    /// UTF-16LE string (0xFFFF).
-    String,
+    Uint128 = 0x000A,
     /// Unknown type code.
+    #[num_enum(catch_all)]
     Unknown(u16),
+    /// UTF-16LE string (0xFFFF).
+    String = 0xFFFF,
 }
 
 impl PropertyDataType {
     /// Convert a raw u16 code to a PropertyDataType.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0x0000 => PropertyDataType::Undefined,
-            0x0001 => PropertyDataType::Int8,
-            0x0002 => PropertyDataType::Uint8,
-            0x0003 => PropertyDataType::Int16,
-            0x0004 => PropertyDataType::Uint16,
-            0x0005 => PropertyDataType::Int32,
-            0x0006 => PropertyDataType::Uint32,
-            0x0007 => PropertyDataType::Int64,
-            0x0008 => PropertyDataType::Uint64,
-            0x0009 => PropertyDataType::Int128,
-            0x000A => PropertyDataType::Uint128,
-            0xFFFF => PropertyDataType::String,
-            _ => PropertyDataType::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert a PropertyDataType to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            PropertyDataType::Undefined => 0x0000,
-            PropertyDataType::Int8 => 0x0001,
-            PropertyDataType::Uint8 => 0x0002,
-            PropertyDataType::Int16 => 0x0003,
-            PropertyDataType::Uint16 => 0x0004,
-            PropertyDataType::Int32 => 0x0005,
-            PropertyDataType::Uint32 => 0x0006,
-            PropertyDataType::Int64 => 0x0007,
-            PropertyDataType::Uint64 => 0x0008,
-            PropertyDataType::Int128 => 0x0009,
-            PropertyDataType::Uint128 => 0x000A,
-            PropertyDataType::String => 0xFFFF,
-            PropertyDataType::Unknown(code) => code,
-        }
+        self.into()
     }
 
     /// Returns the byte size of this data type.
@@ -683,7 +469,7 @@ impl PropertyDataType {
 /// Device properties are primarily used with digital cameras for settings
 /// like ISO, aperture, shutter speed, etc. Most Android MTP devices do not
 /// support device properties.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum DevicePropertyCode {
     /// Undefined property.
@@ -751,86 +537,19 @@ pub enum DevicePropertyCode {
     /// Copyright info (String).
     CopyrightInfo = 0x501F,
     /// Unknown/vendor-specific property code.
+    #[num_enum(catch_all)]
     Unknown(u16),
 }
 
 impl DevicePropertyCode {
     /// Convert a raw u16 code to a DevicePropertyCode.
     pub fn from_code(code: u16) -> Self {
-        match code {
-            0x5000 => DevicePropertyCode::Undefined,
-            0x5001 => DevicePropertyCode::BatteryLevel,
-            0x5002 => DevicePropertyCode::FunctionalMode,
-            0x5003 => DevicePropertyCode::ImageSize,
-            0x5004 => DevicePropertyCode::CompressionSetting,
-            0x5005 => DevicePropertyCode::WhiteBalance,
-            0x5006 => DevicePropertyCode::RgbGain,
-            0x5007 => DevicePropertyCode::FNumber,
-            0x5008 => DevicePropertyCode::FocalLength,
-            0x5009 => DevicePropertyCode::FocusDistance,
-            0x500A => DevicePropertyCode::FocusMode,
-            0x500B => DevicePropertyCode::ExposureMeteringMode,
-            0x500C => DevicePropertyCode::FlashMode,
-            0x500D => DevicePropertyCode::ExposureTime,
-            0x500E => DevicePropertyCode::ExposureProgramMode,
-            0x500F => DevicePropertyCode::ExposureIndex,
-            0x5010 => DevicePropertyCode::ExposureBiasCompensation,
-            0x5011 => DevicePropertyCode::DateTime,
-            0x5012 => DevicePropertyCode::CaptureDelay,
-            0x5013 => DevicePropertyCode::StillCaptureMode,
-            0x5014 => DevicePropertyCode::Contrast,
-            0x5015 => DevicePropertyCode::Sharpness,
-            0x5016 => DevicePropertyCode::DigitalZoom,
-            0x5017 => DevicePropertyCode::EffectMode,
-            0x5018 => DevicePropertyCode::BurstNumber,
-            0x5019 => DevicePropertyCode::BurstInterval,
-            0x501A => DevicePropertyCode::TimelapseNumber,
-            0x501B => DevicePropertyCode::TimelapseInterval,
-            0x501C => DevicePropertyCode::FocusMeteringMode,
-            0x501D => DevicePropertyCode::UploadUrl,
-            0x501E => DevicePropertyCode::Artist,
-            0x501F => DevicePropertyCode::CopyrightInfo,
-            _ => DevicePropertyCode::Unknown(code),
-        }
+        code.into()
     }
 
     /// Convert a DevicePropertyCode to its raw u16 value.
     pub fn to_code(self) -> u16 {
-        match self {
-            DevicePropertyCode::Undefined => 0x5000,
-            DevicePropertyCode::BatteryLevel => 0x5001,
-            DevicePropertyCode::FunctionalMode => 0x5002,
-            DevicePropertyCode::ImageSize => 0x5003,
-            DevicePropertyCode::CompressionSetting => 0x5004,
-            DevicePropertyCode::WhiteBalance => 0x5005,
-            DevicePropertyCode::RgbGain => 0x5006,
-            DevicePropertyCode::FNumber => 0x5007,
-            DevicePropertyCode::FocalLength => 0x5008,
-            DevicePropertyCode::FocusDistance => 0x5009,
-            DevicePropertyCode::FocusMode => 0x500A,
-            DevicePropertyCode::ExposureMeteringMode => 0x500B,
-            DevicePropertyCode::FlashMode => 0x500C,
-            DevicePropertyCode::ExposureTime => 0x500D,
-            DevicePropertyCode::ExposureProgramMode => 0x500E,
-            DevicePropertyCode::ExposureIndex => 0x500F,
-            DevicePropertyCode::ExposureBiasCompensation => 0x5010,
-            DevicePropertyCode::DateTime => 0x5011,
-            DevicePropertyCode::CaptureDelay => 0x5012,
-            DevicePropertyCode::StillCaptureMode => 0x5013,
-            DevicePropertyCode::Contrast => 0x5014,
-            DevicePropertyCode::Sharpness => 0x5015,
-            DevicePropertyCode::DigitalZoom => 0x5016,
-            DevicePropertyCode::EffectMode => 0x5017,
-            DevicePropertyCode::BurstNumber => 0x5018,
-            DevicePropertyCode::BurstInterval => 0x5019,
-            DevicePropertyCode::TimelapseNumber => 0x501A,
-            DevicePropertyCode::TimelapseInterval => 0x501B,
-            DevicePropertyCode::FocusMeteringMode => 0x501C,
-            DevicePropertyCode::UploadUrl => 0x501D,
-            DevicePropertyCode::Artist => 0x501E,
-            DevicePropertyCode::CopyrightInfo => 0x501F,
-            DevicePropertyCode::Unknown(code) => code,
-        }
+        self.into()
     }
 }
 
