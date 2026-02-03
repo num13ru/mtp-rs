@@ -117,7 +117,7 @@ impl DeviceInfo {
         offset += consumed;
 
         // 14. SerialNumber (string)
-        let (serial_number, _consumed) = unpack_string(&buf[offset..])?;
+        let (serial_number, _) = unpack_string(&buf[offset..])?;
 
         Ok(DeviceInfo {
             standard_version,
@@ -224,7 +224,7 @@ impl StorageInfo {
         offset += consumed;
 
         // 8. VolumeIdentifier (string)
-        let (volume_identifier, _consumed) = unpack_string(&buf[offset..])?;
+        let (volume_identifier, _) = unpack_string(&buf[offset..])?;
 
         Ok(StorageInfo {
             storage_type,
