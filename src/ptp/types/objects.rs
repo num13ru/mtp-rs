@@ -73,7 +73,7 @@ impl ObjectInfo {
         offset += 4;
 
         // 2. ObjectFormat (u16)
-        let format = ObjectFormatCode::from_code(unpack_u16(&buf[offset..])?);
+        let format = ObjectFormatCode::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 3. ProtectionStatus (u16)
@@ -85,7 +85,7 @@ impl ObjectInfo {
         offset += 4;
 
         // 5. ThumbFormat (u16)
-        let thumb_format = ObjectFormatCode::from_code(unpack_u16(&buf[offset..])?);
+        let thumb_format = ObjectFormatCode::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 6. ThumbCompressedSize (u32)
@@ -179,7 +179,7 @@ impl ObjectInfo {
         buf.extend_from_slice(&pack_u32(self.storage_id.0));
 
         // 2. ObjectFormat (u16)
-        buf.extend_from_slice(&pack_u16(self.format.to_code()));
+        buf.extend_from_slice(&pack_u16(self.format.into()));
 
         // 3. ProtectionStatus (u16)
         buf.extend_from_slice(&pack_u16(self.protection_status.to_code()));
@@ -193,7 +193,7 @@ impl ObjectInfo {
         buf.extend_from_slice(&pack_u32(size_u32));
 
         // 5. ThumbFormat (u16)
-        buf.extend_from_slice(&pack_u16(self.thumb_format.to_code()));
+        buf.extend_from_slice(&pack_u16(self.thumb_format.into()));
 
         // 6. ThumbCompressedSize (u32)
         buf.extend_from_slice(&pack_u32(self.thumb_size));

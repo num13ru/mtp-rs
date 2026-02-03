@@ -39,7 +39,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(
                 OperationCode::GetDevicePropDesc,
-                &[property.to_code() as u32],
+                &[u16::from(property) as u32],
             )
             .await?;
         Self::check_response(&response, OperationCode::GetDevicePropDesc)?;
@@ -62,7 +62,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(
                 OperationCode::GetDevicePropValue,
-                &[property.to_code() as u32],
+                &[u16::from(property) as u32],
             )
             .await?;
         Self::check_response(&response, OperationCode::GetDevicePropValue)?;
@@ -105,7 +105,7 @@ impl PtpSession {
         let response = self
             .execute_with_send(
                 OperationCode::SetDevicePropValue,
-                &[property.to_code() as u32],
+                &[u16::from(property) as u32],
                 value,
             )
             .await?;
@@ -139,7 +139,7 @@ impl PtpSession {
         let response = self
             .execute(
                 OperationCode::ResetDevicePropValue,
-                &[property.to_code() as u32],
+                &[u16::from(property) as u32],
             )
             .await?;
         Self::check_response(&response, OperationCode::ResetDevicePropValue)?;

@@ -65,19 +65,6 @@ pub enum OperationCode {
     Unknown(u16),
 }
 
-impl OperationCode {
-    /// Convert a raw u16 code to an OperationCode.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert an OperationCode to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-}
 
 /// PTP response codes (status returned by device).
 ///
@@ -138,19 +125,6 @@ pub enum ResponseCode {
     Unknown(u16),
 }
 
-impl ResponseCode {
-    /// Convert a raw u16 code to a ResponseCode.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert a ResponseCode to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-}
 
 /// PTP event codes (asynchronous notifications from device).
 ///
@@ -181,19 +155,6 @@ pub enum EventCode {
     Unknown(u16),
 }
 
-impl EventCode {
-    /// Convert a raw u16 code to an EventCode.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert an EventCode to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-}
 
 /// PTP/MTP object format codes.
 ///
@@ -259,18 +220,6 @@ pub enum ObjectFormatCode {
 }
 
 impl ObjectFormatCode {
-    /// Convert a raw u16 code to an ObjectFormatCode.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert an ObjectFormatCode to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-
     /// Detect object format from file extension (case insensitive).
     ///
     /// Returns `Undefined` for unrecognized extensions.
@@ -396,19 +345,6 @@ pub enum ObjectPropertyCode {
     Unknown(u16),
 }
 
-impl ObjectPropertyCode {
-    /// Convert a raw u16 code to an ObjectPropertyCode.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert an ObjectPropertyCode to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-}
 
 /// PTP property data type codes.
 ///
@@ -446,18 +382,6 @@ pub enum PropertyDataType {
 }
 
 impl PropertyDataType {
-    /// Convert a raw u16 code to a PropertyDataType.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert a PropertyDataType to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-
     /// Returns the byte size of this data type.
     ///
     /// Returns `None` for variable-length types (String) and unsupported types
@@ -558,19 +482,6 @@ pub enum DevicePropertyCode {
     Unknown(u16),
 }
 
-impl DevicePropertyCode {
-    /// Convert a raw u16 code to a DevicePropertyCode.
-    #[must_use]
-    pub fn from_code(code: u16) -> Self {
-        code.into()
-    }
-
-    /// Convert a DevicePropertyCode to its raw u16 value.
-    #[must_use]
-    pub fn to_code(self) -> u16 {
-        self.into()
-    }
-}
 
 #[cfg(test)]
 mod tests {

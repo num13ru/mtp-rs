@@ -91,7 +91,7 @@ impl CommandContainer {
         // Header
         buf.extend_from_slice(&pack_u32(total_len as u32));
         buf.extend_from_slice(&pack_u16(ContainerType::Command.to_code()));
-        buf.extend_from_slice(&pack_u16(self.code.to_code()));
+        buf.extend_from_slice(&pack_u16(self.code.into()));
         buf.extend_from_slice(&pack_u32(self.transaction_id));
 
         // Parameters
@@ -124,7 +124,7 @@ impl DataContainer {
         // Header
         buf.extend_from_slice(&pack_u32(total_len as u32));
         buf.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
-        buf.extend_from_slice(&pack_u16(self.code.to_code()));
+        buf.extend_from_slice(&pack_u16(self.code.into()));
         buf.extend_from_slice(&pack_u32(self.transaction_id));
 
         // Payload
@@ -176,7 +176,7 @@ impl DataContainer {
         let payload = buf[HEADER_SIZE..length].to_vec();
 
         Ok(DataContainer {
-            code: OperationCode::from_code(code),
+            code: code.into(),
             transaction_id,
             payload,
         })
@@ -245,7 +245,7 @@ impl ResponseContainer {
         }
 
         Ok(ResponseContainer {
-            code: ResponseCode::from_code(code),
+            code: code.into(),
             transaction_id,
             params,
         })
@@ -344,7 +344,7 @@ impl EventContainer {
         };
 
         Ok(EventContainer {
-            code: EventCode::from_code(code),
+            code: code.into(),
             transaction_id,
             params: [param1, param2, param3],
         })
@@ -584,7 +584,7 @@ mod tests {
             payload in prop::collection::vec(any::<u8>(), 0..500)
         ) {
             let original = DataContainer {
-                code: OperationCode::from_code(code),
+                code: code.into(),
                 transaction_id: tx_id,
                 payload: payload.clone(),
             };
@@ -599,7 +599,7 @@ mod tests {
             params in prop::collection::vec(any::<u32>(), 0..5)
         ) {
             let cmd = CommandContainer {
-                code: OperationCode::from_code(code),
+                code: code.into(),
                 transaction_id: tx_id,
                 params: params.clone(),
             };
@@ -625,14 +625,14 @@ mod tests {
             payload in prop::collection::vec(any::<u8>(), 0..50)
         ) {
             let data = DataContainer {
-                code: OperationCode::from_code(code),
+                code: code.into(),
                 transaction_id: tx_id,
                 payload,
             };
             prop_assert_eq!(container_type(&data.to_bytes()).unwrap(), ContainerType::Data);
 
             let cmd = CommandContainer {
-                code: OperationCode::from_code(code),
+                code: code.into(),
                 transaction_id: tx_id,
                 params: vec![],
             };

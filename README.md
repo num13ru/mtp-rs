@@ -167,17 +167,13 @@ println!("Uploaded with handle {:?}", handle);
 ### Download with progress
 
 ```rust
-use futures::StreamExt;
+let mut download = storage.download_stream(file.handle).await?;
+println!("Downloading {} bytes...", download.size());
 
-let mut stream = storage.download(file.handle).await?;
-
-while let Some(chunk) = stream.next().await {
-    let chunk = chunk?;
-    if let Some(total) = chunk.total_bytes {
-        let pct = chunk.bytes_so_far * 100 / total;
-        println!("{}%", pct);
-    }
-    // Process chunk.data...
+while let Some(chunk) = download.next_chunk().await {
+    let bytes = chunk?;
+    // Process bytes...
+    println!("{:.1}%", download.progress() * 100.0);
 }
 ```
 

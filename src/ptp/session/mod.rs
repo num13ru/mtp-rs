@@ -342,7 +342,7 @@ mod tests {
         let mut buf = Vec::with_capacity(12);
         buf.extend_from_slice(&pack_u32(12)); // length
         buf.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
-        buf.extend_from_slice(&pack_u16(ResponseCode::Ok.to_code()));
+        buf.extend_from_slice(&pack_u16(ResponseCode::Ok.into()));
         buf.extend_from_slice(&pack_u32(tx_id));
         buf
     }
@@ -353,7 +353,7 @@ mod tests {
         let mut buf = Vec::with_capacity(len);
         buf.extend_from_slice(&pack_u32(len as u32));
         buf.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
-        buf.extend_from_slice(&pack_u16(code.to_code()));
+        buf.extend_from_slice(&pack_u16(code.into()));
         buf.extend_from_slice(&pack_u32(tx_id));
         for p in params {
             buf.extend_from_slice(&pack_u32(*p));
@@ -367,7 +367,7 @@ mod tests {
         let mut buf = Vec::with_capacity(len);
         buf.extend_from_slice(&pack_u32(len as u32));
         buf.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
-        buf.extend_from_slice(&pack_u16(code.to_code()));
+        buf.extend_from_slice(&pack_u16(code.into()));
         buf.extend_from_slice(&pack_u32(tx_id));
         buf.extend_from_slice(payload);
         buf

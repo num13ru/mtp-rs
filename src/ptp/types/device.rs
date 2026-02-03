@@ -75,13 +75,13 @@ impl DeviceInfo {
         // 6. OperationsSupported (u16 array)
         let (ops_raw, consumed) = unpack_u16_array(&buf[offset..])?;
         let operations_supported: Vec<OperationCode> =
-            ops_raw.into_iter().map(OperationCode::from_code).collect();
+            ops_raw.into_iter().map(OperationCode::from).collect();
         offset += consumed;
 
         // 7. EventsSupported (u16 array)
         let (events_raw, consumed) = unpack_u16_array(&buf[offset..])?;
         let events_supported: Vec<EventCode> =
-            events_raw.into_iter().map(EventCode::from_code).collect();
+            events_raw.into_iter().map(EventCode::from).collect();
         offset += consumed;
 
         // 8. DevicePropertiesSupported (u16 array)
@@ -92,7 +92,7 @@ impl DeviceInfo {
         let (capture_raw, consumed) = unpack_u16_array(&buf[offset..])?;
         let capture_formats: Vec<ObjectFormatCode> = capture_raw
             .into_iter()
-            .map(ObjectFormatCode::from_code)
+            .map(ObjectFormatCode::from)
             .collect();
         offset += consumed;
 
@@ -100,7 +100,7 @@ impl DeviceInfo {
         let (playback_raw, consumed) = unpack_u16_array(&buf[offset..])?;
         let playback_formats: Vec<ObjectFormatCode> = playback_raw
             .into_iter()
-            .map(ObjectFormatCode::from_code)
+            .map(ObjectFormatCode::from)
             .collect();
         offset += consumed;
 

@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info.device_properties_supported.len()
     );
     for prop_code in &info.device_properties_supported {
-        let prop = DevicePropertyCode::from_code(*prop_code);
+        let prop = DevicePropertyCode::from(*prop_code);
         print!("  0x{:04X} {:?}", prop_code, prop);
 
         // Try to read the property descriptor

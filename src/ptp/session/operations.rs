@@ -58,7 +58,7 @@ impl PtpSession {
         format: Option<ObjectFormatCode>,
         parent: Option<ObjectHandle>,
     ) -> Result<Vec<ObjectHandle>, Error> {
-        let format_code = format.map(|f| f.to_code() as u32).unwrap_or(0);
+        let format_code = format.map(|f| u16::from(f) as u32).unwrap_or(0);
         let parent_handle = parent.map(|p| p.0).unwrap_or(0); // 0 = root only
 
         let (response, data) = self
@@ -248,7 +248,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(
                 OperationCode::GetObjectPropValue,
-                &[handle.0, property.to_code() as u32],
+                &[handle.0, u16::from(property) as u32],
             )
             .await?;
         Self::check_response(&response, OperationCode::GetObjectPropValue)?;
@@ -274,7 +274,7 @@ impl PtpSession {
         let response = self
             .execute_with_send(
                 OperationCode::SetObjectPropValue,
-                &[handle.0, property.to_code() as u32],
+                &[handle.0, u16::from(property) as u32],
                 value,
             )
             .await?;
@@ -349,7 +349,7 @@ impl PtpSession {
         // ObjectFormatCode::Undefined (0x3000) is different and may not be accepted.
         let format_code = match format {
             ObjectFormatCode::Undefined => 0,
-            other => other.to_code() as u32,
+            other => u16::from(other) as u32,
         };
         let response = self
             .execute(OperationCode::InitiateCapture, &[storage_id.0, format_code])

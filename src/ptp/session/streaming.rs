@@ -123,7 +123,7 @@ impl PtpSession {
             buffer.extend_from_slice(&pack_u32(0xFFFFFFFF));
         }
         buffer.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
-        buffer.extend_from_slice(&pack_u16(operation.to_code()));
+        buffer.extend_from_slice(&pack_u16(operation.into()));
         buffer.extend_from_slice(&pack_u32(tx_id));
 
         // Collect all chunks into buffer

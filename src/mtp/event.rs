@@ -80,12 +80,9 @@ impl DeviceEvent {
                 handle: ObjectHandle(container.params[0]),
             },
             EventCode::DeviceInfoChanged => DeviceEvent::DeviceInfoChanged,
-            EventCode::Unknown(code) => DeviceEvent::Unknown {
-                code,
-                params: container.params,
-            },
-            _ => DeviceEvent::Unknown {
-                code: container.code.to_code(),
+            // All other codes (including Unknown and unhandled known codes like DevicePropChanged)
+            other => DeviceEvent::Unknown {
+                code: other.into(),
                 params: container.params,
             },
         }

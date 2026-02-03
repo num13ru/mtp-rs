@@ -253,11 +253,11 @@ impl DevicePropDesc {
         let mut offset = 0;
 
         // 1. PropertyCode (u16)
-        let property_code = DevicePropertyCode::from_code(unpack_u16(&buf[offset..])?);
+        let property_code = DevicePropertyCode::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 2. DataType (u16)
-        let data_type = PropertyDataType::from_code(unpack_u16(&buf[offset..])?);
+        let data_type = PropertyDataType::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 3. GetSet (u8): 0x00 = read-only, 0x01 = read-write
@@ -715,12 +715,12 @@ mod tests {
 
         #[test]
         fn fuzz_property_value_truncated(data_type_code in 1u16..=8u16, bytes in prop::collection::vec(any::<u8>(), 0..20)) {
-            let _ = PropertyValue::from_bytes(&bytes, PropertyDataType::from_code(data_type_code));
+            let _ = PropertyValue::from_bytes(&bytes, PropertyDataType::from(data_type_code));
         }
 
         #[test]
         fn fuzz_property_value_empty(data_type_code in 1u16..=8u16) {
-            prop_assert!(PropertyValue::from_bytes(&[], PropertyDataType::from_code(data_type_code)).is_err());
+            prop_assert!(PropertyValue::from_bytes(&[], PropertyDataType::from(data_type_code)).is_err());
         }
 
         #[test]
@@ -742,7 +742,7 @@ mod tests {
 
         #[test]
         fn fuzz_property_range_truncated(data_type_code in 1u16..=8u16, bytes in prop::collection::vec(any::<u8>(), 0..20)) {
-            let _ = PropertyRange::from_bytes(&bytes, PropertyDataType::from_code(data_type_code));
+            let _ = PropertyRange::from_bytes(&bytes, PropertyDataType::from(data_type_code));
         }
 
         #[test]

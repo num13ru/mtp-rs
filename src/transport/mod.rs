@@ -1,5 +1,6 @@
 //! USB transport abstraction layer.
 
+#[cfg(test)]
 pub mod mock;
 pub mod nusb;
 
