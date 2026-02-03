@@ -15,22 +15,16 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// Progress as a percentage (0.0 to 100.0), if total is known.
+    /// Progress as a percentage (0.0 to 100.0).
     #[must_use]
-    pub fn percent(&self) -> Option<f64> {
-        self.total_bytes.map(|total| {
-            if total == 0 {
-                100.0
-            } else {
-                self.bytes_transferred as f64 / total as f64 * 100.0
-            }
-        })
+    pub fn percent(&self) -> f64 {
+        self.fraction() * 100.0
     }
 
-    /// Progress as a fraction (0.0 to 1.0), if total is known.
+    /// Progress as a fraction (0.0 to 1.0).
     #[must_use]
-    pub fn fraction(&self) -> Option<f64> {
-        self.total_bytes.map(|total| {
+    pub fn fraction(&self) -> f64 {
+        self.total_bytes.map_or(1.0, |total| {
             if total == 0 {
                 1.0
             } else {
@@ -166,11 +160,11 @@ mod tests {
     #[test]
     fn progress_calculations() {
         let cases = [
-            (50, Some(100), Some(50.0), Some(0.5)),
-            (100, Some(100), Some(100.0), Some(1.0)),
-            (25, Some(100), Some(25.0), Some(0.25)),
-            (0, Some(0), Some(100.0), Some(1.0)), // Empty file
-            (50, None, None, None),               // Unknown total
+            (50, Some(100), 50.0, 0.5),
+            (100, Some(100), 100.0, 1.0),
+            (25, Some(100), 25.0, 0.25),
+            (0, Some(0), 100.0, 1.0),   // Empty file
+            (50, None, 100.0, 1.0),     // Unknown total defaults to complete
         ];
         for (transferred, total, expected_pct, expected_frac) in cases {
             let p = Progress { bytes_transferred: transferred, total_bytes: total };
@@ -180,7 +174,7 @@ mod tests {
 
         // Large numbers
         let large = Progress { bytes_transferred: u64::MAX / 2, total_bytes: Some(u64::MAX) };
-        let frac = large.fraction().unwrap();
+        let frac = large.fraction();
         assert!(frac > 0.49 && frac < 0.51);
     }
 }

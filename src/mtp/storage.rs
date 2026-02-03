@@ -294,31 +294,13 @@ impl Storage {
         &self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
-        mut data: S,
+        data: S,
     ) -> Result<ObjectHandle, Error>
     where
         S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
     {
-        use futures::StreamExt;
-
-        // Collect all data first (MTP requires knowing size upfront)
-        let mut buffer = Vec::with_capacity(info.size as usize);
-        while let Some(chunk) = data.next().await {
-            let chunk = chunk.map_err(Error::Io)?;
-            buffer.extend_from_slice(&chunk);
-        }
-
-        let object_info = info.to_object_info();
-        let parent_handle = parent.unwrap_or(ObjectHandle::ROOT);
-        let (_, _, handle) = self
-            .inner
-            .session
-            .send_object_info(self.id, parent_handle, &object_info)
-            .await?;
-
-        self.inner.session.send_object(&buffer).await?;
-
-        Ok(handle)
+        self.upload_with_progress(parent, info, data, |_| ControlFlow::Continue(()))
+            .await
     }
 
     /// Upload a file with progress callback.

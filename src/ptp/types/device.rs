@@ -198,15 +198,15 @@ impl StorageInfo {
         let mut offset = 0;
 
         // 1. StorageType (u16)
-        let storage_type = StorageType::from_code(unpack_u16(&buf[offset..])?);
+        let storage_type = StorageType::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 2. FilesystemType (u16)
-        let filesystem_type = FilesystemType::from_code(unpack_u16(&buf[offset..])?);
+        let filesystem_type = FilesystemType::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 3. AccessCapability (u16)
-        let access_capability = AccessCapability::from_code(unpack_u16(&buf[offset..])?);
+        let access_capability = AccessCapability::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 4. MaxCapacity (u64)

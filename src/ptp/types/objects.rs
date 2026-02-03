@@ -77,7 +77,7 @@ impl ObjectInfo {
         offset += 2;
 
         // 3. ProtectionStatus (u16)
-        let protection_status = ProtectionStatus::from_code(unpack_u16(&buf[offset..])?);
+        let protection_status = ProtectionStatus::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 4. ObjectCompressedSize (u32) - stored as u64, but protocol uses u32
@@ -117,7 +117,7 @@ impl ObjectInfo {
         offset += 4;
 
         // 13. AssociationType (u16)
-        let association_type = AssociationType::from_code(unpack_u16(&buf[offset..])?);
+        let association_type = AssociationType::from(unpack_u16(&buf[offset..])?);
         offset += 2;
 
         // 14. AssociationDesc (u32)
@@ -182,7 +182,7 @@ impl ObjectInfo {
         buf.extend_from_slice(&pack_u16(self.format.into()));
 
         // 3. ProtectionStatus (u16)
-        buf.extend_from_slice(&pack_u16(self.protection_status.to_code()));
+        buf.extend_from_slice(&pack_u16(self.protection_status.into()));
 
         // 4. ObjectCompressedSize (u32) - cap at u32::MAX for >4GB files
         let size_u32 = if self.size > u32::MAX as u64 {
@@ -217,7 +217,7 @@ impl ObjectInfo {
         buf.extend_from_slice(&pack_u32(self.parent.0));
 
         // 13. AssociationType (u16)
-        buf.extend_from_slice(&pack_u16(self.association_type.to_code()));
+        buf.extend_from_slice(&pack_u16(self.association_type.into()));
 
         // 14. AssociationDesc (u32)
         buf.extend_from_slice(&pack_u32(self.association_desc));

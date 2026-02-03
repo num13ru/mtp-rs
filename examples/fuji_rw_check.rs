@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "    Access: {:?} (code: {})",
             storage_info.access_capability,
-            storage_info.access_capability.to_code()
+            u16::from(storage_info.access_capability)
         );
         println!(
             "    Capacity: {:.2} GB",

@@ -33,11 +33,7 @@ impl PtpDevice {
             .into_iter()
             .find(|d| d.location_id == location_id)
             .ok_or(Error::NoDevice)?;
-        let device = device_info.open().map_err(Error::Usb)?;
-        let transport = NusbTransport::open_with_timeout(device, timeout).await?;
-        Ok(Self {
-            transport: Arc::new(transport),
-        })
+        Self::open_device(device_info, timeout).await
     }
 
     /// Open a PTP device by its serial number.
@@ -55,11 +51,7 @@ impl PtpDevice {
             .into_iter()
             .find(|d| d.serial_number.as_deref() == Some(serial))
             .ok_or(Error::NoDevice)?;
-        let device = device_info.open().map_err(Error::Usb)?;
-        let transport = NusbTransport::open_with_timeout(device, timeout).await?;
-        Ok(Self {
-            transport: Arc::new(transport),
-        })
+        Self::open_device(device_info, timeout).await
     }
 
     /// Open the first available PTP device.
@@ -71,6 +63,13 @@ impl PtpDevice {
     pub async fn open_first_with_timeout(timeout: Duration) -> Result<Self, Error> {
         let devices = NusbTransport::list_mtp_devices()?;
         let device_info = devices.into_iter().next().ok_or(Error::NoDevice)?;
+        Self::open_device(device_info, timeout).await
+    }
+
+    async fn open_device(
+        device_info: crate::transport::UsbDeviceInfo,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
         let device = device_info.open().map_err(Error::Usb)?;
         let transport = NusbTransport::open_with_timeout(device, timeout).await?;
         Ok(Self {
