@@ -5,9 +5,22 @@
 /// Date and time structure for MTP/PTP.
 ///
 /// Format: "YYYYMMDDThhmmss" (ISO 8601 subset)
+///
+/// # Validation
+///
+/// DateTime values must satisfy these constraints:
+/// - Year: 0-9999 (4-digit representation)
+/// - Month: 1-12
+/// - Day: 1-31
+/// - Hour: 0-23
+/// - Minute: 0-59
+/// - Second: 0-59
+///
+/// Use [`DateTime::new()`] to create validated instances, or [`DateTime::is_valid()`]
+/// to check existing instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DateTime {
-    /// Year (e.g., 2024)
+    /// Year (0-9999)
     pub year: u16,
     /// Month (1-12)
     pub month: u8,
@@ -22,10 +35,65 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    /// Create a new DateTime with validation.
+    ///
+    /// Returns `None` if any value is out of range.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mtp_rs::ptp::DateTime;
+    ///
+    /// let dt = DateTime::new(2024, 3, 15, 14, 30, 22).unwrap();
+    /// assert_eq!(dt.year, 2024);
+    ///
+    /// // Invalid values return None
+    /// assert!(DateTime::new(2024, 13, 1, 0, 0, 0).is_none()); // month > 12
+    /// assert!(DateTime::new(2024, 1, 1, 0, 60, 0).is_none()); // minute > 59
+    /// ```
+    pub fn new(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) -> Option<Self> {
+        let dt = DateTime {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        };
+        if dt.is_valid() {
+            Some(dt)
+        } else {
+            None
+        }
+    }
+
+    /// Check if this DateTime has valid values.
+    ///
+    /// Returns `true` if all fields are within valid ranges:
+    /// - Year: 0-9999
+    /// - Month: 1-12
+    /// - Day: 1-31
+    /// - Hour: 0-23
+    /// - Minute: 0-59
+    /// - Second: 0-59
+    ///
+    /// Note: This does not validate day-of-month against the specific month
+    /// (e.g., Feb 31 would pass). MTP devices generally accept any 1-31 value.
+    pub fn is_valid(&self) -> bool {
+        self.year <= 9999
+            && (1..=12).contains(&self.month)
+            && (1..=31).contains(&self.day)
+            && self.hour <= 23
+            && self.minute <= 59
+            && self.second <= 59
+    }
+
     /// Parse a datetime string in MTP format.
     ///
     /// Format: "YYYYMMDDThhmmss" with optional timezone suffix (Z or +hhmm/-hhmm).
     /// The timezone suffix is parsed but ignored.
+    ///
+    /// Returns `None` if the string is malformed or contains invalid values.
     pub fn parse(s: &str) -> Option<Self> {
         // Minimum length: "YYYYMMDDThhmmss" = 15 characters
         if s.len() < 15 {
@@ -45,47 +113,35 @@ impl DateTime {
         let minute: u8 = s.get(11..13)?.parse().ok()?;
         let second: u8 = s.get(13..15)?.parse().ok()?;
 
-        // Basic validation
-        if !(1..=12).contains(&month) {
-            return None;
-        }
-        if !(1..=31).contains(&day) {
-            return None;
-        }
-        if hour > 23 {
-            return None;
-        }
-        if minute > 59 {
-            return None;
-        }
-        if second > 59 {
-            return None;
-        }
-
-        Some(DateTime {
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second,
-        })
+        // Use new() which validates
+        Self::new(year, month, day, hour, minute, second)
     }
 
     /// Format the datetime as an MTP string.
     ///
-    /// Returns "YYYYMMDDThhmmss" format (exactly 15 characters).
-    /// Values are clamped to ensure valid output format.
-    pub fn format(&self) -> String {
-        format!(
+    /// Returns `Some("YYYYMMDDThhmmss")` if the values are valid (exactly 15 characters),
+    /// or `None` if any value is out of range.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mtp_rs::ptp::DateTime;
+    ///
+    /// let dt = DateTime::new(2024, 3, 15, 14, 30, 22).unwrap();
+    /// assert_eq!(dt.format(), Some("20240315T143022".to_string()));
+    ///
+    /// // Invalid DateTime returns None
+    /// let invalid = DateTime { year: 2024, month: 13, day: 1, hour: 0, minute: 0, second: 0 };
+    /// assert_eq!(invalid.format(), None);
+    /// ```
+    pub fn format(&self) -> Option<String> {
+        if !self.is_valid() {
+            return None;
+        }
+        Some(format!(
             "{:04}{:02}{:02}T{:02}{:02}{:02}",
-            self.year % 10000,
-            self.month % 100,
-            self.day % 100,
-            self.hour % 100,
-            self.minute % 100,
-            self.second % 100
-        )
+            self.year, self.month, self.day, self.hour, self.minute, self.second
+        ))
     }
 }
 
@@ -431,8 +487,16 @@ pub fn unpack_u32_array(buf: &[u8]) -> Result<(Vec<u32>, usize), crate::Error> {
 // =============================================================================
 
 /// Pack a DateTime into MTP string format.
-pub fn pack_datetime(dt: &DateTime) -> Vec<u8> {
-    pack_string(&dt.format())
+///
+/// Returns an error if the DateTime contains invalid values.
+pub fn pack_datetime(dt: &DateTime) -> Result<Vec<u8>, crate::Error> {
+    let formatted = dt.format().ok_or_else(|| {
+        crate::Error::invalid_data(format!(
+            "invalid DateTime: year={}, month={}, day={}, hour={}, minute={}, second={}",
+            dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
+        ))
+    })?;
+    Ok(pack_string(&formatted))
 }
 
 /// Unpack a DateTime from a buffer.
@@ -1153,42 +1217,58 @@ mod tests {
 
     #[test]
     fn datetime_format() {
-        let dt = DateTime {
-            year: 2024,
-            month: 3,
-            day: 15,
-            hour: 14,
-            minute: 30,
-            second: 22,
-        };
-        assert_eq!(dt.format(), "20240315T143022");
+        let dt = DateTime::new(2024, 3, 15, 14, 30, 22).unwrap();
+        assert_eq!(dt.format(), Some("20240315T143022".to_string()));
     }
 
     #[test]
     fn datetime_format_with_leading_zeros() {
-        let dt = DateTime {
-            year: 2024,
-            month: 1,
-            day: 5,
-            hour: 9,
-            minute: 5,
-            second: 3,
-        };
-        assert_eq!(dt.format(), "20240105T090503");
+        let dt = DateTime::new(2024, 1, 5, 9, 5, 3).unwrap();
+        assert_eq!(dt.format(), Some("20240105T090503".to_string()));
     }
 
     #[test]
     fn datetime_roundtrip() {
-        let original = DateTime {
-            year: 2024,
-            month: 12,
-            day: 31,
-            hour: 23,
-            minute: 59,
-            second: 59,
-        };
-        let parsed = DateTime::parse(&original.format()).unwrap();
+        let original = DateTime::new(2024, 12, 31, 23, 59, 59).unwrap();
+        let formatted = original.format().unwrap();
+        let parsed = DateTime::parse(&formatted).unwrap();
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn datetime_format_invalid_returns_none() {
+        // Invalid month
+        let invalid = DateTime {
+            year: 2024,
+            month: 13,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(invalid.format(), None);
+
+        // Invalid minute
+        let invalid = DateTime {
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 60,
+            second: 0,
+        };
+        assert_eq!(invalid.format(), None);
+
+        // Invalid year (too large)
+        let invalid = DateTime {
+            year: 10000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(invalid.format(), None);
     }
 
     #[test]
@@ -1208,30 +1288,29 @@ mod tests {
 
     #[test]
     fn pack_datetime_basic() {
-        let dt = DateTime {
-            year: 2024,
-            month: 3,
-            day: 15,
-            hour: 14,
-            minute: 30,
-            second: 22,
-        };
-        let packed = pack_datetime(&dt);
+        let dt = DateTime::new(2024, 3, 15, 14, 30, 22).unwrap();
+        let packed = pack_datetime(&dt).unwrap();
         // Should be packed as the string "20240315T143022"
         assert_eq!(packed[0], 16); // 15 chars + null terminator
     }
 
     #[test]
-    fn unpack_datetime_basic() {
-        let dt = DateTime {
+    fn pack_datetime_invalid_returns_error() {
+        let invalid = DateTime {
             year: 2024,
-            month: 3,
-            day: 15,
-            hour: 14,
-            minute: 30,
-            second: 22,
+            month: 13, // Invalid month
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
         };
-        let packed = pack_datetime(&dt);
+        assert!(pack_datetime(&invalid).is_err());
+    }
+
+    #[test]
+    fn unpack_datetime_basic() {
+        let dt = DateTime::new(2024, 3, 15, 14, 30, 22).unwrap();
+        let packed = pack_datetime(&dt).unwrap();
         let (unpacked, _) = unpack_datetime(&packed).unwrap();
         assert_eq!(unpacked, Some(dt));
     }
@@ -1254,34 +1333,13 @@ mod tests {
     #[test]
     fn datetime_pack_unpack_roundtrip() {
         let test_datetimes = [
-            DateTime {
-                year: 2024,
-                month: 1,
-                day: 1,
-                hour: 0,
-                minute: 0,
-                second: 0,
-            },
-            DateTime {
-                year: 2024,
-                month: 12,
-                day: 31,
-                hour: 23,
-                minute: 59,
-                second: 59,
-            },
-            DateTime {
-                year: 1999,
-                month: 6,
-                day: 15,
-                hour: 12,
-                minute: 30,
-                second: 45,
-            },
+            DateTime::new(2024, 1, 1, 0, 0, 0).unwrap(),
+            DateTime::new(2024, 12, 31, 23, 59, 59).unwrap(),
+            DateTime::new(1999, 6, 15, 12, 30, 45).unwrap(),
         ];
 
         for original in test_datetimes {
-            let packed = pack_datetime(&original);
+            let packed = pack_datetime(&original).unwrap();
             let (unpacked, _) = unpack_datetime(&packed).unwrap();
             assert_eq!(unpacked, Some(original));
         }
@@ -1539,14 +1597,14 @@ mod tests {
     proptest! {
         #[test]
         fn prop_datetime_format_parse_roundtrip(dt in valid_datetime()) {
-            let formatted = dt.format();
+            let formatted = dt.format().expect("valid_datetime() should always produce formattable dates");
             let parsed = DateTime::parse(&formatted).unwrap();
             prop_assert_eq!(parsed, dt);
         }
 
         #[test]
         fn prop_datetime_pack_unpack_roundtrip(dt in valid_datetime()) {
-            let packed = pack_datetime(&dt);
+            let packed = pack_datetime(&dt).expect("valid_datetime() should always pack successfully");
             let (unpacked, consumed) = unpack_datetime(&packed).unwrap();
             prop_assert_eq!(unpacked, Some(dt));
             prop_assert_eq!(consumed, packed.len());
@@ -1554,7 +1612,7 @@ mod tests {
 
         #[test]
         fn prop_datetime_format_length(dt in valid_datetime()) {
-            let formatted = dt.format();
+            let formatted = dt.format().expect("valid_datetime() should always produce formattable dates");
             // Format is "YYYYMMDDThhmmss" = 15 characters
             prop_assert_eq!(formatted.len(), 15);
         }
@@ -1743,7 +1801,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     proptest! {
-        /// Invalid month (0, 13+) should be rejected by parse
+        /// Invalid month (0, 13+) should be rejected by format()
         #[test]
         fn fuzz_datetime_invalid_month(
             year in 1900u16..2100u16,
@@ -1754,14 +1812,13 @@ mod tests {
             second in 0u8..=59u8,
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            // Parsing should reject invalid months
-            let result = DateTime::parse(&formatted);
-            // Month 0 and >12 should fail
-            prop_assert!(result.is_none(), "Should reject month={}", month);
+            // format() should reject invalid months
+            prop_assert!(dt.format().is_none(), "format() should reject month={}", month);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject month={}", month);
         }
 
-        /// Invalid day (0, 32+) should be rejected by parse
+        /// Invalid day (0, 32+) should be rejected by format()
         #[test]
         fn fuzz_datetime_invalid_day(
             year in 1900u16..2100u16,
@@ -1772,13 +1829,13 @@ mod tests {
             second in 0u8..=59u8,
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            // Parsing should reject day 0 and >31
-            let result = DateTime::parse(&formatted);
-            prop_assert!(result.is_none(), "Should reject day={}", day);
+            // format() should reject invalid days
+            prop_assert!(dt.format().is_none(), "format() should reject day={}", day);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject day={}", day);
         }
 
-        /// Invalid hour (24+) should be rejected by parse
+        /// Invalid hour (24+) should be rejected by format()
         #[test]
         fn fuzz_datetime_invalid_hour(
             year in 1900u16..2100u16,
@@ -1789,16 +1846,13 @@ mod tests {
             second in 0u8..=59u8,
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            let result = DateTime::parse(&formatted);
-            prop_assert!(result.is_none(), "Should reject hour={}", hour);
+            // format() should reject invalid hours
+            prop_assert!(dt.format().is_none(), "format() should reject hour={}", hour);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject hour={}", hour);
         }
 
-        /// Invalid minute (60+) formatted and parsed - documents buggy behavior
-        /// BUG FOUND: format() doesn't validate input bounds, so minute=60+ produces
-        /// malformed strings. parse() may reject or misparse depending on the value.
-        /// Values 60-99 produce 2-digit strings that parse() rejects.
-        /// Values 100+ produce 3-digit strings causing misaligned parsing.
+        /// Invalid minute (60+) should be rejected by format()
         #[test]
         fn fuzz_datetime_invalid_minute(
             year in 1900u16..2100u16,
@@ -1809,13 +1863,13 @@ mod tests {
             second in 0u8..=59u8,
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            let result = DateTime::parse(&formatted);
-            // minute >= 60 should be rejected by parse
-            prop_assert!(result.is_none(), "Should reject minute={}", minute);
+            // format() should reject invalid minutes
+            prop_assert!(dt.format().is_none(), "format() should reject minute={}", minute);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject minute={}", minute);
         }
 
-        /// Invalid minute (100+) - format() clamps to 2 digits via % 100
+        /// Invalid minute (100+) should be rejected by format()
         #[test]
         fn fuzz_datetime_minute_overflow(
             year in 1900u16..2100u16,
@@ -1826,14 +1880,13 @@ mod tests {
             second in 0u8..=59u8,
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            // format() clamps values via % 100, so string is always 15 chars
-            prop_assert_eq!(formatted.len(), 15);
-            // The clamped value may or may not be valid (e.g., 150 % 100 = 50 is valid)
-            let _ = DateTime::parse(&formatted);
+            // format() should reject invalid minutes (no more silent clamping via % 100)
+            prop_assert!(dt.format().is_none(), "format() should reject minute={}", minute);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject minute={}", minute);
         }
 
-        /// Invalid second (60+) formatted and parsed - documents buggy behavior
+        /// Invalid second (60+) should be rejected by format()
         #[test]
         fn fuzz_datetime_invalid_second(
             year in 1900u16..2100u16,
@@ -1844,13 +1897,13 @@ mod tests {
             second in prop::sample::select(vec![60u8, 61, 99]),
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            let result = DateTime::parse(&formatted);
-            prop_assert!(result.is_none(), "Should reject second={}", second);
+            // format() should reject invalid seconds
+            prop_assert!(dt.format().is_none(), "format() should reject second={}", second);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject second={}", second);
         }
 
-        /// Invalid second (100+) - produces malformed 3-digit format
-        /// This is a KNOWN BUG: format() allows values > 99 which breaks the format
+        /// Invalid second (100+) should be rejected by format()
         #[test]
         fn fuzz_datetime_second_overflow(
             year in 1900u16..2100u16,
@@ -1861,9 +1914,10 @@ mod tests {
             second in 100u8..=255u8,
         ) {
             let dt = DateTime { year, month, day, hour, minute, second };
-            let formatted = dt.format();
-            // KNOWN BUG: format produces >15 char string, parse will reject or misparse
-            let _ = DateTime::parse(&formatted);
+            // format() should reject invalid seconds (no more silent corruption)
+            prop_assert!(dt.format().is_none(), "format() should reject second={}", second);
+            // pack_datetime should also fail
+            prop_assert!(pack_datetime(&dt).is_err(), "pack_datetime() should reject second={}", second);
         }
 
         /// Random strings should fail gracefully, never panic
@@ -1951,7 +2005,7 @@ mod tests {
             minute: 0,
             second: 0,
         };
-        let formatted = dt.format();
+        let formatted = dt.format().expect("Jan 31 should format successfully");
         let parsed = DateTime::parse(&formatted);
         assert!(parsed.is_some(), "Jan 31 should be valid");
         assert_eq!(parsed.unwrap().day, 31);
@@ -1968,11 +2022,12 @@ mod tests {
             minute: 0,
             second: 0,
         };
-        let formatted = dt.format();
-        // format() will produce "00000101T000000" which is 15 chars
-        // parse() should handle this - let's see if it does
+        // Year 0 is valid according to is_valid() (we only check year <= 9999)
+        let formatted = dt.format().expect("Year 0 should format successfully");
+        // format() produces "00000101T000000" which is 15 chars
+        // parse() should handle this
         let parsed = DateTime::parse(&formatted);
-        // This documents current behavior - may or may not be a bug
+        // This documents current behavior
         if let Some(p) = parsed {
             assert_eq!(p.year, 0);
         }
@@ -1989,14 +2044,14 @@ mod tests {
             minute: 59,
             second: 59,
         };
-        let formatted = dt.format();
+        let formatted = dt.format().expect("Year 9999 should format successfully");
         let parsed = DateTime::parse(&formatted).unwrap();
         assert_eq!(parsed.year, 9999);
     }
 
     #[test]
     fn datetime_boundary_year_10000() {
-        // Year 10000 - 5 digits! format() will produce invalid output
+        // Year 10000 - 5 digits! format() should reject this
         let dt = DateTime {
             year: 10000,
             month: 1,
@@ -2005,15 +2060,9 @@ mod tests {
             minute: 0,
             second: 0,
         };
-        let formatted = dt.format();
-        // This produces "100000101T000000" which is 16 chars, not 15
-        // The 'T' is at position 9 instead of 8
-        // This is arguably a bug - should we validate year range in format()?
-        let parsed = DateTime::parse(&formatted);
-        // Document the behavior
-        assert!(
-            parsed.is_none() || parsed.unwrap().year != 10000,
-            "Year 10000 produces malformed datetime string"
-        );
+        // Year 10000 is invalid (> 9999), so format() returns None
+        assert!(dt.format().is_none(), "Year 10000 should be rejected by format()");
+        // pack_datetime should also fail
+        assert!(pack_datetime(&dt).is_err(), "Year 10000 should be rejected by pack_datetime()");
     }
 }

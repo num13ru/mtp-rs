@@ -449,7 +449,7 @@ impl PtpSession {
         parent: ObjectHandle,
         info: &ObjectInfo,
     ) -> Result<(StorageId, ObjectHandle, ObjectHandle), Error> {
-        let data = info.to_bytes();
+        let data = info.to_bytes()?;
         let response = self
             .execute_with_send(
                 OperationCode::SendObjectInfo,

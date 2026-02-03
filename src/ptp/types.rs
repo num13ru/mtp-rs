@@ -931,7 +931,9 @@ impl ObjectInfo {
     /// Serialize ObjectInfo to a byte buffer.
     ///
     /// Used for SendObjectInfo operation.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    ///
+    /// Returns an error if the created or modified DateTime contains invalid values.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::Error> {
         let mut buf = Vec::new();
 
         // 1. StorageID (u32)
@@ -989,14 +991,14 @@ impl ObjectInfo {
 
         // 17. DateCreated (datetime string)
         if let Some(dt) = &self.created {
-            buf.extend_from_slice(&pack_datetime(dt));
+            buf.extend_from_slice(&pack_datetime(dt)?);
         } else {
             buf.push(0x00); // Empty string
         }
 
         // 18. DateModified (datetime string)
         if let Some(dt) = &self.modified {
-            buf.extend_from_slice(&pack_datetime(dt));
+            buf.extend_from_slice(&pack_datetime(dt)?);
         } else {
             buf.push(0x00); // Empty string
         }
@@ -1004,7 +1006,7 @@ impl ObjectInfo {
         // 19. Keywords (string)
         buf.extend_from_slice(&pack_string(&self.keywords));
 
-        buf
+        Ok(buf)
     }
 
     /// Check if this object is a folder.
@@ -1459,7 +1461,7 @@ mod tests {
             hour: 14,
             minute: 30,
             second: 22,
-        }));
+        }).unwrap());
         // DateModified: "20240316T090000"
         buf.extend_from_slice(&pack_datetime(&DateTime {
             year: 2024,
@@ -1468,7 +1470,7 @@ mod tests {
             hour: 9,
             minute: 0,
             second: 0,
-        }));
+        }).unwrap());
         // Keywords: ""
         buf.push(0x00);
 
@@ -1608,7 +1610,7 @@ mod tests {
             keywords: "test,photo".to_string(),
         };
 
-        let bytes = original.to_bytes();
+        let bytes = original.to_bytes().unwrap();
         let parsed = ObjectInfo::from_bytes(&bytes).unwrap();
 
         assert_eq!(parsed.storage_id, original.storage_id);
@@ -1639,7 +1641,7 @@ mod tests {
             ..Default::default()
         };
 
-        let bytes = info.to_bytes();
+        let bytes = info.to_bytes().unwrap();
         let parsed = ObjectInfo::from_bytes(&bytes).unwrap();
 
         // Should be capped at u32::MAX when serializing
