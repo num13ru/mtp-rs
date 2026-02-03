@@ -940,7 +940,6 @@ impl PtpSession {
         use futures::StreamExt;
 
         let _guard = self.operation_lock.lock().await;
-
         let tx_id = self.next_transaction_id();
 
         // Send command
@@ -951,42 +950,29 @@ impl PtpSession {
         };
         self.transport.send_bulk(&cmd.to_bytes()).await?;
 
-        // Build data container header
-        // Container format: length (4) + type (2) + code (2) + transaction_id (4) + payload
+        // Build complete data container (header + all payload)
+        // MTP devices expect the entire data container in a single USB transfer
         let container_length = HEADER_SIZE as u64 + total_size;
+        let mut buffer = Vec::with_capacity(container_length as usize);
 
-        let mut header = Vec::with_capacity(HEADER_SIZE);
-        // For large files, length field is 0xFFFFFFFF and actual length follows
-        // But for simplicity, we'll handle files up to 4GB with standard header
+        // Add header
         if container_length <= u32::MAX as u64 {
-            header.extend_from_slice(&pack_u32(container_length as u32));
+            buffer.extend_from_slice(&pack_u32(container_length as u32));
         } else {
-            // For files larger than 4GB, use extended header
-            // Length field = 0xFFFFFFFF signals extended length follows
-            header.extend_from_slice(&pack_u32(0xFFFFFFFF));
+            buffer.extend_from_slice(&pack_u32(0xFFFFFFFF));
         }
-        header.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
-        header.extend_from_slice(&pack_u16(operation.to_code()));
-        header.extend_from_slice(&pack_u32(tx_id));
+        buffer.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
+        buffer.extend_from_slice(&pack_u16(operation.to_code()));
+        buffer.extend_from_slice(&pack_u32(tx_id));
 
-        // Get first chunk and combine with header for the first USB transfer
-        // (sending just the 12-byte header alone doesn't work properly with USB bulk)
-        let first_chunk = match data.next().await {
-            Some(Ok(chunk)) => chunk,
-            Some(Err(e)) => return Err(Error::Io(e)),
-            None => Bytes::new(), // Empty data is valid
-        };
-
-        // Send header + first chunk together
-        let mut first_packet = header;
-        first_packet.extend_from_slice(&first_chunk);
-        self.transport.send_bulk(&first_packet).await?;
-
-        // Stream remaining data chunks directly to USB
+        // Collect all chunks into buffer
         while let Some(chunk_result) = data.next().await {
             let chunk = chunk_result.map_err(Error::Io)?;
-            self.transport.send_bulk(&chunk).await?;
+            buffer.extend_from_slice(&chunk);
         }
+
+        // Send entire data container as one USB transfer
+        self.transport.send_bulk(&buffer).await?;
 
         // Receive response
         let response_bytes = self.transport.receive_bulk(512).await?;
