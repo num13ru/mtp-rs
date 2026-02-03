@@ -244,9 +244,7 @@ mod tests {
     use super::*;
     use crate::ptp::pack::{pack_string, pack_u16, pack_u16_array, pack_u32};
 
-    // =========================================================================
-    // DeviceInfo Tests
-    // =========================================================================
+    // --- DeviceInfo Tests ---
 
     fn build_minimal_device_info_bytes() -> Vec<u8> {
         let mut buf = Vec::new();
@@ -380,9 +378,7 @@ mod tests {
         assert!(DeviceInfo::from_bytes(&buf).is_err());
     }
 
-    // =========================================================================
-    // StorageInfo Tests
-    // =========================================================================
+    // --- StorageInfo Tests ---
 
     fn build_storage_info_bytes() -> Vec<u8> {
         let mut buf = Vec::new();
@@ -428,9 +424,7 @@ mod tests {
         assert!(StorageInfo::from_bytes(&buf).is_err());
     }
 
-    // =========================================================================
-    // DeviceInfo capability tests
-    // =========================================================================
+    // --- DeviceInfo capability tests ---
 
     #[test]
     fn device_info_supports_operation() {
@@ -482,15 +476,9 @@ mod tests {
         assert!(!info.supports_rename());
     }
 
-    // =========================================================================
-    // Property-based tests (proptest)
-    // =========================================================================
+    // --- Property-based tests ---
 
     use proptest::prelude::*;
-
-    // -------------------------------------------------------------------------
-    // DeviceInfo with truncated/corrupted data
-    // -------------------------------------------------------------------------
 
     proptest! {
         /// DeviceInfo with truncated data should fail gracefully
@@ -505,13 +493,7 @@ mod tests {
         fn fuzz_device_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
             let _ = DeviceInfo::from_bytes(&bytes);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // StorageInfo with truncated/corrupted data
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// StorageInfo with truncated data should fail gracefully
         #[test]
         fn fuzz_storage_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
@@ -524,10 +506,6 @@ mod tests {
             let _ = StorageInfo::from_bytes(&bytes);
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Boundary tests for minimum valid buffer sizes
-    // -------------------------------------------------------------------------
 
     #[test]
     fn device_info_minimum_valid() {

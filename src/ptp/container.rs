@@ -352,9 +352,7 @@ impl EventContainer {
 mod tests {
     use super::*;
 
-    // =========================================================================
-    // ContainerType tests
-    // =========================================================================
+    // --- ContainerType tests ---
 
     #[test]
     fn container_type_from_code() {
@@ -387,9 +385,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // container_type() function tests
-    // =========================================================================
+    // --- container_type() function tests ---
 
     #[test]
     fn container_type_function_command() {
@@ -463,9 +459,7 @@ mod tests {
         assert!(container_type(&bytes).is_err());
     }
 
-    // =========================================================================
-    // CommandContainer tests
-    // =========================================================================
+    // --- CommandContainer tests ---
 
     #[test]
     fn command_container_no_params() {
@@ -525,9 +519,7 @@ mod tests {
         assert_eq!(&bytes[0..4], &[0x20, 0x00, 0x00, 0x00]); // length = 32
     }
 
-    // =========================================================================
-    // DataContainer tests
-    // =========================================================================
+    // --- DataContainer tests ---
 
     #[test]
     fn data_container_to_bytes() {
@@ -619,9 +611,7 @@ mod tests {
         assert!(DataContainer::from_bytes(&bytes).is_err());
     }
 
-    // =========================================================================
-    // ResponseContainer tests
-    // =========================================================================
+    // --- ResponseContainer tests ---
 
     #[test]
     fn response_container_ok() {
@@ -711,9 +701,7 @@ mod tests {
         assert!(ResponseContainer::from_bytes(&bytes).is_err());
     }
 
-    // =========================================================================
-    // EventContainer tests
-    // =========================================================================
+    // --- EventContainer tests ---
 
     #[test]
     fn event_container_object_added() {
@@ -859,10 +847,6 @@ mod tests {
         assert!(EventContainer::from_bytes(&bytes).is_err());
     }
 
-    // =========================================================================
-    // Additional tests
-    // =========================================================================
-
     #[test]
     fn command_container_get_device_info() {
         // GetDeviceInfo is special: no session needed, transaction_id = 0
@@ -922,15 +906,9 @@ mod tests {
         assert_eq!(resp.params, vec![1, 2, 3, 4, 5]);
     }
 
-    // =========================================================================
-    // Property-based tests (proptest)
-    // =========================================================================
+    // --- Property-based tests ---
 
     use proptest::prelude::*;
-
-    // -------------------------------------------------------------------------
-    // ContainerType property tests
-    // -------------------------------------------------------------------------
 
     proptest! {
         /// Valid container types roundtrip correctly
@@ -949,13 +927,7 @@ mod tests {
         )) {
             prop_assert!(ContainerType::from_code(code).is_none());
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // DataContainer roundtrip property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// DataContainer roundtrips correctly with arbitrary payloads
         #[test]
         fn prop_data_container_roundtrip(
@@ -1017,13 +989,7 @@ mod tests {
             let type_code = unpack_u16(&bytes[4..6]).unwrap();
             prop_assert_eq!(type_code, ContainerType::Data.to_code());
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // CommandContainer property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// CommandContainer length field matches actual size
         #[test]
         fn prop_command_container_length_invariant(
@@ -1089,10 +1055,6 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // ResponseContainer property tests
-    // -------------------------------------------------------------------------
-
     /// Strategy for generating valid response container bytes
     fn valid_response_bytes(param_count: usize) -> impl Strategy<Value = Vec<u8>> {
         (
@@ -1146,13 +1108,7 @@ mod tests {
                 prop_assert!(resp.params.len() <= 5);
             });
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // container_type() function property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// container_type() correctly identifies Command containers
         #[test]
         fn prop_container_type_fn_command(
@@ -1195,13 +1151,7 @@ mod tests {
             let ct = container_type(&bytes).unwrap();
             prop_assert_eq!(ct, ContainerType::Response);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Edge case property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// DataContainer with extra trailing bytes still parses correctly
         #[test]
         fn prop_data_container_with_extra_bytes(
@@ -1236,14 +1186,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // ADVERSARIAL PROPERTY-BASED TESTS
-    // Goal: Find bugs by testing malformed/invalid/boundary inputs
-    // =========================================================================
-
-    // -------------------------------------------------------------------------
-    // Container with wrong length field tests
-    // -------------------------------------------------------------------------
+    // Adversarial tests for malformed inputs
 
     proptest! {
         /// DataContainer with length field that doesn't match actual size
@@ -1383,13 +1326,7 @@ mod tests {
                 prop_assert_eq!(event.params[2], 0);
             }
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Container with invalid type code tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Container with invalid type code (0, 5+)
         #[test]
         fn fuzz_container_invalid_type(
@@ -1462,13 +1399,7 @@ mod tests {
             let result = EventContainer::from_bytes(&buf);
             prop_assert!(result.is_err());
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Response container unaligned parameters test
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// ResponseContainer with unaligned parameter bytes (not multiple of 4)
         #[test]
         fn fuzz_response_container_unaligned(
@@ -1491,13 +1422,7 @@ mod tests {
             let result = ResponseContainer::from_bytes(&buf);
             prop_assert!(result.is_err());
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Completely random garbage tests - should never panic
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Random bytes as container_type() input - should never panic
         #[test]
         fn fuzz_container_type_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
@@ -1521,16 +1446,7 @@ mod tests {
         fn fuzz_event_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
             let _ = EventContainer::from_bytes(&bytes);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Length field edge cases / overflow potential
-    // -------------------------------------------------------------------------
-
-    // Note: fuzz_data_container_tiny_length removed - covered by
-    // fuzz_data_container_length_underflow_bug which documents the panic bug
-
-    proptest! {
         /// Container with u32::MAX length
         #[test]
         fn fuzz_container_max_length(transaction_id: u32) {
@@ -1545,10 +1461,6 @@ mod tests {
             prop_assert!(result.is_err());
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Boundary tests for header size
-    // -------------------------------------------------------------------------
 
     #[test]
     fn container_type_exactly_11_bytes() {

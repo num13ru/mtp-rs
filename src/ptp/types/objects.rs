@@ -80,7 +80,7 @@ impl ObjectInfo {
         let protection_status = ProtectionStatus::from_code(unpack_u16(&buf[offset..])?);
         offset += 2;
 
-        // 4. ObjectCompressedSize (u32) - stored as u64
+        // 4. ObjectCompressedSize (u32) - stored as u64, but protocol uses u32
         let size = unpack_u32(&buf[offset..])? as u64;
         offset += 4;
 
@@ -269,9 +269,7 @@ mod tests {
     use super::*;
     use crate::ptp::pack::{pack_datetime, pack_string, pack_u16, pack_u32, DateTime};
 
-    // =========================================================================
-    // ObjectInfo Tests
-    // =========================================================================
+    // --- ObjectInfo Tests ---
 
     fn build_file_object_info_bytes() -> Vec<u8> {
         let mut buf = Vec::new();
@@ -558,15 +556,9 @@ mod tests {
         assert!(info.modified.is_none());
     }
 
-    // =========================================================================
-    // Property-based tests (proptest)
-    // =========================================================================
+    // --- Property-based tests ---
 
     use proptest::prelude::*;
-
-    // -------------------------------------------------------------------------
-    // ObjectInfo with truncated/corrupted data
-    // -------------------------------------------------------------------------
 
     proptest! {
         /// ObjectInfo with truncated data should fail gracefully
@@ -582,10 +574,6 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Boundary tests for minimum valid buffer sizes
-    // -------------------------------------------------------------------------
-
     #[test]
     fn object_info_minimum_valid() {
         // ObjectInfo has many fixed fields before strings
@@ -596,10 +584,6 @@ mod tests {
         assert!(ObjectInfo::from_bytes(&[0; 51]).is_err());
         assert!(ObjectInfo::from_bytes(&[0; 52]).is_err()); // Still need string data
     }
-
-    // -------------------------------------------------------------------------
-    // Test that certain operations handle arithmetic edge cases
-    // -------------------------------------------------------------------------
 
     #[test]
     fn object_info_size_u32_max() {

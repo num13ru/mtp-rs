@@ -205,9 +205,7 @@ impl AssociationType {
 mod tests {
     use super::*;
 
-    // =========================================================================
-    // StorageType Tests
-    // =========================================================================
+    // --- StorageType Tests ---
 
     #[test]
     fn storage_type_from_code() {
@@ -248,9 +246,7 @@ mod tests {
         assert_eq!(StorageType::default(), StorageType::Undefined);
     }
 
-    // =========================================================================
-    // FilesystemType Tests
-    // =========================================================================
+    // --- FilesystemType Tests ---
 
     #[test]
     fn filesystem_type_from_code() {
@@ -291,9 +287,7 @@ mod tests {
         assert_eq!(FilesystemType::default(), FilesystemType::Undefined);
     }
 
-    // =========================================================================
-    // AccessCapability Tests
-    // =========================================================================
+    // --- AccessCapability Tests ---
 
     #[test]
     fn access_capability_from_code() {
@@ -337,9 +331,7 @@ mod tests {
         assert_eq!(AccessCapability::default(), AccessCapability::ReadWrite);
     }
 
-    // =========================================================================
-    // ProtectionStatus Tests
-    // =========================================================================
+    // --- ProtectionStatus Tests ---
 
     #[test]
     fn protection_status_from_code() {
@@ -371,9 +363,7 @@ mod tests {
         assert_eq!(ProtectionStatus::default(), ProtectionStatus::None);
     }
 
-    // =========================================================================
-    // AssociationType Tests
-    // =========================================================================
+    // --- AssociationType Tests ---
 
     #[test]
     fn association_type_from_code() {
@@ -405,15 +395,9 @@ mod tests {
         assert_eq!(AssociationType::default(), AssociationType::None);
     }
 
-    // =========================================================================
-    // Property-based tests (proptest)
-    // =========================================================================
+    // --- Property-based tests ---
 
     use proptest::prelude::*;
-
-    // -------------------------------------------------------------------------
-    // StorageType property tests
-    // -------------------------------------------------------------------------
 
     proptest! {
         /// Known StorageType variants roundtrip correctly
@@ -430,13 +414,7 @@ mod tests {
             prop_assert_eq!(storage_type, StorageType::Unknown(code));
             prop_assert_eq!(storage_type.to_code(), code);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // FilesystemType property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Known FilesystemType variants roundtrip correctly
         #[test]
         fn prop_filesystem_type_known_roundtrip(code in 0u16..=3u16) {
@@ -451,13 +429,7 @@ mod tests {
             prop_assert_eq!(fs_type, FilesystemType::Unknown(code));
             prop_assert_eq!(fs_type.to_code(), code);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // AccessCapability property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Known AccessCapability variants roundtrip correctly
         #[test]
         fn prop_access_capability_known_roundtrip(code in 0u16..=2u16) {
@@ -472,13 +444,7 @@ mod tests {
             prop_assert_eq!(cap, AccessCapability::Unknown(code));
             prop_assert_eq!(cap.to_code(), code);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // ProtectionStatus property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Known ProtectionStatus variants roundtrip correctly
         #[test]
         fn prop_protection_status_known_roundtrip(code in 0u16..=1u16) {
@@ -493,13 +459,7 @@ mod tests {
             prop_assert_eq!(status, ProtectionStatus::Unknown(code));
             prop_assert_eq!(status.to_code(), code);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // AssociationType property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Known AssociationType variants roundtrip correctly
         #[test]
         fn prop_association_type_known_roundtrip(code in 0u16..=1u16) {

@@ -320,7 +320,6 @@ pub struct MtpDeviceBuilder {
 }
 
 impl MtpDeviceBuilder {
-    /// Create a new builder with default settings.
     pub fn new() -> Self {
         Self {
             timeout: NusbTransport::DEFAULT_TIMEOUT,

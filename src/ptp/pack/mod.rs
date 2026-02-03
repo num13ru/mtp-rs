@@ -339,9 +339,7 @@ pub fn unpack_u32_array(buf: &[u8]) -> Result<(Vec<u32>, usize), crate::Error> {
 mod tests {
     use super::*;
 
-    // =========================================================================
-    // Primitive packing tests
-    // =========================================================================
+    // --- Primitive packing tests ---
 
     #[test]
     fn pack_u8_test() {
@@ -374,9 +372,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Primitive unpacking tests
-    // =========================================================================
+    // --- Primitive unpacking tests ---
 
     #[test]
     fn unpack_u8_test() {
@@ -410,9 +406,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Primitive unpacking error tests
-    // =========================================================================
+    // --- Primitive unpacking error tests ---
 
     #[test]
     fn unpack_u8_insufficient_bytes() {
@@ -439,9 +433,7 @@ mod tests {
         assert!(unpack_u64(&[0x00; 7]).is_err());
     }
 
-    // =========================================================================
-    // Primitive round-trip tests
-    // =========================================================================
+    // --- Primitive round-trip tests ---
 
     #[test]
     fn roundtrip_u8() {
@@ -471,9 +463,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // Signed integer packing tests
-    // =========================================================================
+    // --- Signed integer packing tests ---
 
     #[test]
     fn pack_i8_test() {
@@ -516,9 +506,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Signed integer unpacking tests
-    // =========================================================================
+    // --- Signed integer unpacking tests ---
 
     #[test]
     fn unpack_i8_test() {
@@ -560,9 +548,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Signed integer unpacking error tests
-    // =========================================================================
+    // --- Signed integer unpacking error tests ---
 
     #[test]
     fn unpack_i8_insufficient_bytes() {
@@ -589,9 +575,7 @@ mod tests {
         assert!(unpack_i64(&[0x00; 7]).is_err());
     }
 
-    // =========================================================================
-    // Signed integer round-trip tests
-    // =========================================================================
+    // --- Signed integer round-trip tests ---
 
     #[test]
     fn roundtrip_i8() {
@@ -629,9 +613,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // String packing tests
-    // =========================================================================
+    // --- String packing tests ---
 
     #[test]
     fn pack_string_empty() {
@@ -688,9 +670,7 @@ mod tests {
         assert_eq!(packed[6], 0x00); // Null high
     }
 
-    // =========================================================================
-    // String unpacking tests
-    // =========================================================================
+    // --- String unpacking tests ---
 
     #[test]
     fn unpack_string_empty() {
@@ -747,9 +727,7 @@ mod tests {
         assert!(unpack_string(&buf).is_err());
     }
 
-    // =========================================================================
-    // String round-trip tests
-    // =========================================================================
+    // --- String round-trip tests ---
 
     #[test]
     fn roundtrip_string_empty() {
@@ -780,9 +758,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // Array packing tests
-    // =========================================================================
+    // --- Array packing tests ---
 
     #[test]
     fn pack_u16_array_empty() {
@@ -831,9 +807,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Array unpacking tests
-    // =========================================================================
+    // --- Array unpacking tests ---
 
     #[test]
     fn unpack_u16_array_empty() {
@@ -899,9 +873,7 @@ mod tests {
         assert_eq!(consumed, 8);
     }
 
-    // =========================================================================
-    // Array unpacking error tests
-    // =========================================================================
+    // --- Array unpacking error tests ---
 
     #[test]
     fn unpack_u16_array_insufficient_bytes_for_count() {
@@ -935,9 +907,7 @@ mod tests {
         assert!(unpack_u32_array(&buf).is_err());
     }
 
-    // =========================================================================
-    // Array round-trip tests
-    // =========================================================================
+    // --- Array round-trip tests ---
 
     #[test]
     fn roundtrip_u16_array() {
@@ -970,15 +940,9 @@ mod tests {
         assert_eq!(consumed, buf.len() - 3); // Should not include extra data
     }
 
-    // =========================================================================
-    // Property-based tests (proptest)
-    // =========================================================================
+    // --- Property-based tests ---
 
     use proptest::prelude::*;
-
-    // -------------------------------------------------------------------------
-    // Unsigned integer roundtrip property tests
-    // -------------------------------------------------------------------------
 
     proptest! {
         #[test]
@@ -1008,13 +972,7 @@ mod tests {
             let unpacked = unpack_u64(&packed).unwrap();
             prop_assert_eq!(unpacked, val);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Signed integer roundtrip property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         #[test]
         fn prop_roundtrip_i8(val: i8) {
             let packed = pack_i8(val);
@@ -1042,13 +1000,7 @@ mod tests {
             let unpacked = unpack_i64(&packed).unwrap();
             prop_assert_eq!(unpacked, val);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Packed length invariant tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         #[test]
         fn prop_pack_u8_length(val: u8) {
             prop_assert_eq!(pack_u8(val).len(), 1);
@@ -1089,10 +1041,6 @@ mod tests {
             prop_assert_eq!(pack_i64(val).len(), 8);
         }
     }
-
-    // -------------------------------------------------------------------------
-    // String roundtrip property tests
-    // -------------------------------------------------------------------------
 
     /// Strategy for generating valid UTF-16 compatible strings.
     /// We avoid lone surrogates which would cause UTF-16 encoding issues.
@@ -1145,13 +1093,7 @@ mod tests {
                 prop_assert_eq!(packed.len(), expected_len);
             }
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Array roundtrip property tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         #[test]
         fn prop_roundtrip_u16_array(arr in prop::collection::vec(any::<u16>(), 0..100)) {
             let packed = pack_u16_array(&arr);
@@ -1183,13 +1125,7 @@ mod tests {
             let expected_len = 4 + arr.len() * 4;
             prop_assert_eq!(packed.len(), expected_len);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Extra bytes handling tests
-    // -------------------------------------------------------------------------
-
-    proptest! {
         #[test]
         fn prop_unpack_u8_ignores_extra_bytes(val: u8, extra in prop::collection::vec(any::<u8>(), 0..10)) {
             let mut buf = pack_u8(val).to_vec();
@@ -1223,14 +1159,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // ADVERSARIAL PROPERTY-BASED TESTS
-    // Goal: Find bugs by testing malformed/invalid/boundary inputs
-    // =========================================================================
-
-    // -------------------------------------------------------------------------
-    // Truncated buffer tests - should fail gracefully, never panic
-    // -------------------------------------------------------------------------
+    // Adversarial tests for malformed inputs
 
     proptest! {
         /// Truncated u16 buffer (1 byte when 2 needed) should return Err
@@ -1274,13 +1203,6 @@ mod tests {
             let result = unpack_i64(&bytes);
             prop_assert!(result.is_err());
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // String fuzzing - garbage bytes and invalid length fields
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Random garbage bytes should either succeed or fail gracefully - NEVER panic
         #[test]
         fn fuzz_unpack_string_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
@@ -1309,13 +1231,7 @@ mod tests {
             let result = unpack_string(&[]);
             prop_assert!(result.is_err());
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Array fuzzing - invalid counts claiming more elements than exist
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// u32 array with claimed count larger than actual elements
         #[test]
         fn fuzz_unpack_u32_array_invalid_count(
@@ -1361,13 +1277,7 @@ mod tests {
         fn fuzz_unpack_u16_array_garbage(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
             let _ = unpack_u16_array(&bytes);
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Test potential integer overflow in array length calculations
-    // -------------------------------------------------------------------------
-
-    proptest! {
         /// Large array count that could overflow length calculations
         #[test]
         fn fuzz_u32_array_large_count(count in (u32::MAX - 100)..=u32::MAX) {

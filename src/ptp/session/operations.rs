@@ -12,12 +12,6 @@ use crate::Error;
 use super::PtpSession;
 
 impl PtpSession {
-    // =========================================================================
-    // High-level operations
-    // =========================================================================
-
-    /// Get device info.
-    ///
     /// Returns information about the device including its capabilities,
     /// manufacturer, model, and supported operations.
     pub async fn get_device_info(&self) -> Result<DeviceInfo, Error> {
@@ -28,8 +22,6 @@ impl PtpSession {
         DeviceInfo::from_bytes(&data)
     }
 
-    /// Get storage IDs.
-    ///
     /// Returns a list of storage IDs available on the device.
     pub async fn get_storage_ids(&self) -> Result<Vec<StorageId>, Error> {
         let (response, data) = self
@@ -40,8 +32,6 @@ impl PtpSession {
         Ok(ids.into_iter().map(StorageId).collect())
     }
 
-    /// Get storage info.
-    ///
     /// Returns information about a specific storage, including capacity,
     /// free space, and filesystem type.
     pub async fn get_storage_info(&self, storage_id: StorageId) -> Result<StorageInfo, Error> {
@@ -82,8 +72,6 @@ impl PtpSession {
         Ok(handles.into_iter().map(ObjectHandle).collect())
     }
 
-    /// Get object info.
-    ///
     /// Returns metadata about an object, including filename, size, and timestamps.
     pub async fn get_object_info(&self, handle: ObjectHandle) -> Result<ObjectInfo, Error> {
         let (response, data) = self
@@ -93,8 +81,6 @@ impl PtpSession {
         ObjectInfo::from_bytes(&data)
     }
 
-    /// Get object (download).
-    ///
     /// Downloads the complete data of an object.
     pub async fn get_object(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
         let (response, data) = self
@@ -131,8 +117,6 @@ impl PtpSession {
         Ok(data)
     }
 
-    /// Get thumbnail.
-    ///
     /// Downloads the thumbnail image for an object.
     pub async fn get_thumb(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
         let (response, data) = self
@@ -194,8 +178,6 @@ impl PtpSession {
         Ok(())
     }
 
-    /// Delete object.
-    ///
     /// Deletes an object from the device.
     pub async fn delete_object(&self, handle: ObjectHandle) -> Result<(), Error> {
         // Param2 is format code, 0 means any format
@@ -206,8 +188,6 @@ impl PtpSession {
         Ok(())
     }
 
-    /// Move object.
-    ///
     /// Moves an object to a different location.
     pub async fn move_object(
         &self,
@@ -225,12 +205,7 @@ impl PtpSession {
         Ok(())
     }
 
-    /// Copy object.
-    ///
     /// Copies an object to a new location.
-    ///
-    /// # Returns
-    ///
     /// Returns the handle of the newly created copy.
     pub async fn copy_object(
         &self,
@@ -326,9 +301,7 @@ impl PtpSession {
             .await
     }
 
-    // =========================================================================
-    // Capture operations
-    // =========================================================================
+    // --- Capture operations ---
 
     /// Initiate a capture operation.
     ///
@@ -385,9 +358,7 @@ impl PtpSession {
         Ok(())
     }
 
-    // =========================================================================
-    // Event handling
-    // =========================================================================
+    // --- Event handling ---
 
     /// Poll for a single event from the interrupt endpoint.
     ///
@@ -522,9 +493,7 @@ mod tests {
         assert_eq!(new_handle, ObjectHandle(100));
     }
 
-    // =========================================================================
-    // Event polling tests
-    // =========================================================================
+    // --- Event polling tests ---
 
     #[tokio::test]
     async fn test_poll_event_object_added() {
@@ -587,9 +556,7 @@ mod tests {
         assert_eq!(event3.params[0], 1);
     }
 
-    // =========================================================================
-    // Object property and rename tests
-    // =========================================================================
+    // --- Object property and rename tests ---
 
     #[tokio::test]
     async fn test_get_object_prop_value() {
@@ -696,9 +663,7 @@ mod tests {
         ));
     }
 
-    // =========================================================================
-    // Capture tests
-    // =========================================================================
+    // --- Capture tests ---
 
     #[tokio::test]
     async fn test_initiate_capture() {

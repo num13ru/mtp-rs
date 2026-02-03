@@ -27,7 +27,6 @@ impl Storage {
         Self { inner, id, info }
     }
 
-    /// Storage identifier.
     pub fn id(&self) -> StorageId {
         self.id
     }
@@ -234,7 +233,6 @@ impl Storage {
             .await
     }
 
-    /// Download thumbnail.
     pub async fn download_thumbnail(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
         self.inner.session.get_thumb(handle).await
     }
@@ -374,7 +372,6 @@ impl Storage {
     // Folder and object management
     // =========================================================================
 
-    /// Create a folder.
     pub async fn create_folder(
         &self,
         parent: Option<ObjectHandle>,
@@ -393,7 +390,6 @@ impl Storage {
         Ok(handle)
     }
 
-    /// Delete an object.
     pub async fn delete(&self, handle: ObjectHandle) -> Result<(), Error> {
         self.inner.session.delete_object(handle).await
     }
@@ -412,7 +408,6 @@ impl Storage {
             .await
     }
 
-    /// Copy an object.
     pub async fn copy_object(
         &self,
         handle: ObjectHandle,
