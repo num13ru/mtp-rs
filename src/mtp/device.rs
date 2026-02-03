@@ -9,7 +9,7 @@ use std::time::Duration;
 
 /// Internal shared state for MtpDevice.
 pub(crate) struct MtpDeviceInner {
-    pub(crate) session: PtpSession,
+    pub(crate) session: Arc<PtpSession>,
     pub(crate) device_info: DeviceInfo,
 }
 
@@ -182,7 +182,9 @@ impl MtpDevice {
     pub async fn close(self) -> Result<(), Error> {
         // Try to close gracefully, but Arc might have multiple references
         if let Ok(inner) = Arc::try_unwrap(self.inner) {
-            inner.session.close().await?;
+            if let Ok(session) = Arc::try_unwrap(inner.session) {
+                session.close().await?;
+            }
         }
         Ok(())
     }
@@ -256,7 +258,7 @@ impl MtpDeviceBuilder {
         let transport: Arc<dyn Transport> = Arc::new(transport);
 
         // Open session (use session ID 1)
-        let session = PtpSession::open(transport.clone(), 1).await?;
+        let session = Arc::new(PtpSession::open(transport.clone(), 1).await?);
 
         // Get device info
         let device_info = session.get_device_info().await?;

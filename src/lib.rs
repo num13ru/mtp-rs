@@ -47,8 +47,8 @@ pub use error::Error;
 
 // Re-export core types for convenience
 pub use ptp::{
-    DateTime, EventCode, ObjectFormatCode, ObjectHandle, OperationCode, ResponseCode, SessionId,
-    StorageId, TransactionId,
+    receive_stream_to_stream, DateTime, EventCode, ObjectFormatCode, ObjectHandle, OperationCode,
+    ReceiveStream, ResponseCode, SessionId, StorageId, TransactionId,
 };
 
 // Re-export high-level MTP types

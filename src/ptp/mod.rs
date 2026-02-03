@@ -64,7 +64,7 @@ pub use pack::{
     unpack_i64, unpack_i8, unpack_string, unpack_u16, unpack_u16_array, unpack_u32,
     unpack_u32_array, unpack_u64, unpack_u8, DateTime,
 };
-pub use session::PtpSession;
+pub use session::{receive_stream_to_stream, PtpSession, ReceiveStream};
 pub use types::{
     AccessCapability, AssociationType, DeviceInfo, DevicePropDesc, FilesystemType, ObjectInfo,
     PropertyFormType, PropertyRange, PropertyValue, ProtectionStatus, StorageInfo, StorageType,
