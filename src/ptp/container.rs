@@ -1423,30 +1423,6 @@ mod tests {
             prop_assert!(result.is_err());
         }
 
-        /// Random bytes as container_type() input - should never panic
-        #[test]
-        fn fuzz_container_type_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            let _ = container_type(&bytes);
-        }
-
-        /// Random bytes as DataContainer - should never panic
-        #[test]
-        fn fuzz_data_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            let _ = DataContainer::from_bytes(&bytes);
-        }
-
-        /// Random bytes as ResponseContainer - should never panic
-        #[test]
-        fn fuzz_response_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            let _ = ResponseContainer::from_bytes(&bytes);
-        }
-
-        /// Random bytes as EventContainer - should never panic
-        #[test]
-        fn fuzz_event_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            let _ = EventContainer::from_bytes(&bytes);
-        }
-
         /// Container with u32::MAX length
         #[test]
         fn fuzz_container_max_length(transaction_id: u32) {
@@ -1498,4 +1474,10 @@ mod tests {
         let result = ResponseContainer::from_bytes(&buf).unwrap();
         assert!(result.params.is_empty());
     }
+
+    // Fuzz tests using shared macros - verify parsers don't panic on arbitrary input
+    crate::fuzz_bytes_fn!(fuzz_container_type, container_type, 100);
+    crate::fuzz_bytes!(fuzz_data_container, DataContainer, 100);
+    crate::fuzz_bytes!(fuzz_response_container, ResponseContainer, 100);
+    crate::fuzz_bytes!(fuzz_event_container, EventContainer, 100);
 }

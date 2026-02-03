@@ -476,36 +476,9 @@ mod tests {
         assert!(!info.supports_rename());
     }
 
-    // --- Property-based tests ---
-
-    use proptest::prelude::*;
-
-    proptest! {
-        /// DeviceInfo with truncated data should fail gracefully
-        #[test]
-        fn fuzz_device_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
-            // Random short buffers should fail gracefully, never panic
-            let _ = DeviceInfo::from_bytes(&bytes);
-        }
-
-        /// DeviceInfo with random garbage should not panic
-        #[test]
-        fn fuzz_device_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
-            let _ = DeviceInfo::from_bytes(&bytes);
-        }
-
-        /// StorageInfo with truncated data should fail gracefully
-        #[test]
-        fn fuzz_storage_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
-            let _ = StorageInfo::from_bytes(&bytes);
-        }
-
-        /// StorageInfo with random garbage should not panic
-        #[test]
-        fn fuzz_storage_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            let _ = StorageInfo::from_bytes(&bytes);
-        }
-    }
+    // Fuzz tests using shared macros - verify parsers don't panic on arbitrary input
+    crate::fuzz_bytes!(fuzz_device_info, DeviceInfo, 200);
+    crate::fuzz_bytes!(fuzz_storage_info, StorageInfo, 100);
 
     #[test]
     fn device_info_minimum_valid() {

@@ -581,18 +581,6 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Datetime unpacking with corrupt data
-    // -------------------------------------------------------------------------
-
-    proptest! {
-        /// Random bytes as datetime should not panic
-        #[test]
-        fn fuzz_unpack_datetime_garbage(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
-            let _ = unpack_datetime(&bytes);
-        }
-    }
-
-    // -------------------------------------------------------------------------
     // Boundary value tests for DateTime
     // -------------------------------------------------------------------------
 
@@ -667,4 +655,7 @@ mod tests {
         // pack_datetime should also fail
         assert!(pack_datetime(&dt).is_err(), "Year 10000 should be rejected by pack_datetime()");
     }
+
+    // Fuzz tests using shared macros
+    crate::fuzz_bytes_fn!(fuzz_unpack_datetime, unpack_datetime, 50);
 }

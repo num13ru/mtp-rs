@@ -47,6 +47,8 @@ mod container;
 mod device;
 mod pack;
 mod session;
+#[cfg(test)]
+mod test_utils;
 mod types;
 
 pub use codes::{

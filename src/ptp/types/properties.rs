@@ -1111,23 +1111,8 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // DevicePropDesc with truncated/corrupted data
-    // -------------------------------------------------------------------------
-
-    proptest! {
-        /// DevicePropDesc with truncated data should fail gracefully
-        #[test]
-        fn fuzz_device_prop_desc_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
-            let _ = DevicePropDesc::from_bytes(&bytes);
-        }
-
-        /// DevicePropDesc with random garbage should not panic
-        #[test]
-        fn fuzz_device_prop_desc_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
-            let _ = DevicePropDesc::from_bytes(&bytes);
-        }
-    }
+    // Fuzz tests using shared macros
+    crate::fuzz_bytes!(fuzz_device_prop_desc, DevicePropDesc, 200);
 
     // -------------------------------------------------------------------------
     // PropertyRange with truncated data

@@ -556,23 +556,8 @@ mod tests {
         assert!(info.modified.is_none());
     }
 
-    // --- Property-based tests ---
-
-    use proptest::prelude::*;
-
-    proptest! {
-        /// ObjectInfo with truncated data should fail gracefully
-        #[test]
-        fn fuzz_object_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            let _ = ObjectInfo::from_bytes(&bytes);
-        }
-
-        /// ObjectInfo with random garbage should not panic
-        #[test]
-        fn fuzz_object_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
-            let _ = ObjectInfo::from_bytes(&bytes);
-        }
-    }
+    // Fuzz tests using shared macros
+    crate::fuzz_bytes!(fuzz_object_info, ObjectInfo, 200);
 
     #[test]
     fn object_info_minimum_valid() {

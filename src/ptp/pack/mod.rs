@@ -1203,12 +1203,6 @@ mod tests {
             let result = unpack_i64(&bytes);
             prop_assert!(result.is_err());
         }
-        /// Random garbage bytes should either succeed or fail gracefully - NEVER panic
-        #[test]
-        fn fuzz_unpack_string_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
-            // This should never panic, regardless of input
-            let _ = unpack_string(&bytes);
-        }
 
         /// String with claimed length larger than actual data should fail gracefully
         #[test]
@@ -1266,18 +1260,6 @@ mod tests {
             }
         }
 
-        /// Random garbage as array should not panic
-        #[test]
-        fn fuzz_unpack_u32_array_garbage(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
-            let _ = unpack_u32_array(&bytes);
-        }
-
-        /// Random garbage as u16 array should not panic
-        #[test]
-        fn fuzz_unpack_u16_array_garbage(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
-            let _ = unpack_u16_array(&bytes);
-        }
-
         /// Large array count that could overflow length calculations
         #[test]
         fn fuzz_u32_array_large_count(count in (u32::MAX - 100)..=u32::MAX) {
@@ -1311,4 +1293,9 @@ mod tests {
             prop_assert!(result.is_err());
         }
     }
+
+    // Fuzz tests using shared macros - verify parsers don't panic on arbitrary input
+    crate::fuzz_bytes_fn!(fuzz_unpack_string, unpack_string, 100);
+    crate::fuzz_bytes_fn!(fuzz_unpack_u16_array, unpack_u16_array, 50);
+    crate::fuzz_bytes_fn!(fuzz_unpack_u32_array, unpack_u32_array, 50);
 }
