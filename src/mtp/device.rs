@@ -155,12 +155,28 @@ impl MtpDevice {
 
     /// Receive the next event from the device.
     ///
-    /// This method waits until an event is received from the USB interrupt endpoint.
-    /// Events include object added/removed, storage changes, etc.
+    /// This method waits for an event on the USB interrupt endpoint, returning when
+    /// an event arrives or the event timeout expires (default: 200ms). The short
+    /// default timeout allows responsive event loops without blocking other operations.
+    ///
+    /// Configure the timeout via [`MtpDeviceBuilder::event_timeout()`].
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(event)` - An event was received from the device
+    /// - `Err(Error::Timeout)` - No event within the timeout period (normal, keep polling)
+    /// - `Err(Error::Disconnected)` - Device was disconnected
+    /// - `Err(_)` - Other communication error
     ///
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Configure event timeout if needed (default is 200ms)
+    /// let device = MtpDevice::builder()
+    ///     .event_timeout(Duration::from_millis(100))
+    ///     .open_first()
+    ///     .await?;
+    ///
     /// loop {
     ///     match device.next_event().await {
     ///         Ok(event) => {
@@ -175,7 +191,7 @@ impl MtpDevice {
     ///             }
     ///         }
     ///         Err(Error::Disconnected) => break,
-    ///         Err(Error::Timeout) => continue,  // No event, keep waiting
+    ///         Err(Error::Timeout) => continue,  // No event, keep polling
     ///         Err(e) => {
     ///             eprintln!("Error: {}", e);
     ///             break;
@@ -300,6 +316,7 @@ impl MtpDeviceInfo {
 /// Builder for MtpDevice configuration.
 pub struct MtpDeviceBuilder {
     timeout: Duration,
+    event_timeout: Duration,
 }
 
 impl MtpDeviceBuilder {
@@ -307,12 +324,26 @@ impl MtpDeviceBuilder {
     pub fn new() -> Self {
         Self {
             timeout: NusbTransport::DEFAULT_TIMEOUT,
+            event_timeout: NusbTransport::DEFAULT_EVENT_TIMEOUT,
         }
     }
 
-    /// Set operation timeout (default: 30 seconds).
+    /// Set bulk transfer timeout (default: 30 seconds).
+    ///
+    /// This timeout applies to file transfers and command responses.
+    /// Use longer timeouts for large file operations.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set event polling timeout (default: 200ms).
+    ///
+    /// This timeout controls how long `next_event()` waits for device events.
+    /// Shorter timeouts (100-500ms) enable responsive event loops without
+    /// blocking other operations. Longer timeouts reduce polling overhead.
+    pub fn event_timeout(mut self, timeout: Duration) -> Self {
+        self.event_timeout = timeout;
         self
     }
 
@@ -354,7 +385,8 @@ impl MtpDeviceBuilder {
     /// Internal: open an already-discovered device.
     async fn open_device(self, device: nusb::Device) -> Result<MtpDevice, Error> {
         // Open transport
-        let transport = NusbTransport::open_with_timeout(device, self.timeout).await?;
+        let transport =
+            NusbTransport::open_with_timeouts(device, self.timeout, self.event_timeout).await?;
         let transport: Arc<dyn Transport> = Arc::new(transport);
 
         // Open session (use session ID 1)
@@ -395,6 +427,7 @@ mod tests {
     fn test_builder_default() {
         let builder = MtpDeviceBuilder::new();
         assert_eq!(builder.timeout, NusbTransport::DEFAULT_TIMEOUT);
+        assert_eq!(builder.event_timeout, NusbTransport::DEFAULT_EVENT_TIMEOUT);
     }
 
     #[test]
@@ -402,6 +435,26 @@ mod tests {
         let custom_timeout = Duration::from_secs(60);
         let builder = MtpDeviceBuilder::new().timeout(custom_timeout);
         assert_eq!(builder.timeout, custom_timeout);
+        assert_eq!(builder.event_timeout, NusbTransport::DEFAULT_EVENT_TIMEOUT);
+    }
+
+    #[test]
+    fn test_builder_event_timeout() {
+        let custom_event_timeout = Duration::from_millis(500);
+        let builder = MtpDeviceBuilder::new().event_timeout(custom_event_timeout);
+        assert_eq!(builder.timeout, NusbTransport::DEFAULT_TIMEOUT);
+        assert_eq!(builder.event_timeout, custom_event_timeout);
+    }
+
+    #[test]
+    fn test_builder_both_timeouts() {
+        let custom_timeout = Duration::from_secs(45);
+        let custom_event_timeout = Duration::from_millis(100);
+        let builder = MtpDeviceBuilder::new()
+            .timeout(custom_timeout)
+            .event_timeout(custom_event_timeout);
+        assert_eq!(builder.timeout, custom_timeout);
+        assert_eq!(builder.event_timeout, custom_event_timeout);
     }
 
     #[test]

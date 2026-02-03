@@ -1179,7 +1179,7 @@ impl ReceiveStream {
         }
     }
 
-    /// Collect all remaining data into a Vec<u8>.
+    /// Collect all remaining data into a `Vec<u8>`.
     ///
     /// This consumes the stream and buffers all data in memory.
     pub async fn collect(mut self) -> Result<Vec<u8>, Error> {
