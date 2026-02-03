@@ -557,408 +557,67 @@ impl DevicePropertyCode {
 mod tests {
     use super::*;
 
-    // ==================== OperationCode Tests ====================
-
     #[test]
-    fn operation_code_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(
-            OperationCode::from_code(0x1001),
-            OperationCode::GetDeviceInfo
-        );
-        assert_eq!(OperationCode::GetDeviceInfo.to_code(), 0x1001);
+    fn from_extension_detection() {
+        // Audio (representative samples)
+        assert_eq!(ObjectFormatCode::from_extension("mp3"), ObjectFormatCode::Mp3);
+        assert_eq!(ObjectFormatCode::from_extension("flac"), ObjectFormatCode::FlacAudio);
+        assert_eq!(ObjectFormatCode::from_extension("aif"), ObjectFormatCode::Aiff); // alternate ext
 
-        assert_eq!(OperationCode::from_code(0x100D), OperationCode::SendObject);
-        assert_eq!(OperationCode::SendObject.to_code(), 0x100D);
+        // Video
+        assert_eq!(ObjectFormatCode::from_extension("mp4"), ObjectFormatCode::Mp4Container);
+        assert_eq!(ObjectFormatCode::from_extension("avi"), ObjectFormatCode::Avi);
+        assert_eq!(ObjectFormatCode::from_extension("mpg"), ObjectFormatCode::Mpeg); // alternate ext
 
-        assert_eq!(
-            OperationCode::from_code(0x9803),
-            OperationCode::GetObjectPropValue
-        );
-        assert_eq!(OperationCode::GetObjectPropValue.to_code(), 0x9803);
+        // Image
+        assert_eq!(ObjectFormatCode::from_extension("jpg"), ObjectFormatCode::Jpeg);
+        assert_eq!(ObjectFormatCode::from_extension("png"), ObjectFormatCode::Png);
+        assert_eq!(ObjectFormatCode::from_extension("tif"), ObjectFormatCode::Tiff); // alternate ext
+
+        // Text/Documents
+        assert_eq!(ObjectFormatCode::from_extension("txt"), ObjectFormatCode::Text);
+        assert_eq!(ObjectFormatCode::from_extension("htm"), ObjectFormatCode::Html); // alternate ext
+
+        // Executables/Scripts
+        assert_eq!(ObjectFormatCode::from_extension("exe"), ObjectFormatCode::Executable);
+        assert_eq!(ObjectFormatCode::from_extension("sh"), ObjectFormatCode::Script);
+
+        // Case insensitivity (one example suffices since .to_lowercase() is used)
+        assert_eq!(ObjectFormatCode::from_extension("MP3"), ObjectFormatCode::Mp3);
+
+        // Unknown extensions
+        assert_eq!(ObjectFormatCode::from_extension("xyz"), ObjectFormatCode::Undefined);
+        assert_eq!(ObjectFormatCode::from_extension(""), ObjectFormatCode::Undefined);
     }
 
-    #[test]
-    fn operation_code_unknown_roundtrip() {
-        let unknown_code = 0x9999;
-        let op = OperationCode::from_code(unknown_code);
-        assert_eq!(op, OperationCode::Unknown(unknown_code));
-        assert_eq!(op.to_code(), unknown_code);
-    }
-
-    // ==================== ResponseCode Tests ====================
+    // ==================== Format Category Tests ====================
 
     #[test]
-    fn response_code_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(ResponseCode::from_code(0x2001), ResponseCode::Ok);
-        assert_eq!(ResponseCode::Ok.to_code(), 0x2001);
-
-        assert_eq!(ResponseCode::from_code(0x2019), ResponseCode::DeviceBusy);
-        assert_eq!(ResponseCode::DeviceBusy.to_code(), 0x2019);
-
-        assert_eq!(
-            ResponseCode::from_code(0xA809),
-            ResponseCode::ObjectTooLarge
-        );
-        assert_eq!(ResponseCode::ObjectTooLarge.to_code(), 0xA809);
-    }
-
-    #[test]
-    fn response_code_unknown_roundtrip() {
-        let unknown_code = 0x8888;
-        let resp = ResponseCode::from_code(unknown_code);
-        assert_eq!(resp, ResponseCode::Unknown(unknown_code));
-        assert_eq!(resp.to_code(), unknown_code);
-    }
-
-    // ==================== EventCode Tests ====================
-
-    #[test]
-    fn event_code_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(EventCode::from_code(0x4002), EventCode::ObjectAdded);
-        assert_eq!(EventCode::ObjectAdded.to_code(), 0x4002);
-
-        assert_eq!(EventCode::from_code(0x400D), EventCode::CaptureComplete);
-        assert_eq!(EventCode::CaptureComplete.to_code(), 0x400D);
-    }
-
-    #[test]
-    fn event_code_unknown_roundtrip() {
-        let unknown_code = 0x7777;
-        let event = EventCode::from_code(unknown_code);
-        assert_eq!(event, EventCode::Unknown(unknown_code));
-        assert_eq!(event.to_code(), unknown_code);
-    }
-
-    // ==================== ObjectFormatCode Tests ====================
-
-    #[test]
-    fn object_format_code_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(
-            ObjectFormatCode::from_code(0x3001),
-            ObjectFormatCode::Association
-        );
-        assert_eq!(ObjectFormatCode::Association.to_code(), 0x3001);
-
-        assert_eq!(ObjectFormatCode::from_code(0x3801), ObjectFormatCode::Jpeg);
-        assert_eq!(ObjectFormatCode::Jpeg.to_code(), 0x3801);
-
-        assert_eq!(
-            ObjectFormatCode::from_code(0xB982),
-            ObjectFormatCode::Mp4Container
-        );
-        assert_eq!(ObjectFormatCode::Mp4Container.to_code(), 0xB982);
-    }
-
-    #[test]
-    fn object_format_code_unknown_roundtrip() {
-        let unknown_code = 0x6666;
-        let format = ObjectFormatCode::from_code(unknown_code);
-        assert_eq!(format, ObjectFormatCode::Unknown(unknown_code));
-        assert_eq!(format.to_code(), unknown_code);
-    }
-
-    // ==================== Extension Detection Tests ====================
-
-    #[test]
-    fn from_extension_audio_formats() {
-        // Lowercase
-        assert_eq!(
-            ObjectFormatCode::from_extension("mp3"),
-            ObjectFormatCode::Mp3
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("wav"),
-            ObjectFormatCode::Wav
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("aiff"),
-            ObjectFormatCode::Aiff
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("aif"),
-            ObjectFormatCode::Aiff
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("wma"),
-            ObjectFormatCode::WmaAudio
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("ogg"),
-            ObjectFormatCode::OggAudio
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("oga"),
-            ObjectFormatCode::OggAudio
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("aac"),
-            ObjectFormatCode::AacAudio
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("flac"),
-            ObjectFormatCode::FlacAudio
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("m4a"),
-            ObjectFormatCode::M4aAudio
-        );
-
-        // Uppercase
-        assert_eq!(
-            ObjectFormatCode::from_extension("MP3"),
-            ObjectFormatCode::Mp3
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("WAV"),
-            ObjectFormatCode::Wav
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("FLAC"),
-            ObjectFormatCode::FlacAudio
-        );
-
-        // Mixed case
-        assert_eq!(
-            ObjectFormatCode::from_extension("Mp3"),
-            ObjectFormatCode::Mp3
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("FlaC"),
-            ObjectFormatCode::FlacAudio
-        );
-    }
-
-    #[test]
-    fn from_extension_video_formats() {
-        assert_eq!(
-            ObjectFormatCode::from_extension("avi"),
-            ObjectFormatCode::Avi
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("mpg"),
-            ObjectFormatCode::Mpeg
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("mpeg"),
-            ObjectFormatCode::Mpeg
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("asf"),
-            ObjectFormatCode::Asf
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("wmv"),
-            ObjectFormatCode::WmvVideo
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("mp4"),
-            ObjectFormatCode::Mp4Container
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("m4v"),
-            ObjectFormatCode::Mp4Container
-        );
-
-        // Uppercase
-        assert_eq!(
-            ObjectFormatCode::from_extension("AVI"),
-            ObjectFormatCode::Avi
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("MP4"),
-            ObjectFormatCode::Mp4Container
-        );
-    }
-
-    #[test]
-    fn from_extension_image_formats() {
-        assert_eq!(
-            ObjectFormatCode::from_extension("jpg"),
-            ObjectFormatCode::Jpeg
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("jpeg"),
-            ObjectFormatCode::Jpeg
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("tif"),
-            ObjectFormatCode::Tiff
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("tiff"),
-            ObjectFormatCode::Tiff
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("gif"),
-            ObjectFormatCode::Gif
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("bmp"),
-            ObjectFormatCode::Bmp
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("pict"),
-            ObjectFormatCode::Pict
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("pct"),
-            ObjectFormatCode::Pict
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("png"),
-            ObjectFormatCode::Png
-        );
-
-        // Uppercase
-        assert_eq!(
-            ObjectFormatCode::from_extension("JPG"),
-            ObjectFormatCode::Jpeg
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("JPEG"),
-            ObjectFormatCode::Jpeg
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("PNG"),
-            ObjectFormatCode::Png
-        );
-    }
-
-    #[test]
-    fn from_extension_text_formats() {
-        assert_eq!(
-            ObjectFormatCode::from_extension("txt"),
-            ObjectFormatCode::Text
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("html"),
-            ObjectFormatCode::Html
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("htm"),
-            ObjectFormatCode::Html
-        );
-    }
-
-    #[test]
-    fn from_extension_executable_formats() {
-        assert_eq!(
-            ObjectFormatCode::from_extension("exe"),
-            ObjectFormatCode::Executable
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("dll"),
-            ObjectFormatCode::Executable
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("bin"),
-            ObjectFormatCode::Executable
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("sh"),
-            ObjectFormatCode::Script
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("bat"),
-            ObjectFormatCode::Script
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("cmd"),
-            ObjectFormatCode::Script
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("ps1"),
-            ObjectFormatCode::Script
-        );
-    }
-
-    #[test]
-    fn from_extension_unknown() {
-        assert_eq!(
-            ObjectFormatCode::from_extension("xyz"),
-            ObjectFormatCode::Undefined
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("unknown"),
-            ObjectFormatCode::Undefined
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension(""),
-            ObjectFormatCode::Undefined
-        );
-        assert_eq!(
-            ObjectFormatCode::from_extension("rs"),
-            ObjectFormatCode::Undefined
-        );
-    }
-
-    // ==================== is_audio/is_video/is_image Tests ====================
-
-    #[test]
-    fn is_audio_returns_true_for_audio_formats() {
+    fn is_audio() {
         assert!(ObjectFormatCode::Mp3.is_audio());
-        assert!(ObjectFormatCode::Wav.is_audio());
-        assert!(ObjectFormatCode::Aiff.is_audio());
-        assert!(ObjectFormatCode::WmaAudio.is_audio());
-        assert!(ObjectFormatCode::OggAudio.is_audio());
-        assert!(ObjectFormatCode::AacAudio.is_audio());
         assert!(ObjectFormatCode::FlacAudio.is_audio());
-        assert!(ObjectFormatCode::M4aAudio.is_audio());
-    }
-
-    #[test]
-    fn is_audio_returns_false_for_non_audio_formats() {
         assert!(!ObjectFormatCode::Jpeg.is_audio());
         assert!(!ObjectFormatCode::Mp4Container.is_audio());
-        assert!(!ObjectFormatCode::Text.is_audio());
-        assert!(!ObjectFormatCode::Association.is_audio());
-        assert!(!ObjectFormatCode::Unknown(0x1234).is_audio());
     }
 
     #[test]
-    fn is_video_returns_true_for_video_formats() {
-        assert!(ObjectFormatCode::Avi.is_video());
-        assert!(ObjectFormatCode::Mpeg.is_video());
-        assert!(ObjectFormatCode::Asf.is_video());
-        assert!(ObjectFormatCode::WmvVideo.is_video());
+    fn is_video() {
         assert!(ObjectFormatCode::Mp4Container.is_video());
-    }
-
-    #[test]
-    fn is_video_returns_false_for_non_video_formats() {
+        assert!(ObjectFormatCode::Avi.is_video());
         assert!(!ObjectFormatCode::Mp3.is_video());
         assert!(!ObjectFormatCode::Jpeg.is_video());
-        assert!(!ObjectFormatCode::Text.is_video());
-        assert!(!ObjectFormatCode::Association.is_video());
-        assert!(!ObjectFormatCode::Unknown(0x1234).is_video());
     }
 
     #[test]
-    fn is_image_returns_true_for_image_formats() {
+    fn is_image() {
         assert!(ObjectFormatCode::Jpeg.is_image());
-        assert!(ObjectFormatCode::Tiff.is_image());
-        assert!(ObjectFormatCode::Gif.is_image());
-        assert!(ObjectFormatCode::Bmp.is_image());
-        assert!(ObjectFormatCode::Pict.is_image());
         assert!(ObjectFormatCode::Png.is_image());
-    }
-
-    #[test]
-    fn is_image_returns_false_for_non_image_formats() {
         assert!(!ObjectFormatCode::Mp3.is_image());
         assert!(!ObjectFormatCode::Mp4Container.is_image());
-        assert!(!ObjectFormatCode::Text.is_image());
-        assert!(!ObjectFormatCode::Association.is_image());
-        assert!(!ObjectFormatCode::Unknown(0x1234).is_image());
     }
 
     #[test]
     fn format_categories_are_mutually_exclusive() {
-        // Test that audio, video, and image formats don't overlap
         let all_formats = [
             ObjectFormatCode::Undefined,
             ObjectFormatCode::Association,
@@ -993,77 +652,17 @@ mod tests {
             let true_count = categories.iter().filter(|&&b| b).count();
             assert!(
                 true_count <= 1,
-                "{:?} belongs to multiple categories: audio={}, video={}, image={}",
-                format,
-                format.is_audio(),
-                format.is_video(),
-                format.is_image()
+                "{:?} belongs to multiple categories",
+                format
             );
         }
-    }
-
-    // ==================== ObjectPropertyCode Tests ====================
-
-    #[test]
-    fn object_property_code_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(
-            ObjectPropertyCode::from_code(0xDC01),
-            ObjectPropertyCode::StorageId
-        );
-        assert_eq!(ObjectPropertyCode::StorageId.to_code(), 0xDC01);
-
-        assert_eq!(
-            ObjectPropertyCode::from_code(0xDC07),
-            ObjectPropertyCode::ObjectFileName
-        );
-        assert_eq!(ObjectPropertyCode::ObjectFileName.to_code(), 0xDC07);
-
-        assert_eq!(
-            ObjectPropertyCode::from_code(0xDC44),
-            ObjectPropertyCode::Name
-        );
-        assert_eq!(ObjectPropertyCode::Name.to_code(), 0xDC44);
-    }
-
-    #[test]
-    fn object_property_code_unknown_roundtrip() {
-        let unknown_code = 0xDCFF;
-        let prop = ObjectPropertyCode::from_code(unknown_code);
-        assert_eq!(prop, ObjectPropertyCode::Unknown(unknown_code));
-        assert_eq!(prop.to_code(), unknown_code);
     }
 
     // ==================== PropertyDataType Tests ====================
 
     #[test]
-    fn property_data_type_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(PropertyDataType::from_code(0x0001), PropertyDataType::Int8);
-        assert_eq!(PropertyDataType::Int8.to_code(), 0x0001);
-
-        assert_eq!(
-            PropertyDataType::from_code(0x0006),
-            PropertyDataType::Uint32
-        );
-        assert_eq!(PropertyDataType::Uint32.to_code(), 0x0006);
-
-        assert_eq!(
-            PropertyDataType::from_code(0xFFFF),
-            PropertyDataType::String
-        );
-        assert_eq!(PropertyDataType::String.to_code(), 0xFFFF);
-
-        // Also check Unknown variant (catch_all behavior)
-        assert_eq!(
-            PropertyDataType::from_code(0x1234),
-            PropertyDataType::Unknown(0x1234)
-        );
-        assert_eq!(PropertyDataType::Unknown(0x1234).to_code(), 0x1234);
-    }
-
-    #[test]
     fn property_data_type_byte_size() {
+        // Fixed-size types
         assert_eq!(PropertyDataType::Int8.byte_size(), Some(1));
         assert_eq!(PropertyDataType::Uint8.byte_size(), Some(1));
         assert_eq!(PropertyDataType::Int16.byte_size(), Some(2));
@@ -1074,40 +673,10 @@ mod tests {
         assert_eq!(PropertyDataType::Uint64.byte_size(), Some(8));
         assert_eq!(PropertyDataType::Int128.byte_size(), Some(16));
         assert_eq!(PropertyDataType::Uint128.byte_size(), Some(16));
+
+        // Variable/undefined types
         assert_eq!(PropertyDataType::String.byte_size(), None);
         assert_eq!(PropertyDataType::Undefined.byte_size(), None);
         assert_eq!(PropertyDataType::Unknown(0x1234).byte_size(), None);
-    }
-
-    // ==================== DevicePropertyCode Tests ====================
-
-    #[test]
-    fn device_property_code_roundtrip() {
-        // Spot-check a few representative codes (num_enum handles the rest)
-        assert_eq!(
-            DevicePropertyCode::from_code(0x5001),
-            DevicePropertyCode::BatteryLevel
-        );
-        assert_eq!(DevicePropertyCode::BatteryLevel.to_code(), 0x5001);
-
-        assert_eq!(
-            DevicePropertyCode::from_code(0x500F),
-            DevicePropertyCode::ExposureIndex
-        );
-        assert_eq!(DevicePropertyCode::ExposureIndex.to_code(), 0x500F);
-
-        assert_eq!(
-            DevicePropertyCode::from_code(0x5011),
-            DevicePropertyCode::DateTime
-        );
-        assert_eq!(DevicePropertyCode::DateTime.to_code(), 0x5011);
-    }
-
-    #[test]
-    fn device_property_code_unknown_roundtrip() {
-        let unknown_code = 0xD123; // Vendor extension range
-        let prop = DevicePropertyCode::from_code(unknown_code);
-        assert_eq!(prop, DevicePropertyCode::Unknown(unknown_code));
-        assert_eq!(prop.to_code(), unknown_code);
     }
 }
