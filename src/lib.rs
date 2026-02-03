@@ -53,6 +53,5 @@ pub use ptp::{
 
 // Re-export high-level MTP types
 pub use mtp::{
-    DeviceEvent, DownloadChunk, DownloadStream, MtpDevice, MtpDeviceBuilder, NewObjectInfo,
-    Progress, Storage,
+    DeviceEvent, FileDownload, MtpDevice, MtpDeviceBuilder, NewObjectInfo, Progress, Storage,
 };

@@ -98,8 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match small_file {
         Some(file) => {
             println!("Downloading: {} ({} bytes)", file.filename, file.size);
-            let stream = storage.download(file.handle).await?;
-            let data: Vec<u8> = stream.collect().await?;
+            let data = storage.download(file.handle).await?;
             println!("Downloaded {} bytes successfully!", data.len());
 
             // Verify size matches
@@ -127,8 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Found file in '{}': {} ({} bytes)",
                         folder.filename, file.filename, file.size
                     );
-                    let stream = storage.download(file.handle).await?;
-                    let data: Vec<u8> = stream.collect().await?;
+                    let data = storage.download(file.handle).await?;
                     println!("Downloaded {} bytes successfully!", data.len());
 
                     if data.len() as u64 == file.size {

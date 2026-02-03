@@ -1,27 +1,16 @@
 //! Streaming download/upload support.
 
+use crate::ptp::ReceiveStream;
+use crate::Error;
 use bytes::Bytes;
-use futures::Stream;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-/// A chunk of downloaded data.
-#[derive(Debug)]
-pub struct DownloadChunk {
-    /// The data in this chunk
-    pub data: Bytes,
-    /// Total bytes received so far
-    pub bytes_so_far: u64,
-    /// Total file size (if known)
-    pub total_bytes: Option<u64>,
-}
+use std::ops::ControlFlow;
 
 /// Progress information for transfers.
 #[derive(Debug, Clone)]
 pub struct Progress {
-    /// Bytes transferred so far
+    /// Bytes transferred so far.
     pub bytes_transferred: u64,
-    /// Total bytes (if known)
+    /// Total bytes (if known).
     pub total_bytes: Option<u64>,
 }
 
@@ -49,79 +38,125 @@ impl Progress {
     }
 }
 
-// Note: DownloadStream is complex and requires streaming from PtpSession.
-// For now, we'll implement a simpler version that doesn't stream from USB
-// but converts downloaded data to a stream.
-
-/// A stream of file chunks during download.
+/// A file download in progress with true USB streaming.
 ///
-/// Implements `Stream<Item = Result<DownloadChunk, Error>>`.
-pub struct DownloadStream {
-    data: Option<Vec<u8>>,
-    total_size: u64,
-    chunk_size: usize,
-    position: u64,
+/// This struct wraps the low-level `ReceiveStream` and provides convenient
+/// methods for tracking progress. Data is streamed directly from USB as
+/// chunks arrive, without buffering the entire file in memory.
+///
+/// # Important
+///
+/// The MTP session is locked while this download is active. You must consume
+/// the entire download (or drop it) before calling other storage methods.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut download = storage.download_stream(handle).await?;
+/// println!("Downloading {} bytes...", download.size());
+///
+/// while let Some(chunk) = download.next_chunk().await {
+///     let bytes = chunk?;
+///     file.write_all(&bytes).await?;
+///     println!("Progress: {:.1}%", download.progress() * 100.0);
+/// }
+/// ```
+pub struct FileDownload {
+    size: u64,
+    bytes_received: u64,
+    stream: ReceiveStream,
 }
 
-impl DownloadStream {
-    /// Create a new download stream from downloaded data.
-    pub(crate) fn new(data: Vec<u8>) -> Self {
-        let total_size = data.len() as u64;
+impl FileDownload {
+    /// Create a new FileDownload wrapping a ReceiveStream.
+    pub(crate) fn new(size: u64, stream: ReceiveStream) -> Self {
         Self {
-            data: Some(data),
-            total_size,
-            chunk_size: 64 * 1024, // 64KB chunks
-            position: 0,
+            size,
+            bytes_received: 0,
+            stream,
         }
     }
 
-    /// Total file size.
-    pub fn total_size(&self) -> u64 {
-        self.total_size
+    /// Total file size in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
     }
 
-    /// Collect all chunks into a `Vec<u8>`.
-    pub async fn collect(self) -> Result<Vec<u8>, crate::Error> {
-        Ok(self.data.unwrap_or_default())
+    /// Bytes received so far.
+    pub fn bytes_received(&self) -> u64 {
+        self.bytes_received
     }
-}
 
-impl Stream for DownloadStream {
-    type Item = Result<DownloadChunk, crate::Error>;
+    /// Progress as a fraction (0.0 to 1.0).
+    pub fn progress(&self) -> f64 {
+        if self.size == 0 {
+            1.0
+        } else {
+            self.bytes_received as f64 / self.size as f64
+        }
+    }
 
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let data = match self.data.take() {
-            Some(d) => d,
-            None => return Poll::Ready(None),
-        };
+    /// Get the next chunk of data from USB.
+    ///
+    /// Returns `None` when the download is complete.
+    pub async fn next_chunk(&mut self) -> Option<Result<Bytes, Error>> {
+        match self.stream.next_chunk().await {
+            Some(Ok(bytes)) => {
+                self.bytes_received += bytes.len() as u64;
+                Some(Ok(bytes))
+            }
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
+        }
+    }
 
-        if self.position >= self.total_size {
-            return Poll::Ready(None);
+    /// Consume the download and iterate with a progress callback.
+    ///
+    /// Calls `on_progress` after each chunk. Return `ControlFlow::Break(())`
+    /// to cancel the download.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let data = download.collect_with_progress(|progress| {
+    ///     println!("{:.1}%", progress.percent().unwrap_or(0.0));
+    ///     ControlFlow::Continue(())
+    /// }).await?;
+    /// ```
+    pub async fn collect_with_progress<F>(mut self, mut on_progress: F) -> Result<Vec<u8>, Error>
+    where
+        F: FnMut(Progress) -> ControlFlow<()>,
+    {
+        let mut data = Vec::with_capacity(self.size as usize);
+
+        while let Some(result) = self.next_chunk().await {
+            let chunk = result?;
+            data.extend_from_slice(&chunk);
+
+            let progress = Progress {
+                bytes_transferred: self.bytes_received,
+                total_bytes: Some(self.size),
+            };
+
+            if let ControlFlow::Break(()) = on_progress(progress) {
+                return Err(Error::Cancelled);
+            }
         }
 
-        let start = self.position as usize;
-        let end = std::cmp::min(start + self.chunk_size, data.len());
-        let chunk_data = Bytes::copy_from_slice(&data[start..end]);
+        Ok(data)
+    }
 
-        self.position = end as u64;
-
-        // Put data back if there's more to read
-        if self.position < self.total_size {
-            self.data = Some(data);
-        }
-
-        Poll::Ready(Some(Ok(DownloadChunk {
-            data: chunk_data,
-            bytes_so_far: self.position,
-            total_bytes: Some(self.total_size),
-        })))
+    /// Collect all remaining data into a `Vec<u8>`.
+    ///
+    /// This consumes the download and buffers all data in memory.
+    pub async fn collect(self) -> Result<Vec<u8>, Error> {
+        self.stream.collect().await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StreamExt;
 
     #[test]
     fn test_progress_percent() {
@@ -177,59 +212,6 @@ mod tests {
         assert_eq!(p.fraction(), None);
     }
 
-    #[tokio::test]
-    async fn test_download_stream() {
-        let data = vec![1, 2, 3, 4, 5];
-        let stream = DownloadStream::new(data.clone());
-
-        assert_eq!(stream.total_size(), 5);
-
-        let collected = stream.collect().await.unwrap();
-        assert_eq!(collected, data);
-    }
-
-    #[tokio::test]
-    async fn test_download_stream_chunks() {
-        // Create data larger than chunk size to test chunking
-        let data: Vec<u8> = (0..200_000u32).map(|i| (i % 256) as u8).collect();
-        let expected_data = data.clone();
-        let mut stream = DownloadStream::new(data);
-
-        let mut chunks = Vec::new();
-        while let Some(result) = stream.next().await {
-            let chunk = result.unwrap();
-            chunks.push(chunk);
-        }
-
-        // Should have multiple chunks
-        assert!(chunks.len() > 1);
-
-        // Verify bytes_so_far increases
-        let mut prev_bytes = 0;
-        for chunk in &chunks {
-            assert!(chunk.bytes_so_far > prev_bytes);
-            prev_bytes = chunk.bytes_so_far;
-        }
-
-        // Last chunk should have all bytes
-        assert_eq!(
-            chunks.last().unwrap().bytes_so_far,
-            expected_data.len() as u64
-        );
-
-        // Collect all data from chunks and verify
-        let collected: Vec<u8> = chunks.iter().flat_map(|c| c.data.iter().copied()).collect();
-        assert_eq!(collected, expected_data);
-    }
-
-    #[tokio::test]
-    async fn test_download_stream_empty() {
-        let stream = DownloadStream::new(vec![]);
-        assert_eq!(stream.total_size(), 0);
-        let collected = stream.collect().await.unwrap();
-        assert!(collected.is_empty());
-    }
-
     #[test]
     fn test_progress_edge_cases() {
         // Test with very large numbers
@@ -246,28 +228,5 @@ mod tests {
         };
         assert_eq!(p.percent(), Some(100.0));
         assert_eq!(p.fraction(), Some(1.0));
-    }
-
-    #[test]
-    fn test_download_chunk_debug() {
-        let chunk = DownloadChunk {
-            data: Bytes::from_static(&[1, 2, 3]),
-            bytes_so_far: 3,
-            total_bytes: Some(10),
-        };
-        // Just verify Debug is implemented and doesn't panic
-        let _ = format!("{:?}", chunk);
-    }
-
-    #[test]
-    fn test_progress_debug_and_clone() {
-        let p = Progress {
-            bytes_transferred: 50,
-            total_bytes: Some(100),
-        };
-        let _ = format!("{:?}", p);
-        let p2 = p.clone();
-        assert_eq!(p.bytes_transferred, p2.bytes_transferred);
-        assert_eq!(p.total_bytes, p2.total_bytes);
     }
 }

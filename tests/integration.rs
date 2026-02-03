@@ -182,7 +182,6 @@ impl Drop for TestGuard {
 /// Read-only tests that don't modify the device.
 mod readonly {
     use super::*;
-    use futures::StreamExt;
     use mtp_rs::mtp::MtpDevice;
     use mtp_rs::ptp::PtpDevice;
     use std::time::Duration;
@@ -482,17 +481,16 @@ mod readonly {
             file_size
         );
 
-        let mut stream = try_device!(storage.download(handle).await, "Starting download");
-        let mut last_percent = 0;
+        let mut download = try_device!(storage.download_stream(handle).await, "Starting download");
+        let total = download.size();
+        let mut last_percent = 0u64;
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.expect("Download error");
-            if let Some(total) = chunk.total_bytes {
-                let percent = (chunk.bytes_so_far * 100 / total) as u32;
-                if percent >= last_percent + 10 {
-                    tlog!("  Progress: {}%", percent);
-                    last_percent = percent;
-                }
+        while let Some(result) = download.next_chunk().await {
+            let _ = result.expect("Download error");
+            let percent = download.bytes_received() * 100 / total;
+            if percent >= last_percent + 10 {
+                tlog!("  Progress: {}%", percent);
+                last_percent = percent;
             }
         }
 
@@ -698,10 +696,11 @@ mod readonly {
         );
 
         // Use streaming download API
-        let (size, mut stream) = try_device!(
-            storage.download_streaming(handle).await,
+        let mut download = try_device!(
+            storage.download_stream(handle).await,
             "Starting streaming download"
         );
+        let size = download.size();
         tlog!("Stream started, expecting {} bytes", size);
         assert_eq!(size, file_size);
 
@@ -710,7 +709,7 @@ mod readonly {
         let mut last_log_time = Instant::now();
         let log_interval = std::time::Duration::from_millis(100);
 
-        while let Some(result) = stream.next_chunk().await {
+        while let Some(result) = download.next_chunk().await {
             let chunk = result.expect("Streaming download error");
             total_received += chunk.len() as u64;
             chunk_count += 1;
@@ -852,14 +851,10 @@ mod destructive {
 
         // Download
         tlog!("Downloading file...");
-        let download_stream = storage
+        let downloaded = storage
             .download(handle)
             .await
-            .expect("Failed to start download");
-        let downloaded = download_stream
-            .collect()
-            .await
-            .expect("Failed to collect download data");
+            .expect("Failed to download");
         tlog!("Download complete, {} bytes received", downloaded.len());
 
         assert_eq!(
@@ -1123,9 +1118,9 @@ mod destructive {
 
         let info = NewObjectInfo::file(&filename, total_size as u64);
         let handle = storage
-            .upload_streaming(Some(download_folder.handle), info, data_stream)
+            .upload(Some(download_folder.handle), info, data_stream)
             .await
-            .expect("Streaming upload failed");
+            .expect("Upload failed");
 
         tlog!("Streaming upload complete, handle: {:?}", handle);
 
@@ -1145,14 +1140,10 @@ mod destructive {
 
         // Download and verify content
         tlog!("Downloading to verify content...");
-        let download_stream = storage
+        let downloaded = storage
             .download(handle)
             .await
-            .expect("Failed to start download");
-        let downloaded = download_stream
-            .collect()
-            .await
-            .expect("Failed to collect download data");
+            .expect("Failed to download");
         tlog!("Downloaded {} bytes", downloaded.len());
 
         assert_eq!(downloaded.len(), total_size, "Downloaded size should match");
@@ -1266,18 +1257,19 @@ mod destructive {
 
         // Step 1: Start streaming download from source
         tlog!("Starting streaming download...");
-        let (size, recv_stream) = try_device!(
-            storage.download_streaming(source_handle).await,
+        let download = try_device!(
+            storage.download_stream(source_handle).await,
             "Starting streaming download"
         );
+        let size = download.size();
         assert_eq!(size, source_size);
 
         // Step 2: Collect the data (for single-device copy, we can't truly stream
         // because we can only have one operation at a time on the same device)
         // NOTE: For true zero-copy MTP-to-MTP with different devices, you would
-        // pipe the recv_stream directly to upload_streaming on the second device.
+        // pipe the download directly to upload on the second device.
         tlog!("Collecting downloaded data...");
-        let data = recv_stream.collect().await.expect("Download failed");
+        let data = download.collect().await.expect("Download failed");
         tlog!("Downloaded {} bytes", data.len());
 
         // Step 3: Upload as a new file
@@ -1289,7 +1281,7 @@ mod destructive {
             futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(data.clone()))]);
 
         let dest_handle = storage
-            .upload_streaming(Some(download_folder.handle), info, data_stream)
+            .upload(Some(download_folder.handle), info, data_stream)
             .await
             .expect("Upload failed");
 
@@ -1306,14 +1298,10 @@ mod destructive {
 
         // Download copy and verify content matches
         tlog!("Verifying copy content...");
-        let copy_stream = storage
+        let copy_data = storage
             .download(dest_handle)
             .await
-            .expect("Failed to start download of copy");
-        let copy_data = copy_stream
-            .collect()
-            .await
-            .expect("Failed to collect copy data");
+            .expect("Failed to download copy");
         assert_eq!(copy_data, data, "Copy content should match original");
         tlog!("Copy content verified");
 

@@ -126,8 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 6: Download the file and verify content
     println!("=== Step 6: Download and verify file ===");
-    let stream = storage.download(file_handle).await?;
-    let downloaded = stream.collect().await?;
+    let downloaded = storage.download(file_handle).await?;
     let downloaded_str = String::from_utf8_lossy(&downloaded);
     if downloaded_str == test_content {
         println!("✓ Downloaded content matches! ({} bytes)", downloaded.len());

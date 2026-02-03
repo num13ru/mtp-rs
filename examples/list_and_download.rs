@@ -48,9 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("=== Downloading: {} ({} bytes) ===", img.filename, img.size);
 
         let start = std::time::Instant::now();
-        let stream = storage.download(img.handle).await?;
-        let total_size = stream.total_size();
-        let data = stream.collect().await?;
+        let download = storage.download_stream(img.handle).await?;
+        let total_size = download.size();
+        let data = download.collect().await?;
         let elapsed = start.elapsed();
 
         let speed = if elapsed.as_secs_f64() > 0.0 {

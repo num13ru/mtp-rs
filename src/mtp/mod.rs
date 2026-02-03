@@ -39,4 +39,4 @@ pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
 pub use event::DeviceEvent;
 pub use object::NewObjectInfo;
 pub use storage::Storage;
-pub use stream::{DownloadChunk, DownloadStream, Progress};
+pub use stream::{FileDownload, Progress};
