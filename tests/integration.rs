@@ -91,7 +91,10 @@ impl TestGuard {
 
         if count > 0 {
             tlog!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-            tlog!("!! PARALLEL EXECUTION DETECTED! {} tests running simultaneously", count + 1);
+            tlog!(
+                "!! PARALLEL EXECUTION DETECTED! {} tests running simultaneously",
+                count + 1
+            );
             tlog!("!! MTP tests MUST run with --test-threads=1");
             tlog!("!! Run with: cargo test --test integration -- --test-threads=1");
             tlog!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
@@ -134,7 +137,10 @@ mod readonly {
         for dev in &devices {
             tlog!(
                 "  Device: {:04x}:{:04x} at bus {} address {}",
-                dev.vendor_id, dev.product_id, dev.bus, dev.address
+                dev.vendor_id,
+                dev.product_id,
+                dev.bus,
+                dev.address
             );
         }
         tlog!("Device listing complete");
@@ -195,7 +201,8 @@ mod readonly {
             tlog!("  {} (ID: {:08x})", info.description, storage.id().0);
             tlog!(
                 "    Type: {:?}, Filesystem: {:?}",
-                info.storage_type, info.filesystem_type
+                info.storage_type,
+                info.filesystem_type
             );
             tlog!(
                 "    Capacity: {} bytes ({:.2} GB)",
@@ -332,7 +339,8 @@ mod readonly {
 
         tlog!(
             "Downloading {} ({} bytes) with progress...",
-            file.filename, file.size
+            file.filename,
+            file.size
         );
 
         let mut stream = storage.download(file.handle).await.unwrap();
@@ -525,7 +533,11 @@ mod destructive {
         let obj_info = storage.get_object_info(handle).await.unwrap();
         assert_eq!(obj_info.filename, "mtp-rs-test.txt");
         assert_eq!(obj_info.size, content_bytes.len() as u64);
-        tlog!("Object info verified: {} ({} bytes)", obj_info.filename, obj_info.size);
+        tlog!(
+            "Object info verified: {} ({} bytes)",
+            obj_info.filename,
+            obj_info.size
+        );
 
         // Download
         tlog!("Downloading file...");
@@ -606,7 +618,11 @@ mod destructive {
         let info = storage.get_object_info(handle).await.unwrap();
         assert!(info.is_folder());
         assert_eq!(info.filename, folder_name);
-        tlog!("Folder verified: {} (is_folder={})", info.filename, info.is_folder());
+        tlog!(
+            "Folder verified: {} (is_folder={})",
+            info.filename,
+            info.is_folder()
+        );
 
         // Delete it
         tlog!("Deleting folder...");

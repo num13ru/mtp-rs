@@ -1811,16 +1811,14 @@ mod tests {
 
     #[test]
     fn property_value_from_bytes_int8() {
-        let (val, consumed) =
-            PropertyValue::from_bytes(&[0x80], PropertyDataType::Int8).unwrap();
+        let (val, consumed) = PropertyValue::from_bytes(&[0x80], PropertyDataType::Int8).unwrap();
         assert_eq!(val, PropertyValue::Int8(-128));
         assert_eq!(consumed, 1);
     }
 
     #[test]
     fn property_value_from_bytes_uint8() {
-        let (val, consumed) =
-            PropertyValue::from_bytes(&[0x64], PropertyDataType::Uint8).unwrap();
+        let (val, consumed) = PropertyValue::from_bytes(&[0x64], PropertyDataType::Uint8).unwrap();
         assert_eq!(val, PropertyValue::Uint8(100));
         assert_eq!(consumed, 1);
     }
@@ -1844,8 +1842,7 @@ mod tests {
     #[test]
     fn property_value_from_bytes_int32() {
         let (val, consumed) =
-            PropertyValue::from_bytes(&[0xFF, 0xFF, 0xFF, 0xFF], PropertyDataType::Int32)
-                .unwrap();
+            PropertyValue::from_bytes(&[0xFF, 0xFF, 0xFF, 0xFF], PropertyDataType::Int32).unwrap();
         assert_eq!(val, PropertyValue::Int32(-1));
         assert_eq!(consumed, 4);
     }
@@ -1853,8 +1850,7 @@ mod tests {
     #[test]
     fn property_value_from_bytes_uint32() {
         let (val, consumed) =
-            PropertyValue::from_bytes(&[0x78, 0x56, 0x34, 0x12], PropertyDataType::Uint32)
-                .unwrap();
+            PropertyValue::from_bytes(&[0x78, 0x56, 0x34, 0x12], PropertyDataType::Uint32).unwrap();
         assert_eq!(val, PropertyValue::Uint32(0x12345678));
         assert_eq!(consumed, 4);
     }
@@ -2064,9 +2060,9 @@ mod tests {
         // FormFlag: Range (0x01)
         buf.push(0x01);
         // Range: min=0, max=100, step=1
-        buf.push(0);   // min
+        buf.push(0); // min
         buf.push(100); // max
-        buf.push(1);   // step
+        buf.push(1); // step
         buf
     }
 

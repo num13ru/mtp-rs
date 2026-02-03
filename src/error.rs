@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn test_is_exclusive_access_macos_message() {
         // macOS nusb error message
-        let io_err = IoError::new(ErrorKind::Other, "could not be opened for exclusive access");
+        let io_err = IoError::other("could not be opened for exclusive access");
         let err = Error::Usb(io_err);
         assert!(err.is_exclusive_access());
     }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_is_exclusive_access_linux_busy() {
         // Linux EBUSY style message
-        let io_err = IoError::new(ErrorKind::Other, "Device or resource busy");
+        let io_err = IoError::other("Device or resource busy");
         let err = Error::Usb(io_err);
         assert!(err.is_exclusive_access());
     }
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_is_exclusive_access_io_error() {
         // Also works for Io variant
-        let io_err = IoError::new(ErrorKind::Other, "could not be opened for exclusive access");
+        let io_err = IoError::other("could not be opened for exclusive access");
         let err = Error::Io(io_err);
         assert!(err.is_exclusive_access());
     }

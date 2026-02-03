@@ -1,0 +1,32 @@
+# rustfmt.toml - Rust formatting configuration for mtp-rs
+#
+# This file configures rustfmt for consistent code formatting across the project.
+# Run with: cargo fmt
+# Check without modifying: cargo fmt --check
+#
+# Documentation: https://rust-lang.github.io/rustfmt/
+#
+# Note: Only stable options are configured here. Unstable options (format_strings,
+# format_macro_matchers, etc.) are omitted to ensure compatibility with stable Rust.
+
+# Use Rust 2021 edition formatting style
+edition = "2021"
+
+# Maximum line width before wrapping
+# 100 is a good balance between readability and modern wide screens
+max_width = 100
+
+# Use Unix-style line endings (LF) for cross-platform consistency
+newline_style = "Unix"
+
+# Reorder imports alphabetically within groups for easier scanning
+reorder_imports = true
+
+# Reorder module declarations alphabetically
+reorder_modules = true
+
+# Use field initialization shorthand where possible: `Foo { x }` instead of `Foo { x: x }`
+use_field_init_shorthand = true
+
+# Use try! shorthand where possible: `?` instead of `try!`
+use_try_shorthand = true

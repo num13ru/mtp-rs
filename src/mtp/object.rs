@@ -141,7 +141,7 @@ mod tests {
             minute: 30,
             second: 0,
         };
-        let info = NewObjectInfo::file("test.txt", 100).with_modified(dt.clone());
+        let info = NewObjectInfo::file("test.txt", 100).with_modified(dt);
         assert_eq!(info.modified, Some(dt));
     }
 

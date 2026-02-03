@@ -1711,17 +1711,32 @@ mod tests {
         assert_eq!(PropertyDataType::from_code(0x0001), PropertyDataType::Int8);
         assert_eq!(PropertyDataType::from_code(0x0002), PropertyDataType::Uint8);
         assert_eq!(PropertyDataType::from_code(0x0003), PropertyDataType::Int16);
-        assert_eq!(PropertyDataType::from_code(0x0004), PropertyDataType::Uint16);
+        assert_eq!(
+            PropertyDataType::from_code(0x0004),
+            PropertyDataType::Uint16
+        );
         assert_eq!(PropertyDataType::from_code(0x0005), PropertyDataType::Int32);
-        assert_eq!(PropertyDataType::from_code(0x0006), PropertyDataType::Uint32);
+        assert_eq!(
+            PropertyDataType::from_code(0x0006),
+            PropertyDataType::Uint32
+        );
         assert_eq!(PropertyDataType::from_code(0x0007), PropertyDataType::Int64);
-        assert_eq!(PropertyDataType::from_code(0x0008), PropertyDataType::Uint64);
-        assert_eq!(PropertyDataType::from_code(0x0009), PropertyDataType::Int128);
+        assert_eq!(
+            PropertyDataType::from_code(0x0008),
+            PropertyDataType::Uint64
+        );
+        assert_eq!(
+            PropertyDataType::from_code(0x0009),
+            PropertyDataType::Int128
+        );
         assert_eq!(
             PropertyDataType::from_code(0x000A),
             PropertyDataType::Uint128
         );
-        assert_eq!(PropertyDataType::from_code(0xFFFF), PropertyDataType::String);
+        assert_eq!(
+            PropertyDataType::from_code(0xFFFF),
+            PropertyDataType::String
+        );
         assert_eq!(
             PropertyDataType::from_code(0x1234),
             PropertyDataType::Unknown(0x1234)

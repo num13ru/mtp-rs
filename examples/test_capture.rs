@@ -3,7 +3,7 @@
 //! Run with: cargo run --example test_capture
 
 use mtp_rs::ptp::{
-    DevicePropertyCode, ObjectFormatCode, OperationCode, PtpDevice, PropertyValue, StorageId,
+    DevicePropertyCode, ObjectFormatCode, OperationCode, PropertyValue, PtpDevice, StorageId,
 };
 
 #[tokio::main]
@@ -19,7 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check device info
     let info = device.get_device_info().await?;
-    println!("InitiateCapture supported: {}", info.supports_operation(OperationCode::InitiateCapture));
+    println!(
+        "InitiateCapture supported: {}",
+        info.supports_operation(OperationCode::InitiateCapture)
+    );
 
     // Check property 0xD207 (mentioned in libgphoto2 as needed for Fuji)
     println!("\n=== Checking Fuji-specific property 0xD207 ===");
@@ -36,11 +39,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Trying capture with different parameters ===");
 
     let test_cases = [
-        (StorageId(0), ObjectFormatCode::Undefined, "StorageId(0), Undefined"),
-        (StorageId(0xFFFFFFFF), ObjectFormatCode::Undefined, "StorageId(ALL), Undefined"),
-        (storage_ids[0], ObjectFormatCode::Undefined, "actual storage, Undefined"),
+        (
+            StorageId(0),
+            ObjectFormatCode::Undefined,
+            "StorageId(0), Undefined",
+        ),
+        (
+            StorageId(0xFFFFFFFF),
+            ObjectFormatCode::Undefined,
+            "StorageId(ALL), Undefined",
+        ),
+        (
+            storage_ids[0],
+            ObjectFormatCode::Undefined,
+            "actual storage, Undefined",
+        ),
         (StorageId(0), ObjectFormatCode::Jpeg, "StorageId(0), JPEG"),
-        (storage_ids[0], ObjectFormatCode::Jpeg, "actual storage, JPEG"),
+        (
+            storage_ids[0],
+            ObjectFormatCode::Jpeg,
+            "actual storage, JPEG",
+        ),
     ];
 
     for (storage_id, format, desc) in test_cases {
@@ -70,7 +89,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Now try capture again
     print!("Capture after setting 0xD207=2 ... ");
-    match session.initiate_capture(storage_ids[0], ObjectFormatCode::Undefined).await {
+    match session
+        .initiate_capture(storage_ids[0], ObjectFormatCode::Undefined)
+        .await
+    {
         Ok(()) => println!("SUCCESS!"),
         Err(e) => println!("Error: {:?}", e),
     }

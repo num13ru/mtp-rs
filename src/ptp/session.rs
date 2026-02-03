@@ -6,9 +6,9 @@
 use crate::ptp::{
     container_type, pack_string, unpack_u32, unpack_u32_array, CommandContainer, ContainerType,
     DataContainer, DeviceInfo, DevicePropDesc, DevicePropertyCode, EventContainer,
-    ObjectFormatCode, ObjectHandle, ObjectInfo, ObjectPropertyCode, OperationCode, PropertyDataType,
-    PropertyValue, ResponseCode, ResponseContainer, SessionId, StorageId, StorageInfo,
-    TransactionId,
+    ObjectFormatCode, ObjectHandle, ObjectInfo, ObjectPropertyCode, OperationCode,
+    PropertyDataType, PropertyValue, ResponseCode, ResponseContainer, SessionId, StorageId,
+    StorageInfo, TransactionId,
 };
 use crate::transport::Transport;
 use crate::Error;
@@ -714,10 +714,7 @@ impl PtpSession {
     /// # Arguments
     ///
     /// * `property` - The device property code to reset
-    pub async fn reset_device_prop_value(
-        &self,
-        property: DevicePropertyCode,
-    ) -> Result<(), Error> {
+    pub async fn reset_device_prop_value(&self, property: DevicePropertyCode) -> Result<(), Error> {
         let response = self
             .execute(
                 OperationCode::ResetDevicePropValue,
@@ -781,10 +778,7 @@ impl PtpSession {
             other => other.to_code() as u32,
         };
         let response = self
-            .execute(
-                OperationCode::InitiateCapture,
-                &[storage_id.0, format_code],
-            )
+            .execute(OperationCode::InitiateCapture, &[storage_id.0, format_code])
             .await?;
         Self::check_response(response, OperationCode::InitiateCapture)?;
         Ok(())
@@ -1257,9 +1251,9 @@ mod tests {
         // FormFlag: Range (0x01)
         buf.push(0x01);
         // Range: min=0, max=100, step=1
-        buf.push(0);   // min
+        buf.push(0); // min
         buf.push(100); // max
-        buf.push(1);   // step
+        buf.push(1); // step
         buf
     }
 

@@ -10,7 +10,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== File listing and download test ===\n");
 
     let device = MtpDevice::open_first().await?;
-    println!("Connected to: {} {}\n", device.device_info().manufacturer, device.device_info().model);
+    println!(
+        "Connected to: {} {}\n",
+        device.device_info().manufacturer,
+        device.device_info().model
+    );
 
     let storages = device.storages().await?;
     let storage = &storages[0];
@@ -23,7 +27,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for obj in &objects {
         let kind = if obj.is_folder() { "DIR " } else { "FILE" };
-        println!("  {} {} ({} bytes) [handle: {:?}]", kind, obj.filename, obj.size, obj.handle);
+        println!(
+            "  {} {} ({} bytes) [handle: {:?}]",
+            kind, obj.filename, obj.size, obj.handle
+        );
 
         // Find first image file
         if first_image.is_none() && obj.is_file() {
@@ -52,7 +59,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             0.0
         };
 
-        println!("✓ Downloaded {} bytes in {:.2}s ({:.2} MB/s)", data.len(), elapsed.as_secs_f64(), speed);
+        println!(
+            "✓ Downloaded {} bytes in {:.2}s ({:.2} MB/s)",
+            data.len(),
+            elapsed.as_secs_f64(),
+            speed
+        );
         assert_eq!(data.len() as u64, total_size, "Size mismatch!");
 
         // Save to temp file

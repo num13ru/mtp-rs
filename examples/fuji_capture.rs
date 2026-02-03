@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example fuji_capture
 
-use mtp_rs::ptp::{DevicePropertyCode, ObjectFormatCode, PtpDevice, PropertyValue, StorageId};
+use mtp_rs::ptp::{DevicePropertyCode, ObjectFormatCode, PropertyValue, PtpDevice, StorageId};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,7 +18,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Set priority mode to USB control (0x0002)
     println!("Step 1: Setting priority mode to USB control (0xD207 = 2)...");
-    match session.set_device_prop_value_typed(prop_0xd207, &PropertyValue::Uint16(2)).await {
+    match session
+        .set_device_prop_value_typed(prop_0xd207, &PropertyValue::Uint16(2))
+        .await
+    {
         Ok(()) => println!("  OK"),
         Err(e) => println!("  Error: {} (continuing anyway)", e),
     }
@@ -32,7 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Set 0xD208 to 0x0200 (focus)
     println!("\nStep 2: Setting capture control to FOCUS (0xD208 = 0x0200)...");
-    match session.set_device_prop_value_typed(prop_0xd208, &PropertyValue::Uint16(0x0200)).await {
+    match session
+        .set_device_prop_value_typed(prop_0xd208, &PropertyValue::Uint16(0x0200))
+        .await
+    {
         Ok(()) => println!("  OK"),
         Err(e) => {
             println!("  Error: {}", e);
@@ -42,7 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: InitiateCapture (triggers focus)
     println!("\nStep 3: InitiateCapture (focus phase)...");
-    match session.initiate_capture(StorageId(0), ObjectFormatCode::Undefined).await {
+    match session
+        .initiate_capture(StorageId(0), ObjectFormatCode::Undefined)
+        .await
+    {
         Ok(()) => println!("  OK - focus initiated"),
         Err(e) => println!("  Error: {:?}", e),
     }
@@ -74,14 +83,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 5: Set 0xD208 to 0x0304 (shoot)
     println!("\nStep 5: Setting capture control to SHOOT (0xD208 = 0x0304)...");
-    match session.set_device_prop_value_typed(prop_0xd208, &PropertyValue::Uint16(0x0304)).await {
+    match session
+        .set_device_prop_value_typed(prop_0xd208, &PropertyValue::Uint16(0x0304))
+        .await
+    {
         Ok(()) => println!("  OK"),
         Err(e) => println!("  Error: {}", e),
     }
 
     // Step 6: InitiateCapture (triggers shutter)
     println!("\nStep 6: InitiateCapture (shoot phase)...");
-    match session.initiate_capture(StorageId(0), ObjectFormatCode::Undefined).await {
+    match session
+        .initiate_capture(StorageId(0), ObjectFormatCode::Undefined)
+        .await
+    {
         Ok(()) => {
             println!("  SUCCESS! Shutter should fire now.");
             // Wait for capture to complete
@@ -92,7 +107,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Reset priority mode
     println!("\nResetting priority mode (0xD207 = 1)...");
-    let _ = session.set_device_prop_value_typed(prop_0xd207, &PropertyValue::Uint16(1)).await;
+    let _ = session
+        .set_device_prop_value_typed(prop_0xd207, &PropertyValue::Uint16(1))
+        .await;
 
     session.close().await?;
     println!("\n=== Done ===");

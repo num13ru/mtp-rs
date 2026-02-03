@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example debug_listing
 
-use mtp_rs::ptp::{PtpDevice, ObjectHandle};
+use mtp_rs::ptp::{ObjectHandle, PtpDevice};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,7 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 1: Native recursive listing with ALL handle
     println!("=== Native recursive (ObjectHandle::ALL) ===");
-    let handles = session.get_object_handles(storage_id, None, Some(ObjectHandle::ALL)).await?;
+    let handles = session
+        .get_object_handles(storage_id, None, Some(ObjectHandle::ALL))
+        .await?;
     println!("Got {} handles: {:?}\n", handles.len(), handles);
 
     // Check for duplicates
@@ -36,7 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 2: Manual listing - root
     println!("=== Manual listing (root) ===");
-    let root_handles = session.get_object_handles(storage_id, None, Some(ObjectHandle::ROOT)).await?;
+    let root_handles = session
+        .get_object_handles(storage_id, None, Some(ObjectHandle::ROOT))
+        .await?;
     println!("Root handles: {:?}", root_handles);
     for h in &root_handles {
         let info = session.get_object_info(*h).await?;
@@ -50,14 +54,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut to_visit = vec![(None, root_handles.clone())];
 
     while let Some((parent, handles)) = to_visit.pop() {
-        println!("Visiting parent {:?} with {} handles", parent, handles.len());
+        println!(
+            "Visiting parent {:?} with {} handles",
+            parent,
+            handles.len()
+        );
         for h in handles {
             let info = session.get_object_info(h).await?;
-            println!("  {:?}: {} (folder: {})", h, info.filename, info.is_folder());
+            println!(
+                "  {:?}: {} (folder: {})",
+                h,
+                info.filename,
+                info.is_folder()
+            );
             all_objects.push((h, info.filename.clone()));
 
             if info.is_folder() {
-                let children = session.get_object_handles(storage_id, None, Some(h)).await?;
+                let children = session
+                    .get_object_handles(storage_id, None, Some(h))
+                    .await?;
                 if !children.is_empty() {
                     to_visit.push((Some(h), children));
                 }
@@ -65,7 +80,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("\nTotal objects via manual traversal: {}", all_objects.len());
+    println!(
+        "\nTotal objects via manual traversal: {}",
+        all_objects.len()
+    );
 
     // Check for duplicates in manual traversal
     let mut seen = std::collections::HashSet::new();

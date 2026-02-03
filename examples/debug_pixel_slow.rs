@@ -51,9 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_start = Instant::now();
 
     // Step 1: List MTP devices (sync)
-    let devices = time_sync("Listing MTP devices", || {
-        NusbTransport::list_mtp_devices()
-    })?;
+    let devices = time_sync("Listing MTP devices", NusbTransport::list_mtp_devices)?;
 
     if devices.is_empty() {
         println!("\nNo MTP devices found!");
@@ -135,14 +133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("  Description: {}", info.description);
         println!("  Volume ID: {}", info.volume_identifier);
-        println!(
-            "  Capacity: {} MB",
-            info.max_capacity / (1024 * 1024)
-        );
-        println!(
-            "  Free: {} MB",
-            info.free_space_bytes / (1024 * 1024)
-        );
+        println!("  Capacity: {} MB", info.max_capacity / (1024 * 1024));
+        println!("  Free: {} MB", info.free_space_bytes / (1024 * 1024));
         println!();
     }
 
@@ -176,10 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let info_start = Instant::now();
         for handle in root_handles.iter().take(10) {
-            let info = time_op(
-                &format!("GetObjectInfo (handle {})", handle.0),
-                || async { session.get_object_info(*handle).await },
-            )
+            let info = time_op(&format!("GetObjectInfo (handle {})", handle.0), || async {
+                session.get_object_info(*handle).await
+            })
             .await?;
 
             let kind = if info.is_folder() { "DIR" } else { "FILE" };
@@ -202,16 +193,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Analysis of Results ===\n");
 
     println!("Key Finding:");
-    println!("  GetObjectHandles (root, parent=0) returned {} handles",
-             root_handles.len());
-    println!("  GetObjectHandles (parent=0xFFFFFFFF) returned {} handles",
-             all_handles.len());
+    println!(
+        "  GetObjectHandles (root, parent=0) returned {} handles",
+        root_handles.len()
+    );
+    println!(
+        "  GetObjectHandles (parent=0xFFFFFFFF) returned {} handles",
+        all_handles.len()
+    );
     println!();
 
     if root_handles.len() > all_handles.len() * 10 {
         println!("PROBLEM IDENTIFIED:");
         println!("  When parent=0 (meaning 'root level only'), Android/Pixel returns");
-        println!("  ALL {} objects on the device, not just root-level objects!", root_handles.len());
+        println!(
+            "  ALL {} objects on the device, not just root-level objects!",
+            root_handles.len()
+        );
         println!();
         println!("  This is a known Android MTP bug: parent=0 is interpreted as 'no filter'");
         println!("  instead of 'root objects only'.");
@@ -219,7 +217,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("SOLUTION:");
         println!("  Use parent=0xFFFFFFFF (ObjectHandle::ALL) to get root-level objects.");
-        println!("  Counter-intuitively, 0xFFFFFFFF gives us the {} actual root items!", all_handles.len());
+        println!(
+            "  Counter-intuitively, 0xFFFFFFFF gives us the {} actual root items!",
+            all_handles.len()
+        );
         println!();
 
         // Calculate impact on list_objects
@@ -229,10 +230,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("Impact on Storage::list_objects(None):");
         println!("  Old behavior: calls GetObjectHandles(parent=0)");
-        println!("  Returns {} handles instead of {}", handles_to_process, all_handles.len());
+        println!(
+            "  Returns {} handles instead of {}",
+            handles_to_process,
+            all_handles.len()
+        );
         println!("  Then calls GetObjectInfo for EACH handle");
-        println!("  Estimated time: {} handles x {:.3}s/call = {:.1}s",
-                 handles_to_process, avg_info_time, estimated_list_time);
+        println!(
+            "  Estimated time: {} handles x {:.3}s/call = {:.1}s",
+            handles_to_process, avg_info_time, estimated_list_time
+        );
         println!();
 
         println!("FIX APPLIED in src/mtp/storage.rs:");
@@ -255,7 +262,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_object_handles(storage_id, None, Some(ObjectHandle::ALL))
         .await?;
     let handles_time = fixed_start.elapsed();
-    println!("  GetObjectHandles time: {:.3}s ({} handles)", handles_time.as_secs_f64(), handles.len());
+    println!(
+        "  GetObjectHandles time: {:.3}s ({} handles)",
+        handles_time.as_secs_f64(),
+        handles.len()
+    );
 
     // Step 2: Get object info for each handle (filter will be applied)
     let mut root_objects = Vec::new();
@@ -267,12 +278,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let total_time = fixed_start.elapsed();
-    println!("  Total time with fix: {:.3}s ({} root objects)", total_time.as_secs_f64(), root_objects.len());
+    println!(
+        "  Total time with fix: {:.3}s ({} root objects)",
+        total_time.as_secs_f64(),
+        root_objects.len()
+    );
 
     println!("\nRoot objects (with fix):");
     for (i, (handle, obj)) in root_objects.iter().take(20).enumerate() {
         let kind = if obj.is_folder() { "DIR" } else { "FILE" };
-        println!("  {}. {} {} (handle={}, {} bytes)", i + 1, kind, obj.filename, handle.0, obj.size);
+        println!(
+            "  {}. {} {} (handle={}, {} bytes)",
+            i + 1,
+            kind,
+            obj.filename,
+            handle.0,
+            obj.size
+        );
     }
     if root_objects.len() > 20 {
         println!("  ... and {} more", root_objects.len() - 20);

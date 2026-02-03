@@ -13,6 +13,18 @@ cargo test
 
 You don't need an MTP device for most development. The test suite uses mock transports for protocol logic.
 
+### Dev tools
+
+We use [`just`](https://github.com/casey/just) as a command runner. Install it, then:
+
+```bash
+just            # Run all checks: format, lint, test, doc (~1s cached, ~17s clean)
+just fix        # Auto-fix formatting and clippy warnings (~3s)
+just check-all  # Include security audit and license check (~4s)
+```
+
+Run `just --list` to see all available commands.
+
 ## Project structure
 
 ```
@@ -57,10 +69,11 @@ Integration tests run serially to avoid the obvious collisions.
 
 ## Code style
 
-We follow standard Rust conventions:
+We follow standard Rust conventions. See [`docs/style-guide.md`](docs/style-guide.md) for details.
 
-- `cargo fmt` before committing
-- `cargo clippy` should pass with no warnings
+The quick version:
+
+- Run `just` before committing (or `just fix` to auto-fix issues)
 - Tests for new functionality
 - Doc comments for public APIs
 
@@ -116,10 +129,9 @@ Everything is little-endian. Strings are UTF-16LE with a length prefix.
 
 1. Fork and create a branch
 2. Make your changes
-3. Run `cargo fmt` and `cargo clippy`
-4. Run `cargo test`
-5. If you have a device, run integration tests
-6. Open a PR with a clear description incl. how you tested your changes
+3. Run `just` (checks format, lint, test, and doc)
+4. If you have a device, run integration tests: `cargo test --test integration -- --ignored`
+5. Open a PR with a clear description including how you tested your changes
 
 For non-trivial changes, consider opening an issue first to discuss the approach.
 

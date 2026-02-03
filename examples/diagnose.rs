@@ -93,8 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Test 4: Download test ===");
     let small_file = root_objects
         .iter()
-        .filter(|o| o.is_file() && o.size > 1000 && o.size < 100_000)
-        .next();
+        .find(|o| o.is_file() && o.size > 1000 && o.size < 100_000);
 
     match small_file {
         Some(file) => {
@@ -122,8 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let contents = storage.list_objects(Some(folder.handle)).await?;
                 if let Some(file) = contents
                     .iter()
-                    .filter(|o| o.is_file() && o.size > 1000 && o.size < 100_000)
-                    .next()
+                    .find(|o| o.is_file() && o.size > 1000 && o.size < 100_000)
                 {
                     println!(
                         "Found file in '{}': {} ({} bytes)",

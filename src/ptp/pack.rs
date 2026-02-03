@@ -726,7 +726,15 @@ mod tests {
 
     #[test]
     fn roundtrip_i64() {
-        for val in [0i64, 1, -1, 255, -255, 0x0102030405060708, -0x0102030405060708] {
+        for val in [
+            0i64,
+            1,
+            -1,
+            255,
+            -255,
+            0x0102030405060708,
+            -0x0102030405060708,
+        ] {
             assert_eq!(unpack_i64(&pack_i64(val)).unwrap(), val);
         }
     }

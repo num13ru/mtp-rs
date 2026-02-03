@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example ptp_diagnose
 
-use mtp_rs::ptp::{DevicePropertyCode, PtpDevice, PropertyDataType};
+use mtp_rs::ptp::{DevicePropertyCode, PropertyDataType, PtpDevice};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,14 +22,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Show supported operations
-    println!("=== Supported operations ({}) ===", info.operations_supported.len());
+    println!(
+        "=== Supported operations ({}) ===",
+        info.operations_supported.len()
+    );
     for op in &info.operations_supported {
         println!("  {:?}", op);
     }
     println!();
 
     // Show supported device properties
-    println!("=== Supported device properties ({}) ===", info.device_properties_supported.len());
+    println!(
+        "=== Supported device properties ({}) ===",
+        info.device_properties_supported.len()
+    );
     for prop_code in &info.device_properties_supported {
         let prop = DevicePropertyCode::from_code(*prop_code);
         print!("  0x{:04X} {:?}", prop_code, prop);
@@ -55,7 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (DevicePropertyCode::FNumber, PropertyDataType::Uint16),
         (DevicePropertyCode::ExposureTime, PropertyDataType::Uint32),
         (DevicePropertyCode::ExposureIndex, PropertyDataType::Uint16),
-        (DevicePropertyCode::ExposureProgramMode, PropertyDataType::Uint16),
+        (
+            DevicePropertyCode::ExposureProgramMode,
+            PropertyDataType::Uint16,
+        ),
         (DevicePropertyCode::WhiteBalance, PropertyDataType::Uint16),
         (DevicePropertyCode::FocusMode, PropertyDataType::Uint16),
         (DevicePropertyCode::DateTime, PropertyDataType::String),
@@ -65,9 +74,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         print!("{:?}: ", prop);
         match session.get_device_prop_desc(prop).await {
             Ok(desc) => {
-                println!("{:?} ({})", desc.current_value, if desc.writable { "writable" } else { "read-only" });
+                println!(
+                    "{:?} ({})",
+                    desc.current_value,
+                    if desc.writable {
+                        "writable"
+                    } else {
+                        "read-only"
+                    }
+                );
                 if let Some(ref range) = desc.range {
-                    println!("    Range: {:?} to {:?}, step {:?}", range.min, range.max, range.step);
+                    println!(
+                        "    Range: {:?} to {:?}, step {:?}",
+                        range.min, range.max, range.step
+                    );
                 }
                 if let Some(vals) = &desc.enum_values {
                     let count = vals.len();

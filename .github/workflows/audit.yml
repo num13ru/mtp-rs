@@ -1,0 +1,111 @@
+# Security Audit Workflow for mtp-rs
+#
+# This workflow performs security and dependency auditing:
+# - Checks for known vulnerabilities in dependencies (cargo-audit)
+# - Validates dependency licenses and advisories (cargo-deny)
+# - Identifies unused dependencies (cargo-udeps)
+#
+# Runs daily, on manual trigger, or when dependency files change.
+
+name: Security Audit
+
+on:
+  # Run daily at 4 AM UTC to catch newly disclosed vulnerabilities
+  schedule:
+    - cron: '0 4 * * *'
+
+  # Allow manual triggering for on-demand audits
+  workflow_dispatch:
+
+  # Run on pushes to main that modify dependency files
+  push:
+    branches:
+      - main
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # =============================================================================
+  # Security Audit Job
+  # Checks dependencies against the RustSec Advisory Database for known
+  # vulnerabilities. This is critical for identifying security issues in
+  # third-party dependencies.
+  # =============================================================================
+  security-audit:
+    name: Security Audit (cargo-audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Use the official rustsec audit-check action which handles installation
+      # and database updates automatically
+      - name: Run security audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # =============================================================================
+  # License Check Job
+  # Validates that all dependencies comply with allowed licenses and checks
+  # for additional advisories. This ensures legal compliance and catches
+  # issues that cargo-audit might miss.
+  # =============================================================================
+  license-check:
+    name: License & Advisory Check (cargo-deny)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # cargo-deny checks licenses, bans, advisories, and sources
+      # Configuration can be customized via deny.toml in the repo root
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Check all configured categories
+          command: check
+          # Log format for better CI output
+          log-level: warn
+
+  # =============================================================================
+  # Unused Dependencies Job
+  # Identifies dependencies declared in Cargo.toml but not actually used.
+  # This helps keep the dependency tree minimal and reduces attack surface.
+  # Runs on nightly Rust as cargo-udeps requires it.
+  # This job is allowed to fail since cargo-udeps can have false positives.
+  # =============================================================================
+  unused-deps:
+    name: Unused Dependencies (cargo-udeps)
+    runs-on: ubuntu-latest
+    # Allow this job to fail without failing the entire workflow
+    # cargo-udeps can have false positives and requires nightly which may break
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Use a separate cache key for nightly builds
+          prefix-key: 'v0-rust-nightly'
+
+      - name: Install cargo-udeps
+        run: cargo install cargo-udeps --locked
+
+      - name: Check for unused dependencies
+        run: cargo +nightly udeps --all-targets
+        env:
+          # Suppress warnings to focus on unused dependency output
+          RUSTFLAGS: '-A warnings'

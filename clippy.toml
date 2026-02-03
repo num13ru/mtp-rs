@@ -1,0 +1,23 @@
+# clippy.toml - Clippy linter configuration for mtp-rs
+#
+# This file configures Clippy thresholds and behavior.
+# Run with: cargo clippy
+# Run with all features: cargo clippy --all-features
+#
+# Documentation: https://doc.rust-lang.org/clippy/lint_configuration.html
+
+# Allow slightly higher cognitive complexity for protocol handling code.
+# MTP/PTP protocol functions often involve complex state machines and
+# multiple conditional branches that are inherently complex but readable.
+# Default is 25, we keep it at 25 to be explicit about this choice.
+cognitive-complexity-threshold = 25
+
+# Protocol functions sometimes require many parameters for transaction IDs,
+# session state, data payloads, etc. Raising this threshold avoids false
+# positives on legitimately complex protocol interfaces.
+# Default is 7, we raise to 8 for protocol-heavy code.
+too-many-arguments-threshold = 8
+
+# Allow slightly longer type names for descriptive protocol types.
+# Default is 200, which is reasonable for this project.
+type-complexity-threshold = 250

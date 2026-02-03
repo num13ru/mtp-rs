@@ -11,12 +11,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== File operations test ===\n");
 
     let device = MtpDevice::open_first().await?;
-    println!("Connected to: {} {}", device.device_info().manufacturer, device.device_info().model);
+    println!(
+        "Connected to: {} {}",
+        device.device_info().manufacturer,
+        device.device_info().model
+    );
 
     let storages = device.storages().await?;
     println!("Found {} storage(s):", storages.len());
     for s in &storages {
-        println!("  {} (ID: {:08X}) - {:?}", s.info().description, s.id().0, s.info().storage_type);
+        println!(
+            "  {} (ID: {:08X}) - {:?}",
+            s.info().description,
+            s.id().0,
+            s.info().storage_type
+        );
     }
 
     // Use the first storage
@@ -77,9 +86,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         content_bytes.to_vec(),
     ))]);
 
-    let file_handle = match storage.upload(Some(folder_handle), file_info, Box::pin(data_stream)).await {
+    let file_handle = match storage
+        .upload(Some(folder_handle), file_info, Box::pin(data_stream))
+        .await
+    {
         Ok(h) => {
-            println!("✓ Uploaded file with handle {:?} ({} bytes)", h, content_bytes.len());
+            println!(
+                "✓ Uploaded file with handle {:?} ({} bytes)",
+                h,
+                content_bytes.len()
+            );
             h
         }
         Err(e) => {

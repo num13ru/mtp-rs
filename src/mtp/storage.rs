@@ -68,7 +68,8 @@ impl Storage {
             .inner
             .session
             .get_object_handles(
-                self.id, None,   // All formats
+                self.id,
+                None, // All formats
                 effective_parent,
             )
             .await;
