@@ -90,14 +90,36 @@ impl PtpSession {
             .execute(OperationCode::OpenSession, &[session_id])
             .await?;
 
-        if response.code != ResponseCode::Ok && response.code != ResponseCode::SessionAlreadyOpen {
-            return Err(Error::Protocol {
-                code: response.code,
-                operation: OperationCode::OpenSession,
-            });
+        if response.code == ResponseCode::Ok {
+            return Ok(session);
         }
 
-        Ok(session)
+        if response.code == ResponseCode::SessionAlreadyOpen {
+            // Session already exists with potentially mismatched transaction ID.
+            // Close the existing session (ignore errors) and open a fresh one.
+            let _ = session.execute(OperationCode::CloseSession, &[]).await;
+
+            // Create a new session instance with reset transaction ID counter
+            let fresh_session = Self::new(Arc::clone(&session.transport), SessionId(session_id));
+
+            let retry_response = fresh_session
+                .execute(OperationCode::OpenSession, &[session_id])
+                .await?;
+
+            if retry_response.code != ResponseCode::Ok {
+                return Err(Error::Protocol {
+                    code: retry_response.code,
+                    operation: OperationCode::OpenSession,
+                });
+            }
+
+            return Ok(fresh_session);
+        }
+
+        Err(Error::Protocol {
+            code: response.code,
+            operation: OperationCode::OpenSession,
+        })
     }
 
     /// Get the session ID.
@@ -1189,10 +1211,7 @@ impl ReceiveStream {
 /// This creates a proper Stream that can be used with StreamExt methods.
 pub fn receive_stream_to_stream(recv: ReceiveStream) -> impl Stream<Item = Result<Bytes, Error>> {
     futures::stream::unfold(recv, |mut recv| async move {
-        match recv.next_chunk().await {
-            Some(result) => Some((result, recv)),
-            None => None,
-        }
+        recv.next_chunk().await.map(|result| (result, recv))
     })
 }
 
@@ -1255,15 +1274,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_session_already_open() {
+    async fn test_open_session_already_open_recovers() {
         let (transport, mock) = mock_transport();
+
+        // First OpenSession returns SessionAlreadyOpen
         mock.queue_response(response_with_params(
             1,
             ResponseCode::SessionAlreadyOpen,
             &[],
         ));
+        // CloseSession response (ignored, but we need to provide one)
+        mock.queue_response(ok_response(2));
+        // Second OpenSession (fresh session, tx_id starts at 1 again)
+        mock.queue_response(ok_response(1));
 
-        // Should succeed even if session is already open
+        // Should succeed by closing and reopening
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        assert_eq!(session.session_id(), SessionId(1));
+    }
+
+    #[tokio::test]
+    async fn test_open_session_already_open_transaction_id_reset() {
+        let (transport, mock) = mock_transport();
+
+        // First OpenSession returns SessionAlreadyOpen
+        mock.queue_response(response_with_params(
+            1,
+            ResponseCode::SessionAlreadyOpen,
+            &[],
+        ));
+        // CloseSession response
+        mock.queue_response(ok_response(2));
+        // Second OpenSession (fresh session, tx_id starts at 1 again)
+        mock.queue_response(ok_response(1));
+        // Next operation should use tx_id = 2 (after the fresh OpenSession used 1)
+        mock.queue_response(ok_response(2));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+
+        // Perform an operation to verify transaction ID is properly reset
+        // The next operation should use tx_id = 2 (since the fresh OpenSession used 1)
+        session.delete_object(ObjectHandle(1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_open_session_already_open_close_error_ignored() {
+        let (transport, mock) = mock_transport();
+
+        // First OpenSession returns SessionAlreadyOpen
+        mock.queue_response(response_with_params(
+            1,
+            ResponseCode::SessionAlreadyOpen,
+            &[],
+        ));
+        // CloseSession returns an error (should be ignored)
+        mock.queue_response(response_with_params(2, ResponseCode::GeneralError, &[]));
+        // Second OpenSession succeeds
+        mock.queue_response(ok_response(1));
+
+        // Should succeed even if CloseSession fails
         let session = PtpSession::open(transport, 1).await.unwrap();
         assert_eq!(session.session_id(), SessionId(1));
     }
