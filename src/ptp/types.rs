@@ -2219,4 +2219,361 @@ mod tests {
         // Missing data type
         assert!(DevicePropDesc::from_bytes(&[0x01, 0x50]).is_err());
     }
+
+    // =========================================================================
+    // Property-based tests (proptest)
+    // =========================================================================
+
+    use proptest::prelude::*;
+
+    // -------------------------------------------------------------------------
+    // StorageType property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Known StorageType variants roundtrip correctly
+        #[test]
+        fn prop_storage_type_known_roundtrip(code in 0u16..=4u16) {
+            let storage_type = StorageType::from_code(code);
+            prop_assert_eq!(storage_type.to_code(), code);
+        }
+
+        /// Unknown StorageType values preserve the original code
+        #[test]
+        fn prop_storage_type_unknown_preserves_code(code in 5u16..=u16::MAX) {
+            let storage_type = StorageType::from_code(code);
+            prop_assert_eq!(storage_type, StorageType::Unknown(code));
+            prop_assert_eq!(storage_type.to_code(), code);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // FilesystemType property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Known FilesystemType variants roundtrip correctly
+        #[test]
+        fn prop_filesystem_type_known_roundtrip(code in 0u16..=3u16) {
+            let fs_type = FilesystemType::from_code(code);
+            prop_assert_eq!(fs_type.to_code(), code);
+        }
+
+        /// Unknown FilesystemType values preserve the original code
+        #[test]
+        fn prop_filesystem_type_unknown_preserves_code(code in 4u16..=u16::MAX) {
+            let fs_type = FilesystemType::from_code(code);
+            prop_assert_eq!(fs_type, FilesystemType::Unknown(code));
+            prop_assert_eq!(fs_type.to_code(), code);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // AccessCapability property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Known AccessCapability variants roundtrip correctly
+        #[test]
+        fn prop_access_capability_known_roundtrip(code in 0u16..=2u16) {
+            let cap = AccessCapability::from_code(code);
+            prop_assert_eq!(cap.to_code(), code);
+        }
+
+        /// Unknown AccessCapability values preserve the original code
+        #[test]
+        fn prop_access_capability_unknown_preserves_code(code in 3u16..=u16::MAX) {
+            let cap = AccessCapability::from_code(code);
+            prop_assert_eq!(cap, AccessCapability::Unknown(code));
+            prop_assert_eq!(cap.to_code(), code);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // ProtectionStatus property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Known ProtectionStatus variants roundtrip correctly
+        #[test]
+        fn prop_protection_status_known_roundtrip(code in 0u16..=1u16) {
+            let status = ProtectionStatus::from_code(code);
+            prop_assert_eq!(status.to_code(), code);
+        }
+
+        /// Unknown ProtectionStatus values preserve the original code
+        #[test]
+        fn prop_protection_status_unknown_preserves_code(code in 2u16..=u16::MAX) {
+            let status = ProtectionStatus::from_code(code);
+            prop_assert_eq!(status, ProtectionStatus::Unknown(code));
+            prop_assert_eq!(status.to_code(), code);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // AssociationType property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Known AssociationType variants roundtrip correctly
+        #[test]
+        fn prop_association_type_known_roundtrip(code in 0u16..=1u16) {
+            let assoc = AssociationType::from_code(code);
+            prop_assert_eq!(assoc.to_code(), code);
+        }
+
+        /// Unknown AssociationType values preserve the original code
+        #[test]
+        fn prop_association_type_unknown_preserves_code(code in 2u16..=u16::MAX) {
+            let assoc = AssociationType::from_code(code);
+            prop_assert_eq!(assoc, AssociationType::Unknown(code));
+            prop_assert_eq!(assoc.to_code(), code);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // PropertyFormType property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Known PropertyFormType variants roundtrip correctly
+        #[test]
+        fn prop_property_form_type_known_roundtrip(code in 0u8..=2u8) {
+            let form = PropertyFormType::from_code(code);
+            prop_assert_eq!(form.to_code(), code);
+        }
+
+        /// Unknown PropertyFormType values preserve the original code
+        #[test]
+        fn prop_property_form_type_unknown_preserves_code(code in 3u8..=u8::MAX) {
+            let form = PropertyFormType::from_code(code);
+            prop_assert_eq!(form, PropertyFormType::Unknown(code));
+            prop_assert_eq!(form.to_code(), code);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // PropertyValue roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_property_value_int8_roundtrip(val: i8) {
+            let pv = PropertyValue::Int8(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int8).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 1);
+        }
+
+        #[test]
+        fn prop_property_value_uint8_roundtrip(val: u8) {
+            let pv = PropertyValue::Uint8(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Uint8).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 1);
+        }
+
+        #[test]
+        fn prop_property_value_int16_roundtrip(val: i16) {
+            let pv = PropertyValue::Int16(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int16).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 2);
+        }
+
+        #[test]
+        fn prop_property_value_uint16_roundtrip(val: u16) {
+            let pv = PropertyValue::Uint16(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Uint16).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 2);
+        }
+
+        #[test]
+        fn prop_property_value_int32_roundtrip(val: i32) {
+            let pv = PropertyValue::Int32(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int32).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 4);
+        }
+
+        #[test]
+        fn prop_property_value_uint32_roundtrip(val: u32) {
+            let pv = PropertyValue::Uint32(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Uint32).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 4);
+        }
+
+        #[test]
+        fn prop_property_value_int64_roundtrip(val: i64) {
+            let pv = PropertyValue::Int64(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int64).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 8);
+        }
+
+        #[test]
+        fn prop_property_value_uint64_roundtrip(val: u64) {
+            let pv = PropertyValue::Uint64(val);
+            let bytes = pv.to_bytes();
+            let (parsed, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Uint64).unwrap();
+            prop_assert_eq!(parsed, pv);
+            prop_assert_eq!(consumed, 8);
+        }
+    }
+
+    /// Strategy for generating valid UTF-16 compatible strings for PropertyValue.
+    fn valid_property_string() -> impl Strategy<Value = String> {
+        prop::collection::vec(
+            prop::char::range('\u{0000}', '\u{D7FF}')
+                .prop_union(prop::char::range('\u{E000}', '\u{FFFF}')),
+            0..50, // Keep shorter for property values
+        )
+        .prop_map(|chars| chars.into_iter().collect::<String>())
+    }
+
+    proptest! {
+        #[test]
+        fn prop_property_value_string_roundtrip(s in valid_property_string()) {
+            // Limit string length for MTP compatibility
+            let s = if s.chars().count() > 254 {
+                s.chars().take(254).collect::<String>()
+            } else {
+                s
+            };
+
+            let pv = PropertyValue::String(s.clone());
+            let bytes = pv.to_bytes();
+            let (parsed, _consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::String).unwrap();
+            prop_assert_eq!(parsed, PropertyValue::String(s));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // PropertyValue data_type() consistency tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_property_value_data_type_int8(val: i8) {
+            let pv = PropertyValue::Int8(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Int8);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_uint8(val: u8) {
+            let pv = PropertyValue::Uint8(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Uint8);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_int16(val: i16) {
+            let pv = PropertyValue::Int16(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Int16);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_uint16(val: u16) {
+            let pv = PropertyValue::Uint16(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Uint16);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_int32(val: i32) {
+            let pv = PropertyValue::Int32(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Int32);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_uint32(val: u32) {
+            let pv = PropertyValue::Uint32(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Uint32);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_int64(val: i64) {
+            let pv = PropertyValue::Int64(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Int64);
+        }
+
+        #[test]
+        fn prop_property_value_data_type_uint64(val: u64) {
+            let pv = PropertyValue::Uint64(val);
+            prop_assert_eq!(pv.data_type(), PropertyDataType::Uint64);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // PropertyRange roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_property_range_uint8_roundtrip(min: u8, max: u8, step: u8) {
+            let range = PropertyRange {
+                min: PropertyValue::Uint8(min),
+                max: PropertyValue::Uint8(max),
+                step: PropertyValue::Uint8(step),
+            };
+            let bytes = range.to_bytes();
+            let (parsed, consumed) = PropertyRange::from_bytes(&bytes, PropertyDataType::Uint8).unwrap();
+            prop_assert_eq!(parsed.min, range.min);
+            prop_assert_eq!(parsed.max, range.max);
+            prop_assert_eq!(parsed.step, range.step);
+            prop_assert_eq!(consumed, 3);
+        }
+
+        #[test]
+        fn prop_property_range_uint16_roundtrip(min: u16, max: u16, step: u16) {
+            let range = PropertyRange {
+                min: PropertyValue::Uint16(min),
+                max: PropertyValue::Uint16(max),
+                step: PropertyValue::Uint16(step),
+            };
+            let bytes = range.to_bytes();
+            let (parsed, consumed) = PropertyRange::from_bytes(&bytes, PropertyDataType::Uint16).unwrap();
+            prop_assert_eq!(parsed.min, range.min);
+            prop_assert_eq!(parsed.max, range.max);
+            prop_assert_eq!(parsed.step, range.step);
+            prop_assert_eq!(consumed, 6);
+        }
+
+        #[test]
+        fn prop_property_range_int16_roundtrip(min: i16, max: i16, step: i16) {
+            let range = PropertyRange {
+                min: PropertyValue::Int16(min),
+                max: PropertyValue::Int16(max),
+                step: PropertyValue::Int16(step),
+            };
+            let bytes = range.to_bytes();
+            let (parsed, consumed) = PropertyRange::from_bytes(&bytes, PropertyDataType::Int16).unwrap();
+            prop_assert_eq!(parsed.min, range.min);
+            prop_assert_eq!(parsed.max, range.max);
+            prop_assert_eq!(parsed.step, range.step);
+            prop_assert_eq!(consumed, 6);
+        }
+
+        #[test]
+        fn prop_property_range_uint32_roundtrip(min: u32, max: u32, step: u32) {
+            let range = PropertyRange {
+                min: PropertyValue::Uint32(min),
+                max: PropertyValue::Uint32(max),
+                step: PropertyValue::Uint32(step),
+            };
+            let bytes = range.to_bytes();
+            let (parsed, consumed) = PropertyRange::from_bytes(&bytes, PropertyDataType::Uint32).unwrap();
+            prop_assert_eq!(parsed.min, range.min);
+            prop_assert_eq!(parsed.max, range.max);
+            prop_assert_eq!(parsed.step, range.step);
+            prop_assert_eq!(consumed, 12);
+        }
+    }
 }

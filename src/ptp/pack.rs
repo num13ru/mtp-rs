@@ -1290,4 +1290,305 @@ mod tests {
         let (_, consumed) = unpack_string(&buf).unwrap();
         assert_eq!(consumed, buf.len() - 3); // Should not include extra data
     }
+
+    // =========================================================================
+    // Property-based tests (proptest)
+    // =========================================================================
+
+    use proptest::prelude::*;
+
+    // -------------------------------------------------------------------------
+    // Unsigned integer roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_roundtrip_u8(val: u8) {
+            let packed = pack_u8(val);
+            let unpacked = unpack_u8(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_roundtrip_u16(val: u16) {
+            let packed = pack_u16(val);
+            let unpacked = unpack_u16(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_roundtrip_u32(val: u32) {
+            let packed = pack_u32(val);
+            let unpacked = unpack_u32(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_roundtrip_u64(val: u64) {
+            let packed = pack_u64(val);
+            let unpacked = unpack_u64(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Signed integer roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_roundtrip_i8(val: i8) {
+            let packed = pack_i8(val);
+            let unpacked = unpack_i8(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_roundtrip_i16(val: i16) {
+            let packed = pack_i16(val);
+            let unpacked = unpack_i16(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_roundtrip_i32(val: i32) {
+            let packed = pack_i32(val);
+            let unpacked = unpack_i32(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_roundtrip_i64(val: i64) {
+            let packed = pack_i64(val);
+            let unpacked = unpack_i64(&packed).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Packed length invariant tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_pack_u8_length(val: u8) {
+            prop_assert_eq!(pack_u8(val).len(), 1);
+        }
+
+        #[test]
+        fn prop_pack_u16_length(val: u16) {
+            prop_assert_eq!(pack_u16(val).len(), 2);
+        }
+
+        #[test]
+        fn prop_pack_u32_length(val: u32) {
+            prop_assert_eq!(pack_u32(val).len(), 4);
+        }
+
+        #[test]
+        fn prop_pack_u64_length(val: u64) {
+            prop_assert_eq!(pack_u64(val).len(), 8);
+        }
+
+        #[test]
+        fn prop_pack_i8_length(val: i8) {
+            prop_assert_eq!(pack_i8(val).len(), 1);
+        }
+
+        #[test]
+        fn prop_pack_i16_length(val: i16) {
+            prop_assert_eq!(pack_i16(val).len(), 2);
+        }
+
+        #[test]
+        fn prop_pack_i32_length(val: i32) {
+            prop_assert_eq!(pack_i32(val).len(), 4);
+        }
+
+        #[test]
+        fn prop_pack_i64_length(val: i64) {
+            prop_assert_eq!(pack_i64(val).len(), 8);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // String roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    /// Strategy for generating valid UTF-16 compatible strings.
+    /// We avoid lone surrogates which would cause UTF-16 encoding issues.
+    fn valid_utf16_string() -> impl Strategy<Value = String> {
+        // Generate strings from BMP characters (no surrogate issues)
+        // Include ASCII, common Unicode, and some emoji (via char::from_u32)
+        prop::collection::vec(
+            prop::char::range('\u{0000}', '\u{D7FF}')
+                .prop_union(prop::char::range('\u{E000}', '\u{FFFF}')),
+            0..100,
+        )
+        .prop_map(|chars| chars.into_iter().collect::<String>())
+    }
+
+    proptest! {
+        #[test]
+        fn prop_roundtrip_string(s in valid_utf16_string()) {
+            // MTP strings have max length of 255 characters (including null)
+            // So limit to 254 characters to avoid overflow
+            let s = if s.chars().count() > 254 {
+                s.chars().take(254).collect::<String>()
+            } else {
+                s
+            };
+
+            let packed = pack_string(&s);
+            let (unpacked, consumed) = unpack_string(&packed).unwrap();
+            prop_assert_eq!(&unpacked, &s);
+            prop_assert_eq!(consumed, packed.len());
+        }
+
+        #[test]
+        fn prop_string_packed_length(s in valid_utf16_string()) {
+            // MTP strings: 1 byte length + (chars+1) * 2 bytes (including null)
+            // Empty string: just 1 byte (0x00)
+            let s = if s.chars().count() > 254 {
+                s.chars().take(254).collect::<String>()
+            } else {
+                s
+            };
+
+            let packed = pack_string(&s);
+
+            if s.is_empty() {
+                prop_assert_eq!(packed.len(), 1);
+            } else {
+                // UTF-16 code units (not chars, as some chars need 2 code units)
+                let utf16_len: usize = s.encode_utf16().count();
+                let expected_len = 1 + (utf16_len + 1) * 2; // 1 byte len + (code_units + null) * 2
+                prop_assert_eq!(packed.len(), expected_len);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Array roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_roundtrip_u16_array(arr in prop::collection::vec(any::<u16>(), 0..100)) {
+            let packed = pack_u16_array(&arr);
+            let (unpacked, consumed) = unpack_u16_array(&packed).unwrap();
+            prop_assert_eq!(&unpacked, &arr);
+            prop_assert_eq!(consumed, packed.len());
+        }
+
+        #[test]
+        fn prop_roundtrip_u32_array(arr in prop::collection::vec(any::<u32>(), 0..100)) {
+            let packed = pack_u32_array(&arr);
+            let (unpacked, consumed) = unpack_u32_array(&packed).unwrap();
+            prop_assert_eq!(&unpacked, &arr);
+            prop_assert_eq!(consumed, packed.len());
+        }
+
+        #[test]
+        fn prop_u16_array_packed_length(arr in prop::collection::vec(any::<u16>(), 0..100)) {
+            let packed = pack_u16_array(&arr);
+            // 4 bytes for count + 2 bytes per element
+            let expected_len = 4 + arr.len() * 2;
+            prop_assert_eq!(packed.len(), expected_len);
+        }
+
+        #[test]
+        fn prop_u32_array_packed_length(arr in prop::collection::vec(any::<u32>(), 0..100)) {
+            let packed = pack_u32_array(&arr);
+            // 4 bytes for count + 4 bytes per element
+            let expected_len = 4 + arr.len() * 4;
+            prop_assert_eq!(packed.len(), expected_len);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // DateTime roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    /// Strategy for generating valid DateTime values.
+    fn valid_datetime() -> impl Strategy<Value = DateTime> {
+        (
+            1000u16..9999u16, // year (4 digits)
+            1u8..=12u8,       // month
+            1u8..=28u8,       // day (use 28 to avoid month-specific issues)
+            0u8..=23u8,       // hour
+            0u8..=59u8,       // minute
+            0u8..=59u8,       // second
+        )
+            .prop_map(|(year, month, day, hour, minute, second)| DateTime {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn prop_datetime_format_parse_roundtrip(dt in valid_datetime()) {
+            let formatted = dt.format();
+            let parsed = DateTime::parse(&formatted).unwrap();
+            prop_assert_eq!(parsed, dt);
+        }
+
+        #[test]
+        fn prop_datetime_pack_unpack_roundtrip(dt in valid_datetime()) {
+            let packed = pack_datetime(&dt);
+            let (unpacked, consumed) = unpack_datetime(&packed).unwrap();
+            prop_assert_eq!(unpacked, Some(dt));
+            prop_assert_eq!(consumed, packed.len());
+        }
+
+        #[test]
+        fn prop_datetime_format_length(dt in valid_datetime()) {
+            let formatted = dt.format();
+            // Format is "YYYYMMDDThhmmss" = 15 characters
+            prop_assert_eq!(formatted.len(), 15);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Extra bytes handling tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn prop_unpack_u8_ignores_extra_bytes(val: u8, extra in prop::collection::vec(any::<u8>(), 0..10)) {
+            let mut buf = pack_u8(val).to_vec();
+            buf.extend_from_slice(&extra);
+            let unpacked = unpack_u8(&buf).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_unpack_u16_ignores_extra_bytes(val: u16, extra in prop::collection::vec(any::<u8>(), 0..10)) {
+            let mut buf = pack_u16(val).to_vec();
+            buf.extend_from_slice(&extra);
+            let unpacked = unpack_u16(&buf).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_unpack_u32_ignores_extra_bytes(val: u32, extra in prop::collection::vec(any::<u8>(), 0..10)) {
+            let mut buf = pack_u32(val).to_vec();
+            buf.extend_from_slice(&extra);
+            let unpacked = unpack_u32(&buf).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+
+        #[test]
+        fn prop_unpack_u64_ignores_extra_bytes(val: u64, extra in prop::collection::vec(any::<u8>(), 0..10)) {
+            let mut buf = pack_u64(val).to_vec();
+            buf.extend_from_slice(&extra);
+            let unpacked = unpack_u64(&buf).unwrap();
+            prop_assert_eq!(unpacked, val);
+        }
+    }
 }

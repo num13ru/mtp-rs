@@ -828,4 +828,318 @@ mod tests {
         assert_eq!(resp.params.len(), 5);
         assert_eq!(resp.params, vec![1, 2, 3, 4, 5]);
     }
+
+    // =========================================================================
+    // Property-based tests (proptest)
+    // =========================================================================
+
+    use proptest::prelude::*;
+
+    // -------------------------------------------------------------------------
+    // ContainerType property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Valid container types roundtrip correctly
+        #[test]
+        fn prop_container_type_valid_roundtrip(code in 1u16..=4u16) {
+            let ct = ContainerType::from_code(code);
+            prop_assert!(ct.is_some());
+            prop_assert_eq!(ct.unwrap().to_code(), code);
+        }
+
+        /// Invalid container type codes return None
+        #[test]
+        fn prop_container_type_invalid_returns_none(code in prop::num::u16::ANY.prop_filter(
+            "Must not be valid container type",
+            |c| *c == 0 || *c > 4
+        )) {
+            prop_assert!(ContainerType::from_code(code).is_none());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // DataContainer roundtrip property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// DataContainer roundtrips correctly with arbitrary payloads
+        #[test]
+        fn prop_data_container_roundtrip(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            payload in prop::collection::vec(any::<u8>(), 0..1000)
+        ) {
+            let original = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                payload: payload.clone(),
+            };
+            let bytes = original.to_bytes();
+            let parsed = DataContainer::from_bytes(&bytes).unwrap();
+
+            prop_assert_eq!(parsed.code, original.code);
+            prop_assert_eq!(parsed.transaction_id, original.transaction_id);
+            prop_assert_eq!(parsed.payload, original.payload);
+        }
+
+        /// DataContainer length field matches actual size
+        #[test]
+        fn prop_data_container_length_invariant(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            payload in prop::collection::vec(any::<u8>(), 0..500)
+        ) {
+            let container = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                payload,
+            };
+            let bytes = container.to_bytes();
+
+            // Length field is first 4 bytes (little-endian)
+            let length = unpack_u32(&bytes[0..4]).unwrap() as usize;
+
+            // Length should equal total bytes
+            prop_assert_eq!(length, bytes.len());
+
+            // Length should be header (12) + payload
+            prop_assert_eq!(length, HEADER_SIZE + container.payload.len());
+        }
+
+        /// DataContainer type field is always Data (2)
+        #[test]
+        fn prop_data_container_type_field(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            payload in prop::collection::vec(any::<u8>(), 0..100)
+        ) {
+            let container = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                payload,
+            };
+            let bytes = container.to_bytes();
+
+            let type_code = unpack_u16(&bytes[4..6]).unwrap();
+            prop_assert_eq!(type_code, ContainerType::Data.to_code());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CommandContainer property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// CommandContainer length field matches actual size
+        #[test]
+        fn prop_command_container_length_invariant(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            params in prop::collection::vec(any::<u32>(), 0..5)
+        ) {
+            let container = CommandContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                params: params.clone(),
+            };
+            let bytes = container.to_bytes();
+
+            // Length field is first 4 bytes (little-endian)
+            let length = unpack_u32(&bytes[0..4]).unwrap() as usize;
+
+            // Length should equal total bytes
+            prop_assert_eq!(length, bytes.len());
+
+            // Length should be header (12) + params * 4
+            prop_assert_eq!(length, HEADER_SIZE + params.len() * 4);
+        }
+
+        /// CommandContainer type field is always Command (1)
+        #[test]
+        fn prop_command_container_type_field(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            params in prop::collection::vec(any::<u32>(), 0..5)
+        ) {
+            let container = CommandContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                params,
+            };
+            let bytes = container.to_bytes();
+
+            let type_code = unpack_u16(&bytes[4..6]).unwrap();
+            prop_assert_eq!(type_code, ContainerType::Command.to_code());
+        }
+
+        /// CommandContainer preserves parameters correctly
+        #[test]
+        fn prop_command_container_params_preserved(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            params in prop::collection::vec(any::<u32>(), 0..5)
+        ) {
+            let container = CommandContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                params: params.clone(),
+            };
+            let bytes = container.to_bytes();
+
+            // Verify each parameter
+            for (i, &expected_param) in params.iter().enumerate() {
+                let offset = HEADER_SIZE + i * 4;
+                let actual_param = unpack_u32(&bytes[offset..]).unwrap();
+                prop_assert_eq!(actual_param, expected_param);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // ResponseContainer property tests
+    // -------------------------------------------------------------------------
+
+    /// Strategy for generating valid response container bytes
+    fn valid_response_bytes(param_count: usize) -> impl Strategy<Value = Vec<u8>> {
+        (
+            any::<u16>(),                                                   // code
+            any::<u32>(),                                                   // transaction_id
+            prop::collection::vec(any::<u32>(), param_count..=param_count), // params
+        )
+            .prop_map(move |(code, transaction_id, params)| {
+                let total_len = HEADER_SIZE + params.len() * 4;
+                let mut bytes = Vec::with_capacity(total_len);
+
+                // Header
+                bytes.extend_from_slice(&pack_u32(total_len as u32));
+                bytes.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
+                bytes.extend_from_slice(&pack_u16(code));
+                bytes.extend_from_slice(&pack_u32(transaction_id));
+
+                // Parameters
+                for param in &params {
+                    bytes.extend_from_slice(&pack_u32(*param));
+                }
+
+                bytes
+            })
+    }
+
+    proptest! {
+        /// ResponseContainer parses valid bytes correctly (0 params)
+        #[test]
+        fn prop_response_container_parse_no_params(bytes in valid_response_bytes(0)) {
+            let resp = ResponseContainer::from_bytes(&bytes).unwrap();
+            prop_assert!(resp.params.is_empty());
+        }
+
+        /// ResponseContainer parses valid bytes correctly (1-5 params)
+        #[test]
+        fn prop_response_container_parse_with_params(param_count in 1usize..=5usize) {
+            let strategy = valid_response_bytes(param_count);
+            proptest!(|(bytes in strategy)| {
+                let resp = ResponseContainer::from_bytes(&bytes).unwrap();
+                prop_assert_eq!(resp.params.len(), param_count);
+            });
+        }
+
+        /// ResponseContainer parameter count constraint (0-5 params)
+        #[test]
+        fn prop_response_container_param_count(param_count in 0usize..=5usize) {
+            let strategy = valid_response_bytes(param_count);
+            proptest!(|(bytes in strategy)| {
+                let resp = ResponseContainer::from_bytes(&bytes).unwrap();
+                prop_assert!(resp.params.len() <= 5);
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // container_type() function property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// container_type() correctly identifies Command containers
+        #[test]
+        fn prop_container_type_fn_command(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            params in prop::collection::vec(any::<u32>(), 0..5)
+        ) {
+            let container = CommandContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                params,
+            };
+            let bytes = container.to_bytes();
+
+            let ct = container_type(&bytes).unwrap();
+            prop_assert_eq!(ct, ContainerType::Command);
+        }
+
+        /// container_type() correctly identifies Data containers
+        #[test]
+        fn prop_container_type_fn_data(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            payload in prop::collection::vec(any::<u8>(), 0..100)
+        ) {
+            let container = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                payload,
+            };
+            let bytes = container.to_bytes();
+
+            let ct = container_type(&bytes).unwrap();
+            prop_assert_eq!(ct, ContainerType::Data);
+        }
+
+        /// container_type() correctly identifies Response containers
+        #[test]
+        fn prop_container_type_fn_response(bytes in valid_response_bytes(0)) {
+            let ct = container_type(&bytes).unwrap();
+            prop_assert_eq!(ct, ContainerType::Response);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Edge case property tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// DataContainer with extra trailing bytes still parses correctly
+        #[test]
+        fn prop_data_container_with_extra_bytes(
+            code in any::<u16>(),
+            transaction_id in any::<u32>(),
+            payload in prop::collection::vec(any::<u8>(), 0..100),
+            extra in prop::collection::vec(any::<u8>(), 1..50)
+        ) {
+            let original = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id,
+                payload: payload.clone(),
+            };
+            let mut bytes = original.to_bytes();
+            bytes.extend_from_slice(&extra);
+
+            let parsed = DataContainer::from_bytes(&bytes).unwrap();
+            prop_assert_eq!(parsed.payload, original.payload);
+        }
+
+        /// ResponseContainer with extra trailing bytes still parses correctly
+        #[test]
+        fn prop_response_container_with_extra_bytes(
+            bytes in valid_response_bytes(2),
+            extra in prop::collection::vec(any::<u8>(), 1..50)
+        ) {
+            let mut bytes_with_extra = bytes.clone();
+            bytes_with_extra.extend_from_slice(&extra);
+
+            let resp = ResponseContainer::from_bytes(&bytes_with_extra).unwrap();
+            prop_assert_eq!(resp.params.len(), 2);
+        }
+    }
 }
