@@ -268,9 +268,11 @@ pub struct EventContainer {
 
 impl EventContainer {
     /// Parse an event container from bytes.
+    ///
+    /// Events can have 0-3 parameters, so valid sizes are 12-24 bytes
+    /// (header + 0-3 u32 params). Missing parameters default to 0.
     pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
-        // Events always have 3 parameters, so minimum size is 12 + 12 = 24 bytes
-        const EVENT_SIZE: usize = HEADER_SIZE + 12;
+        const MAX_EVENT_SIZE: usize = HEADER_SIZE + 12; // 24 bytes max (3 params)
 
         if buf.len() < HEADER_SIZE {
             return Err(crate::Error::invalid_data(format!(
@@ -294,26 +296,49 @@ impl EventContainer {
             )));
         }
 
-        // Validate length for event (must have exactly 3 parameters)
-        if length != EVENT_SIZE {
+        // Validate length: must be between 12 (header only) and 24 (header + 3 params)
+        if length < HEADER_SIZE || length > MAX_EVENT_SIZE {
             return Err(crate::Error::invalid_data(format!(
-                "event container wrong size: expected {}, got {}",
-                EVENT_SIZE, length
+                "event container invalid size: expected 12-24, got {}",
+                length
             )));
         }
 
-        if buf.len() < EVENT_SIZE {
+        // Validate parameter alignment (must be multiple of 4 bytes after header)
+        let param_bytes = length - HEADER_SIZE;
+        if param_bytes % 4 != 0 {
+            return Err(crate::Error::invalid_data(format!(
+                "event parameter bytes not aligned: {} bytes",
+                param_bytes
+            )));
+        }
+
+        // Validate buffer has enough data
+        if buf.len() < length {
             return Err(crate::Error::invalid_data(format!(
                 "event container buffer too small: need {}, have {}",
-                EVENT_SIZE,
+                length,
                 buf.len()
             )));
         }
 
-        // Parse the 3 parameters
-        let param1 = unpack_u32(&buf[12..16])?;
-        let param2 = unpack_u32(&buf[16..20])?;
-        let param3 = unpack_u32(&buf[20..24])?;
+        // Parse parameters (0-3), defaulting missing ones to 0
+        let param_count = param_bytes / 4;
+        let param1 = if param_count >= 1 {
+            unpack_u32(&buf[12..16])?
+        } else {
+            0
+        };
+        let param2 = if param_count >= 2 {
+            unpack_u32(&buf[16..20])?
+        } else {
+            0
+        };
+        let param3 = if param_count >= 3 {
+            unpack_u32(&buf[20..24])?
+        } else {
+            0
+        };
 
         Ok(EventContainer {
             code: EventCode::from_code(code),
@@ -757,10 +782,59 @@ mod tests {
     }
 
     #[test]
-    fn event_container_wrong_length() {
-        // Event must be exactly 24 bytes
+    fn event_container_zero_params() {
+        // Event with 0 parameters (12 bytes total)
         let bytes = vec![
-            0x1C, 0x00, 0x00, 0x00, // length = 28 (wrong!)
+            0x0C, 0x00, 0x00, 0x00, // length = 12
+            0x04, 0x00, // type = Event
+            0x08, 0x40, // code = DeviceInfoChanged (0x4008)
+            0x00, 0x00, 0x00, 0x00, // transaction_id
+        ];
+        let event = EventContainer::from_bytes(&bytes).unwrap();
+        assert_eq!(event.code, EventCode::DeviceInfoChanged);
+        assert_eq!(event.params, [0, 0, 0]); // All default to 0
+    }
+
+    #[test]
+    fn event_container_one_param() {
+        // Event with 1 parameter (16 bytes total) - common on Android
+        let bytes = vec![
+            0x10, 0x00, 0x00, 0x00, // length = 16
+            0x04, 0x00, // type = Event
+            0x02, 0x40, // code = ObjectAdded (0x4002)
+            0x00, 0x00, 0x00, 0x00, // transaction_id
+            0x2A, 0x00, 0x00, 0x00, // param1 = 42 (ObjectHandle)
+        ];
+        let event = EventContainer::from_bytes(&bytes).unwrap();
+        assert_eq!(event.code, EventCode::ObjectAdded);
+        assert_eq!(event.params[0], 42);
+        assert_eq!(event.params[1], 0); // Default
+        assert_eq!(event.params[2], 0); // Default
+    }
+
+    #[test]
+    fn event_container_two_params() {
+        // Event with 2 parameters (20 bytes total)
+        let bytes = vec![
+            0x14, 0x00, 0x00, 0x00, // length = 20
+            0x04, 0x00, // type = Event
+            0x02, 0x40, // code = ObjectAdded
+            0x05, 0x00, 0x00, 0x00, // transaction_id = 5
+            0x0A, 0x00, 0x00, 0x00, // param1 = 10
+            0x14, 0x00, 0x00, 0x00, // param2 = 20
+        ];
+        let event = EventContainer::from_bytes(&bytes).unwrap();
+        assert_eq!(event.transaction_id, 5);
+        assert_eq!(event.params[0], 10);
+        assert_eq!(event.params[1], 20);
+        assert_eq!(event.params[2], 0); // Default
+    }
+
+    #[test]
+    fn event_container_length_too_large() {
+        // Event with length > 24 (too many params)
+        let bytes = vec![
+            0x1C, 0x00, 0x00, 0x00, // length = 28 (invalid - max is 24)
             0x04, 0x00, // type = Event
             0x02, 0x40, // code
             0x00, 0x00, 0x00, 0x00, // transaction_id
@@ -768,6 +842,19 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // param2
             0x00, 0x00, 0x00, 0x00, // param3
             0x00, 0x00, 0x00, 0x00, // extra param (not allowed)
+        ];
+        assert!(EventContainer::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn event_container_unaligned_length() {
+        // Event with unaligned parameter bytes (14 bytes = 12 header + 2 bytes)
+        let bytes = vec![
+            0x0E, 0x00, 0x00, 0x00, // length = 14 (not aligned to 4)
+            0x04, 0x00, // type = Event
+            0x02, 0x40, // code
+            0x00, 0x00, 0x00, 0x00, // transaction_id
+            0x00, 0x00, // 2 extra bytes (not a full param)
         ];
         assert!(EventContainer::from_bytes(&bytes).is_err());
     }
@@ -1221,10 +1308,15 @@ mod tests {
             prop_assert!(result.is_err());
         }
 
-        /// EventContainer with wrong length (not 24)
+        /// EventContainer with invalid length (< 12, > 24, or unaligned)
         #[test]
-        fn fuzz_event_container_wrong_length(
-            fake_length in (0u32..24u32).prop_union(25u32..100u32),
+        fn fuzz_event_container_invalid_length(
+            // Test lengths that are invalid: 0-11 (too small), 25+ (too large), or unaligned (13-15, 17-19, 21-23)
+            fake_length in prop::sample::select(vec![
+                0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, // Too small
+                13, 14, 15, 17, 18, 19, 21, 22, 23,      // Unaligned
+                25, 26, 28, 32, 100,                      // Too large
+            ]),
             transaction_id: u32,
         ) {
             let mut buf = Vec::new();
@@ -1232,14 +1324,64 @@ mod tests {
             buf.extend_from_slice(&4u16.to_le_bytes()); // Event type
             buf.extend_from_slice(&0x4002u16.to_le_bytes()); // ObjectAdded
             buf.extend_from_slice(&transaction_id.to_le_bytes());
-            // Add 3 params
+            // Add 3 params to ensure buffer is large enough
             buf.extend_from_slice(&0u32.to_le_bytes());
             buf.extend_from_slice(&0u32.to_le_bytes());
             buf.extend_from_slice(&0u32.to_le_bytes());
 
             let result = EventContainer::from_bytes(&buf);
-            // Events must be exactly 24 bytes
+            // These lengths should all be rejected
             prop_assert!(result.is_err());
+        }
+
+        /// EventContainer with valid lengths (12, 16, 20, 24) should succeed
+        #[test]
+        fn fuzz_event_container_valid_length(
+            valid_length in prop::sample::select(vec![12u32, 16, 20, 24]),
+            transaction_id: u32,
+            param1: u32,
+            param2: u32,
+            param3: u32,
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&valid_length.to_le_bytes());
+            buf.extend_from_slice(&4u16.to_le_bytes()); // Event type
+            buf.extend_from_slice(&0x4002u16.to_le_bytes()); // ObjectAdded
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            // Add params up to what the length claims
+            if valid_length >= 16 {
+                buf.extend_from_slice(&param1.to_le_bytes());
+            }
+            if valid_length >= 20 {
+                buf.extend_from_slice(&param2.to_le_bytes());
+            }
+            if valid_length >= 24 {
+                buf.extend_from_slice(&param3.to_le_bytes());
+            }
+
+            let result = EventContainer::from_bytes(&buf);
+            prop_assert!(result.is_ok());
+
+            let event = result.unwrap();
+            prop_assert_eq!(event.transaction_id, transaction_id);
+
+            // Check params are parsed or defaulted correctly
+            let param_count = (valid_length as usize - 12) / 4;
+            if param_count >= 1 {
+                prop_assert_eq!(event.params[0], param1);
+            } else {
+                prop_assert_eq!(event.params[0], 0);
+            }
+            if param_count >= 2 {
+                prop_assert_eq!(event.params[1], param2);
+            } else {
+                prop_assert_eq!(event.params[1], 0);
+            }
+            if param_count >= 3 {
+                prop_assert_eq!(event.params[2], param3);
+            } else {
+                prop_assert_eq!(event.params[2], 0);
+            }
         }
     }
 
