@@ -18,17 +18,42 @@ pub struct PtpDevice {
 }
 
 impl PtpDevice {
-    /// Open a PTP device by USB bus/address.
-    pub async fn open(bus: u8, address: u8) -> Result<Self, Error> {
-        Self::open_with_timeout(bus, address, NusbTransport::DEFAULT_TIMEOUT).await
+    /// Open a PTP device at a specific USB location (port).
+    pub async fn open_by_location(location_id: u64) -> Result<Self, Error> {
+        Self::open_by_location_with_timeout(location_id, NusbTransport::DEFAULT_TIMEOUT).await
     }
 
-    /// Open with custom timeout.
-    pub async fn open_with_timeout(bus: u8, address: u8, timeout: Duration) -> Result<Self, Error> {
+    /// Open by location with custom timeout.
+    pub async fn open_by_location_with_timeout(
+        location_id: u64,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
         let devices = NusbTransport::list_mtp_devices()?;
         let device_info = devices
             .into_iter()
-            .find(|d| d.bus_number() == bus && d.device_address() == address)
+            .find(|d| d.location_id == location_id)
+            .ok_or(Error::NoDevice)?;
+        let device = device_info.open().map_err(Error::Usb)?;
+        let transport = NusbTransport::open_with_timeout(device, timeout).await?;
+        Ok(Self {
+            transport: Arc::new(transport),
+        })
+    }
+
+    /// Open a PTP device by its serial number.
+    pub async fn open_by_serial(serial: &str) -> Result<Self, Error> {
+        Self::open_by_serial_with_timeout(serial, NusbTransport::DEFAULT_TIMEOUT).await
+    }
+
+    /// Open by serial with custom timeout.
+    pub async fn open_by_serial_with_timeout(
+        serial: &str,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
+        let devices = NusbTransport::list_mtp_devices()?;
+        let device_info = devices
+            .into_iter()
+            .find(|d| d.serial_number.as_deref() == Some(serial))
             .ok_or(Error::NoDevice)?;
         let device = device_info.open().map_err(Error::Usb)?;
         let transport = NusbTransport::open_with_timeout(device, timeout).await?;

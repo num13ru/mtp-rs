@@ -199,11 +199,13 @@ mod readonly {
         tlog!("Found {} MTP device(s)", devices.len());
         for dev in &devices {
             tlog!(
-                "  Device: {:04x}:{:04x} at bus {} address {}",
+                "  Device: {} {} ({:04x}:{:04x}) serial={:?} location={:08x}",
+                dev.manufacturer.as_deref().unwrap_or("Unknown"),
+                dev.product.as_deref().unwrap_or("Unknown"),
                 dev.vendor_id,
                 dev.product_id,
-                dev.bus,
-                dev.address
+                dev.serial_number,
+                dev.location_id
             );
         }
         tlog!("Device listing complete");

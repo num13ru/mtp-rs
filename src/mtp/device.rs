@@ -70,9 +70,19 @@ impl MtpDevice {
         Self::builder().open_first().await
     }
 
-    /// Open a specific device by USB bus/address with default settings.
-    pub async fn open(bus: u8, address: u8) -> Result<Self, Error> {
-        Self::builder().open(bus, address).await
+    /// Open a device at a specific USB location (port) with default settings.
+    ///
+    /// Use `list_devices()` to get available location IDs.
+    pub async fn open_by_location(location_id: u64) -> Result<Self, Error> {
+        Self::builder().open_by_location(location_id).await
+    }
+
+    /// Open a device by its serial number with default settings.
+    ///
+    /// This identifies a specific physical device regardless of which USB port
+    /// it's connected to.
+    pub async fn open_by_serial(serial: &str) -> Result<Self, Error> {
+        Self::builder().open_by_serial(serial).await
     }
 
     /// List all available MTP devices without opening them.
@@ -81,10 +91,12 @@ impl MtpDevice {
         Ok(devices
             .into_iter()
             .map(|d| MtpDeviceInfo {
-                bus: d.bus_number(),
-                address: d.device_address(),
-                vendor_id: d.vendor_id(),
-                product_id: d.product_id(),
+                vendor_id: d.vendor_id,
+                product_id: d.product_id,
+                manufacturer: d.manufacturer,
+                product: d.product,
+                serial_number: d.serial_number,
+                location_id: d.location_id,
             })
             .collect())
     }
@@ -191,25 +203,97 @@ impl MtpDevice {
 }
 
 /// Information about an MTP device (without opening it).
+///
+/// This struct provides device identification at multiple levels:
+///
+/// - **Device identity** (`vendor_id`, `product_id`, `serial_number`): Identifies
+///   a specific physical device. Use this to recognize "John's phone" regardless
+///   of which USB port it's plugged into.
+///
+/// - **Port identity** (`location_id`): Identifies the physical USB port/location.
+///   Use this when you care about "the device on port 3" rather than which
+///   specific device it is. Stable across reconnections to the same port.
+///
+/// - **Display info** (`manufacturer`, `product`): Human-readable strings for
+///   showing device info to users.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let devices = MtpDevice::list_devices()?;
+/// for dev in &devices {
+///     println!("{} {} (serial: {:?})",
+///              dev.manufacturer.as_deref().unwrap_or("Unknown"),
+///              dev.product.as_deref().unwrap_or("Unknown"),
+///              dev.serial_number);
+/// }
+///
+/// // Save location_id to remember "the device on this port"
+/// // Save serial_number to remember "this specific phone"
+/// ```
 #[derive(Debug, Clone)]
 pub struct MtpDeviceInfo {
-    /// USB bus number
-    pub bus: u8,
-    /// USB device address
-    pub address: u8,
-    /// USB vendor ID
+    /// USB vendor ID (assigned by USB-IF to each company).
+    ///
+    /// Examples: Google = `0x18d1`, Samsung = `0x04e8`, Apple = `0x05ac`
     pub vendor_id: u16,
-    /// USB product ID
+
+    /// USB product ID (assigned by vendor to each product model).
+    ///
+    /// Note: The same device may report different product IDs depending on
+    /// its USB mode (MTP, ADB, charging-only, etc.).
     pub product_id: u16,
+
+    /// Manufacturer name from USB descriptor.
+    ///
+    /// Examples: `"Google"`, `"Samsung"`, `"Apple Inc."`
+    ///
+    /// `None` if the device doesn't report a manufacturer string.
+    pub manufacturer: Option<String>,
+
+    /// Product name from USB descriptor.
+    ///
+    /// Examples: `"Pixel 9 Pro XL"`, `"Galaxy S24"`
+    ///
+    /// `None` if the device doesn't report a product string.
+    pub product: Option<String>,
+
+    /// Serial number uniquely identifying this specific device.
+    ///
+    /// Combined with `vendor_id` and `product_id`, this globally identifies
+    /// a single physical device. Survives reconnection to different ports.
+    ///
+    /// `None` if the device doesn't report a serial number.
+    pub serial_number: Option<String>,
+
+    /// Physical USB location identifier.
+    ///
+    /// Identifies the USB port/path where the device is connected. Stable
+    /// across reconnections to the same physical port, but changes if the
+    /// device is moved to a different port.
+    ///
+    /// Platform details:
+    /// - **macOS**: IOKit `locationID` encoding the port path
+    /// - **Linux**: Derived from sysfs bus/port path
+    /// - **Windows**: `LocationInformation` property
+    pub location_id: u64,
 }
 
 impl MtpDeviceInfo {
     /// Format the device info for display.
     pub fn display(&self) -> String {
-        format!(
-            "{:04x}:{:04x} at {}:{}",
-            self.vendor_id, self.product_id, self.bus, self.address
-        )
+        let manufacturer = self.manufacturer.as_deref().unwrap_or("Unknown");
+        let product = self.product.as_deref().unwrap_or("Unknown");
+        match &self.serial_number {
+            Some(serial) => format!(
+                "{} {} (serial: {}, location: {:08x})",
+                manufacturer, product, serial, self.location_id
+            ),
+            None => format!(
+                "{} {} (location: {:08x})",
+                manufacturer, product, self.location_id
+            ),
+        }
     }
 }
 
@@ -240,12 +324,28 @@ impl MtpDeviceBuilder {
         self.open_device(device).await
     }
 
-    /// Open a specific device by bus/address.
-    pub async fn open(self, bus: u8, address: u8) -> Result<MtpDevice, Error> {
+    /// Open a device at a specific USB location (port).
+    ///
+    /// Use `MtpDevice::list_devices()` to get available location IDs.
+    pub async fn open_by_location(self, location_id: u64) -> Result<MtpDevice, Error> {
         let devices = NusbTransport::list_mtp_devices()?;
         let device_info = devices
             .into_iter()
-            .find(|d| d.bus_number() == bus && d.device_address() == address)
+            .find(|d| d.location_id == location_id)
+            .ok_or(Error::NoDevice)?;
+        let device = device_info.open().map_err(Error::Usb)?;
+        self.open_device(device).await
+    }
+
+    /// Open a device by its serial number.
+    ///
+    /// This identifies a specific physical device regardless of which USB port
+    /// it's connected to.
+    pub async fn open_by_serial(self, serial: &str) -> Result<MtpDevice, Error> {
+        let devices = NusbTransport::list_mtp_devices()?;
+        let device_info = devices
+            .into_iter()
+            .find(|d| d.serial_number.as_deref() == Some(serial))
             .ok_or(Error::NoDevice)?;
         let device = device_info.open().map_err(Error::Usb)?;
         self.open_device(device).await
@@ -307,14 +407,49 @@ mod tests {
     #[test]
     fn test_mtp_device_info_display() {
         let info = MtpDeviceInfo {
-            bus: 1,
-            address: 5,
             vendor_id: 0x04e8,
             product_id: 0x6860,
+            manufacturer: Some("Samsung".to_string()),
+            product: Some("Galaxy S24".to_string()),
+            serial_number: Some("ABC123".to_string()),
+            location_id: 0x00200000,
         };
         let display = info.display();
-        assert!(display.contains("04e8:6860"));
-        assert!(display.contains("1:5"));
+        assert!(display.contains("Samsung"));
+        assert!(display.contains("Galaxy S24"));
+        assert!(display.contains("ABC123"));
+        assert!(display.contains("00200000"));
+    }
+
+    #[test]
+    fn test_mtp_device_info_display_no_serial() {
+        let info = MtpDeviceInfo {
+            vendor_id: 0x04e8,
+            product_id: 0x6860,
+            manufacturer: Some("Samsung".to_string()),
+            product: Some("Galaxy S24".to_string()),
+            serial_number: None,
+            location_id: 0x00200000,
+        };
+        let display = info.display();
+        assert!(display.contains("Samsung"));
+        assert!(display.contains("Galaxy S24"));
+        assert!(display.contains("00200000"));
+        assert!(!display.contains("serial:"));
+    }
+
+    #[test]
+    fn test_mtp_device_info_display_unknown_manufacturer() {
+        let info = MtpDeviceInfo {
+            vendor_id: 0x04e8,
+            product_id: 0x6860,
+            manufacturer: None,
+            product: None,
+            serial_number: None,
+            location_id: 0x00200000,
+        };
+        let display = info.display();
+        assert!(display.contains("Unknown"));
     }
 
     #[tokio::test]

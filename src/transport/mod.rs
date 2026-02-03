@@ -3,7 +3,7 @@
 pub mod mock;
 pub mod nusb;
 
-pub use self::nusb::NusbTransport;
+pub use self::nusb::{NusbTransport, UsbDeviceInfo};
 
 use async_trait::async_trait;
 

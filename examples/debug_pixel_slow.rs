@@ -65,12 +65,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nFound {} device(s)", devices.len());
     for (i, d) in devices.iter().enumerate() {
         println!(
-            "  {}. {:04x}:{:04x} at bus {} addr {}",
+            "  {}. {} {} ({:04x}:{:04x}) serial={:?} location={:08x}",
             i + 1,
-            d.vendor_id(),
-            d.product_id(),
-            d.bus_number(),
-            d.device_address()
+            d.manufacturer.as_deref().unwrap_or("Unknown"),
+            d.product.as_deref().unwrap_or("Unknown"),
+            d.vendor_id,
+            d.product_id,
+            d.serial_number,
+            d.location_id
         );
     }
     println!();

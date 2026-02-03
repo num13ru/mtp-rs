@@ -290,8 +290,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "core-foundation",
  "futures",
  "futures-timer",
+ "io-kit-sys",
  "nusb",
  "parking_lot",
  "proptest",
