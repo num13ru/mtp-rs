@@ -314,7 +314,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetDeviceInfo, &[])
             .await?;
-        Self::check_response(response, OperationCode::GetDeviceInfo)?;
+        Self::check_response(&response, OperationCode::GetDeviceInfo)?;
         DeviceInfo::from_bytes(&data)
     }
 
@@ -325,7 +325,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetStorageIds, &[])
             .await?;
-        Self::check_response(response, OperationCode::GetStorageIds)?;
+        Self::check_response(&response, OperationCode::GetStorageIds)?;
         let (ids, _) = unpack_u32_array(&data)?;
         Ok(ids.into_iter().map(StorageId).collect())
     }
@@ -338,7 +338,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetStorageInfo, &[storage_id.0])
             .await?;
-        Self::check_response(response, OperationCode::GetStorageInfo)?;
+        Self::check_response(&response, OperationCode::GetStorageInfo)?;
         StorageInfo::from_bytes(&data)
     }
 
@@ -367,7 +367,7 @@ impl PtpSession {
                 &[storage_id.0, format_code, parent_handle],
             )
             .await?;
-        Self::check_response(response, OperationCode::GetObjectHandles)?;
+        Self::check_response(&response, OperationCode::GetObjectHandles)?;
         let (handles, _) = unpack_u32_array(&data)?;
         Ok(handles.into_iter().map(ObjectHandle).collect())
     }
@@ -379,7 +379,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetObjectInfo, &[handle.0])
             .await?;
-        Self::check_response(response, OperationCode::GetObjectInfo)?;
+        Self::check_response(&response, OperationCode::GetObjectInfo)?;
         ObjectInfo::from_bytes(&data)
     }
 
@@ -390,7 +390,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetObject, &[handle.0])
             .await?;
-        Self::check_response(response, OperationCode::GetObject)?;
+        Self::check_response(&response, OperationCode::GetObject)?;
         Ok(data)
     }
 
@@ -417,7 +417,7 @@ impl PtpSession {
                 &[handle.0, offset as u32, max_bytes],
             )
             .await?;
-        Self::check_response(response, OperationCode::GetPartialObject)?;
+        Self::check_response(&response, OperationCode::GetPartialObject)?;
         Ok(data)
     }
 
@@ -428,7 +428,7 @@ impl PtpSession {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetThumb, &[handle.0])
             .await?;
-        Self::check_response(response, OperationCode::GetThumb)?;
+        Self::check_response(&response, OperationCode::GetThumb)?;
         Ok(data)
     }
 
@@ -457,7 +457,7 @@ impl PtpSession {
                 &data,
             )
             .await?;
-        Self::check_response(response.clone(), OperationCode::SendObjectInfo)?;
+        Self::check_response(&response, OperationCode::SendObjectInfo)?;
 
         // Response params: storage_id, parent_handle, object_handle
         if response.params.len() < 3 {
@@ -480,7 +480,7 @@ impl PtpSession {
         let response = self
             .execute_with_send(OperationCode::SendObject, &[], data)
             .await?;
-        Self::check_response(response, OperationCode::SendObject)?;
+        Self::check_response(&response, OperationCode::SendObject)?;
         Ok(())
     }
 
@@ -492,7 +492,7 @@ impl PtpSession {
         let response = self
             .execute(OperationCode::DeleteObject, &[handle.0, 0])
             .await?;
-        Self::check_response(response, OperationCode::DeleteObject)?;
+        Self::check_response(&response, OperationCode::DeleteObject)?;
         Ok(())
     }
 
@@ -511,7 +511,7 @@ impl PtpSession {
                 &[handle.0, storage_id.0, parent.0],
             )
             .await?;
-        Self::check_response(response, OperationCode::MoveObject)?;
+        Self::check_response(&response, OperationCode::MoveObject)?;
         Ok(())
     }
 
@@ -534,7 +534,7 @@ impl PtpSession {
                 &[handle.0, storage_id.0, parent.0],
             )
             .await?;
-        Self::check_response(response.clone(), OperationCode::CopyObject)?;
+        Self::check_response(&response, OperationCode::CopyObject)?;
 
         if response.params.is_empty() {
             return Err(Error::invalid_data("CopyObject response missing handle"));
@@ -566,7 +566,7 @@ impl PtpSession {
                 &[handle.0, property.to_code() as u32],
             )
             .await?;
-        Self::check_response(response, OperationCode::GetObjectPropValue)?;
+        Self::check_response(&response, OperationCode::GetObjectPropValue)?;
         Ok(data)
     }
 
@@ -593,7 +593,7 @@ impl PtpSession {
                 value,
             )
             .await?;
-        Self::check_response(response, OperationCode::SetObjectPropValue)?;
+        Self::check_response(&response, OperationCode::SetObjectPropValue)?;
         Ok(())
     }
 
@@ -649,7 +649,7 @@ impl PtpSession {
                 &[property.to_code() as u32],
             )
             .await?;
-        Self::check_response(response, OperationCode::GetDevicePropDesc)?;
+        Self::check_response(&response, OperationCode::GetDevicePropDesc)?;
         DevicePropDesc::from_bytes(&data)
     }
 
@@ -672,7 +672,7 @@ impl PtpSession {
                 &[property.to_code() as u32],
             )
             .await?;
-        Self::check_response(response, OperationCode::GetDevicePropValue)?;
+        Self::check_response(&response, OperationCode::GetDevicePropValue)?;
         Ok(data)
     }
 
@@ -716,7 +716,7 @@ impl PtpSession {
                 value,
             )
             .await?;
-        Self::check_response(response, OperationCode::SetDevicePropValue)?;
+        Self::check_response(&response, OperationCode::SetDevicePropValue)?;
         Ok(())
     }
 
@@ -749,7 +749,7 @@ impl PtpSession {
                 &[property.to_code() as u32],
             )
             .await?;
-        Self::check_response(response, OperationCode::ResetDevicePropValue)?;
+        Self::check_response(&response, OperationCode::ResetDevicePropValue)?;
         Ok(())
     }
 
@@ -808,7 +808,7 @@ impl PtpSession {
         let response = self
             .execute(OperationCode::InitiateCapture, &[storage_id.0, format_code])
             .await?;
-        Self::check_response(response, OperationCode::InitiateCapture)?;
+        Self::check_response(&response, OperationCode::InitiateCapture)?;
         Ok(())
     }
 
@@ -846,7 +846,7 @@ impl PtpSession {
     // =========================================================================
 
     /// Helper to check response is OK.
-    fn check_response(response: ResponseContainer, operation: OperationCode) -> Result<(), Error> {
+    fn check_response(response: &ResponseContainer, operation: OperationCode) -> Result<(), Error> {
         if response.code == ResponseCode::Ok {
             Ok(())
         } else {
@@ -1020,7 +1020,7 @@ impl PtpSession {
         let response = self
             .execute_with_send_stream(OperationCode::SendObject, &[], total_size, data)
             .await?;
-        Self::check_response(response, OperationCode::SendObject)?;
+        Self::check_response(&response, OperationCode::SendObject)?;
         Ok(())
     }
 }
