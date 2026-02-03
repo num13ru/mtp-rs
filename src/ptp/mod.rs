@@ -113,6 +113,7 @@ impl TransactionId {
     /// Get the next transaction ID, wrapping correctly.
     ///
     /// Wraps from 0xFFFFFFFE to 0x00000001 (skipping both 0x00000000 and 0xFFFFFFFF).
+    #[must_use]
     pub fn next(self) -> Self {
         let next = self.0.wrapping_add(1);
         if next == 0 || next == 0xFFFFFFFF {

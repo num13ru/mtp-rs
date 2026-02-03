@@ -251,6 +251,7 @@ impl ObjectInfo {
     /// Check if this object is a folder.
     ///
     /// Returns true if the format is Association or the association type is GenericFolder.
+    #[must_use]
     pub fn is_folder(&self) -> bool {
         self.format == ObjectFormatCode::Association
             || self.association_type == AssociationType::GenericFolder
@@ -259,6 +260,7 @@ impl ObjectInfo {
     /// Check if this object is a file.
     ///
     /// Returns true if this is not a folder.
+    #[must_use]
     pub fn is_file(&self) -> bool {
         !self.is_folder()
     }

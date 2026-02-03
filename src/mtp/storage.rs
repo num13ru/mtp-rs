@@ -27,11 +27,13 @@ impl Storage {
         Self { inner, id, info }
     }
 
+    #[must_use]
     pub fn id(&self) -> StorageId {
         self.id
     }
 
     /// Storage information (cached, call refresh() to update).
+    #[must_use]
     pub fn info(&self) -> &StorageInfo {
         &self.info
     }

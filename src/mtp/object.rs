@@ -17,6 +17,7 @@ pub struct NewObjectInfo {
 
 impl NewObjectInfo {
     /// Create info for a file. Format auto-detected from extension.
+    #[must_use]
     pub fn file(filename: impl Into<String>, size: u64) -> Self {
         let filename = filename.into();
         let format = detect_format_from_filename(&filename);
@@ -29,6 +30,7 @@ impl NewObjectInfo {
     }
 
     /// Create info for a folder.
+    #[must_use]
     pub fn folder(name: impl Into<String>) -> Self {
         Self {
             filename: name.into(),
@@ -39,6 +41,7 @@ impl NewObjectInfo {
     }
 
     /// Create info with explicit format.
+    #[must_use]
     pub fn with_format(filename: impl Into<String>, size: u64, format: ObjectFormatCode) -> Self {
         Self {
             filename: filename.into(),
@@ -49,6 +52,7 @@ impl NewObjectInfo {
     }
 
     /// Set modification time.
+    #[must_use]
     pub fn with_modified(mut self, modified: DateTime) -> Self {
         self.modified = Some(modified);
         self

@@ -67,11 +67,13 @@ pub enum OperationCode {
 
 impl OperationCode {
     /// Convert a raw u16 code to an OperationCode.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert an OperationCode to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }
@@ -138,11 +140,13 @@ pub enum ResponseCode {
 
 impl ResponseCode {
     /// Convert a raw u16 code to a ResponseCode.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert a ResponseCode to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }
@@ -179,11 +183,13 @@ pub enum EventCode {
 
 impl EventCode {
     /// Convert a raw u16 code to an EventCode.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert an EventCode to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }
@@ -254,11 +260,13 @@ pub enum ObjectFormatCode {
 
 impl ObjectFormatCode {
     /// Convert a raw u16 code to an ObjectFormatCode.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert an ObjectFormatCode to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }
@@ -266,6 +274,7 @@ impl ObjectFormatCode {
     /// Detect object format from file extension (case insensitive).
     ///
     /// Returns `Undefined` for unrecognized extensions.
+    #[must_use]
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             // Text and documents
@@ -307,6 +316,7 @@ impl ObjectFormatCode {
     }
 
     /// Check if this format is an audio format.
+    #[must_use]
     pub fn is_audio(&self) -> bool {
         matches!(
             self,
@@ -322,6 +332,7 @@ impl ObjectFormatCode {
     }
 
     /// Check if this format is a video format.
+    #[must_use]
     pub fn is_video(&self) -> bool {
         matches!(
             self,
@@ -334,6 +345,7 @@ impl ObjectFormatCode {
     }
 
     /// Check if this format is an image format.
+    #[must_use]
     pub fn is_image(&self) -> bool {
         matches!(
             self,
@@ -386,11 +398,13 @@ pub enum ObjectPropertyCode {
 
 impl ObjectPropertyCode {
     /// Convert a raw u16 code to an ObjectPropertyCode.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert an ObjectPropertyCode to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }
@@ -433,11 +447,13 @@ pub enum PropertyDataType {
 
 impl PropertyDataType {
     /// Convert a raw u16 code to a PropertyDataType.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert a PropertyDataType to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }
@@ -446,6 +462,7 @@ impl PropertyDataType {
     ///
     /// Returns `None` for variable-length types (String) and unsupported types
     /// (Undefined, Int128, Uint128, Unknown).
+    #[must_use]
     pub fn byte_size(&self) -> Option<usize> {
         match self {
             PropertyDataType::Int8 | PropertyDataType::Uint8 => Some(1),
@@ -543,11 +560,13 @@ pub enum DevicePropertyCode {
 
 impl DevicePropertyCode {
     /// Convert a raw u16 code to a DevicePropertyCode.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         code.into()
     }
 
     /// Convert a DevicePropertyCode to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self.into()
     }

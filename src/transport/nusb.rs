@@ -223,6 +223,7 @@ impl NusbTransport {
     }
 
     /// Get the bulk transfer timeout.
+    #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
@@ -233,6 +234,7 @@ impl NusbTransport {
     }
 
     /// Get the event polling timeout.
+    #[must_use]
     pub fn event_timeout(&self) -> Duration {
         self.event_timeout
     }
@@ -247,16 +249,19 @@ impl NusbTransport {
     }
 
     /// Get the bulk IN endpoint address.
+    #[must_use]
     pub fn bulk_in_endpoint(&self) -> u8 {
         self.bulk_in
     }
 
     /// Get the bulk OUT endpoint address.
+    #[must_use]
     pub fn bulk_out_endpoint(&self) -> u8 {
         self.bulk_out
     }
 
     /// Get the interrupt IN endpoint address.
+    #[must_use]
     pub fn interrupt_in_endpoint(&self) -> u8 {
         self.interrupt_in
     }

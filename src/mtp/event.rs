@@ -58,6 +58,7 @@ pub enum DeviceEvent {
 
 impl DeviceEvent {
     /// Parse from an event container.
+    #[must_use]
     pub fn from_container(container: &EventContainer) -> Self {
         match container.code {
             EventCode::ObjectAdded => DeviceEvent::ObjectAdded {

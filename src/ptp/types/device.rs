@@ -146,6 +146,7 @@ impl DeviceInfo {
     /// # Returns
     ///
     /// Returns true if the operation is in the device's supported operations list.
+    #[must_use]
     pub fn supports_operation(&self, operation: OperationCode) -> bool {
         self.operations_supported.contains(&operation)
     }
@@ -158,6 +159,7 @@ impl DeviceInfo {
     /// # Returns
     ///
     /// Returns true if the device advertises SetObjectPropValue support.
+    #[must_use]
     pub fn supports_rename(&self) -> bool {
         self.supports_operation(OperationCode::SetObjectPropValue)
     }

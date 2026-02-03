@@ -26,6 +26,7 @@ pub struct MockTransport {
 
 impl MockTransport {
     /// Create a new mock transport with no expectations or queued responses.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             expected_sends: Mutex::new(VecDeque::new()),

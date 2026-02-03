@@ -218,6 +218,7 @@ pub struct ReceiveStream {
 
 impl ReceiveStream {
     /// Get the transaction ID for this operation.
+    #[must_use]
     pub fn transaction_id(&self) -> u32 {
         self.transaction_id
     }

@@ -16,6 +16,7 @@ pub struct Progress {
 
 impl Progress {
     /// Progress as a percentage (0.0 to 100.0), if total is known.
+    #[must_use]
     pub fn percent(&self) -> Option<f64> {
         self.total_bytes.map(|total| {
             if total == 0 {
@@ -27,6 +28,7 @@ impl Progress {
     }
 
     /// Progress as a fraction (0.0 to 1.0), if total is known.
+    #[must_use]
     pub fn fraction(&self) -> Option<f64> {
         self.total_bytes.map(|total| {
             if total == 0 {
@@ -78,16 +80,19 @@ impl FileDownload {
     }
 
     /// Total file size in bytes.
+    #[must_use]
     pub fn size(&self) -> u64 {
         self.size
     }
 
     /// Bytes received so far.
+    #[must_use]
     pub fn bytes_received(&self) -> u64 {
         self.bytes_received
     }
 
     /// Progress as a fraction (0.0 to 1.0).
+    #[must_use]
     pub fn progress(&self) -> f64 {
         if self.size == 0 {
             1.0

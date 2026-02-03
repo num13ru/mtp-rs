@@ -34,6 +34,7 @@ pub enum ContainerType {
 
 impl ContainerType {
     /// Convert a raw u16 value to a ContainerType.
+    #[must_use]
     pub fn from_code(code: u16) -> Option<Self> {
         match code {
             1 => Some(ContainerType::Command),
@@ -45,6 +46,7 @@ impl ContainerType {
     }
 
     /// Convert a ContainerType to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         self as u16
     }
@@ -250,6 +252,7 @@ impl ResponseContainer {
     }
 
     /// Check if the response indicates success (Ok).
+    #[must_use]
     pub fn is_ok(&self) -> bool {
         self.code == ResponseCode::Ok
     }

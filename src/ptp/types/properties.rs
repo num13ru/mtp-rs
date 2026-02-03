@@ -111,6 +111,7 @@ impl PropertyValue {
     }
 
     /// Get the data type of this property value.
+    #[must_use]
     pub fn data_type(&self) -> PropertyDataType {
         match self {
             PropertyValue::Int8(_) => PropertyDataType::Int8,
@@ -146,6 +147,7 @@ pub enum PropertyFormType {
 
 impl PropertyFormType {
     /// Convert a raw u8 code to a PropertyFormType.
+    #[must_use]
     pub fn from_code(code: u8) -> Self {
         match code {
             0x00 => PropertyFormType::None,
@@ -156,6 +158,7 @@ impl PropertyFormType {
     }
 
     /// Convert a PropertyFormType to its raw u8 value.
+    #[must_use]
     pub fn to_code(self) -> u8 {
         match self {
             PropertyFormType::None => 0x00,

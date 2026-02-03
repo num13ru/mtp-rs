@@ -29,6 +29,7 @@ pub enum StorageType {
 
 impl StorageType {
     /// Convert a raw u16 code to a StorageType.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         match code {
             0 => StorageType::Undefined,
@@ -41,6 +42,7 @@ impl StorageType {
     }
 
     /// Convert a StorageType to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         match self {
             StorageType::Undefined => 0,
@@ -73,6 +75,7 @@ pub enum FilesystemType {
 
 impl FilesystemType {
     /// Convert a raw u16 code to a FilesystemType.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         match code {
             0 => FilesystemType::Undefined,
@@ -84,6 +87,7 @@ impl FilesystemType {
     }
 
     /// Convert a FilesystemType to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         match self {
             FilesystemType::Undefined => 0,
@@ -113,6 +117,7 @@ pub enum AccessCapability {
 
 impl AccessCapability {
     /// Convert a raw u16 code to an AccessCapability.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         match code {
             0 => AccessCapability::ReadWrite,
@@ -123,6 +128,7 @@ impl AccessCapability {
     }
 
     /// Convert an AccessCapability to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         match self {
             AccessCapability::ReadWrite => 0,
@@ -149,6 +155,7 @@ pub enum ProtectionStatus {
 
 impl ProtectionStatus {
     /// Convert a raw u16 code to a ProtectionStatus.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         match code {
             0 => ProtectionStatus::None,
@@ -158,6 +165,7 @@ impl ProtectionStatus {
     }
 
     /// Convert a ProtectionStatus to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         match self {
             ProtectionStatus::None => 0,
@@ -183,6 +191,7 @@ pub enum AssociationType {
 
 impl AssociationType {
     /// Convert a raw u16 code to an AssociationType.
+    #[must_use]
     pub fn from_code(code: u16) -> Self {
         match code {
             0 => AssociationType::None,
@@ -192,6 +201,7 @@ impl AssociationType {
     }
 
     /// Convert an AssociationType to its raw u16 value.
+    #[must_use]
     pub fn to_code(self) -> u16 {
         match self {
             AssociationType::None => 0,

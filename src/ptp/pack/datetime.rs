@@ -51,6 +51,7 @@ impl DateTime {
     /// assert!(DateTime::new(2024, 13, 1, 0, 0, 0).is_none()); // month > 12
     /// assert!(DateTime::new(2024, 1, 1, 0, 60, 0).is_none()); // minute > 59
     /// ```
+    #[must_use]
     pub fn new(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) -> Option<Self> {
         let dt = DateTime {
             year,
@@ -79,6 +80,7 @@ impl DateTime {
     ///
     /// Note: This does not validate day-of-month against the specific month
     /// (e.g., Feb 31 would pass). MTP devices generally accept any 1-31 value.
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.year <= 9999
             && (1..=12).contains(&self.month)
@@ -94,6 +96,7 @@ impl DateTime {
     /// The timezone suffix is parsed but ignored.
     ///
     /// Returns `None` if the string is malformed or contains invalid values.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         // Minimum length: "YYYYMMDDThhmmss" = 15 characters
         if s.len() < 15 {
@@ -134,6 +137,7 @@ impl DateTime {
     /// let invalid = DateTime { year: 2024, month: 13, day: 1, hour: 0, minute: 0, second: 0 };
     /// assert_eq!(invalid.format(), None);
     /// ```
+    #[must_use]
     pub fn format(&self) -> Option<String> {
         if !self.is_valid() {
             return None;

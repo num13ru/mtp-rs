@@ -52,6 +52,7 @@ pub enum Error {
 
 impl Error {
     /// Create an invalid data error with a message.
+    #[must_use]
     pub fn invalid_data(message: impl Into<String>) -> Self {
         Error::InvalidData {
             message: message.into(),
@@ -63,6 +64,7 @@ impl Error {
     /// Retryable errors are transient and the operation may succeed if retried:
     /// - `DeviceBusy`: Device is temporarily busy
     /// - `Timeout`: Operation timed out but device may still be responsive
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -74,6 +76,7 @@ impl Error {
     }
 
     /// Get the response code if this is a protocol error.
+    #[must_use]
     pub fn response_code(&self) -> Option<crate::ptp::ResponseCode> {
         match self {
             Error::Protocol { code, .. } => Some(*code),
@@ -100,6 +103,7 @@ impl Error {
     ///     Ok(dev) => use_device(dev),
     /// }
     /// ```
+    #[must_use]
     pub fn is_exclusive_access(&self) -> bool {
         match self {
             Error::Usb(io_err) => {

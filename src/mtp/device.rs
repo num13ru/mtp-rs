@@ -19,6 +19,7 @@ impl MtpDeviceInner {
     /// Detected by looking for "android.com" in the vendor extension descriptor.
     /// Android devices have known MTP quirks (e.g., ObjectHandle::ALL doesn't work
     /// for recursive listing).
+    #[must_use]
     pub fn is_android(&self) -> bool {
         self.device_info
             .vendor_extension_desc
@@ -102,6 +103,7 @@ impl MtpDevice {
     }
 
     /// Get device information.
+    #[must_use]
     pub fn device_info(&self) -> &DeviceInfo {
         &self.inner.device_info
     }
@@ -114,6 +116,7 @@ impl MtpDevice {
     /// # Returns
     ///
     /// Returns true if the device advertises SetObjectPropValue support.
+    #[must_use]
     pub fn supports_rename(&self) -> bool {
         self.inner.device_info.supports_rename()
     }
@@ -297,6 +300,7 @@ pub struct MtpDeviceInfo {
 
 impl MtpDeviceInfo {
     /// Format the device info for display.
+    #[must_use]
     pub fn display(&self) -> String {
         let manufacturer = self.manufacturer.as_deref().unwrap_or("Unknown");
         let product = self.product.as_deref().unwrap_or("Unknown");
@@ -320,6 +324,7 @@ pub struct MtpDeviceBuilder {
 }
 
 impl MtpDeviceBuilder {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             timeout: NusbTransport::DEFAULT_TIMEOUT,
@@ -331,6 +336,7 @@ impl MtpDeviceBuilder {
     ///
     /// This timeout applies to file transfers and command responses.
     /// Use longer timeouts for large file operations.
+    #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -341,6 +347,7 @@ impl MtpDeviceBuilder {
     /// This timeout controls how long `next_event()` waits for device events.
     /// Shorter timeouts (100-500ms) enable responsive event loops without
     /// blocking other operations. Longer timeouts reduce polling overhead.
+    #[must_use]
     pub fn event_timeout(mut self, timeout: Duration) -> Self {
         self.event_timeout = timeout;
         self
