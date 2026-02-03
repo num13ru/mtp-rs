@@ -145,9 +145,7 @@ impl DateTime {
     }
 }
 
-// =============================================================================
-// Primitive packing functions
-// =============================================================================
+// --- Primitive packing functions ---
 
 /// Pack a u8 value into a 1-byte array.
 #[inline]
@@ -197,9 +195,7 @@ pub fn pack_i64(val: i64) -> [u8; 8] {
     val.to_le_bytes()
 }
 
-// =============================================================================
-// Primitive unpacking functions
-// =============================================================================
+// --- Primitive unpacking functions ---
 
 /// Unpack a u8 value from a buffer.
 pub fn unpack_u8(buf: &[u8]) -> Result<u8, crate::Error> {
@@ -291,9 +287,7 @@ pub fn unpack_i64(buf: &[u8]) -> Result<i64, crate::Error> {
     ]))
 }
 
-// =============================================================================
-// String encoding/decoding
-// =============================================================================
+// --- String encoding/decoding ---
 
 /// Pack a string into MTP format (UTF-16LE with length prefix).
 ///
@@ -378,9 +372,7 @@ pub fn unpack_string(buf: &[u8]) -> Result<(String, usize), crate::Error> {
     Ok((s, required))
 }
 
-// =============================================================================
-// Array encoding/decoding
-// =============================================================================
+// --- Array encoding/decoding ---
 
 /// Pack a u16 array into MTP format.
 ///
@@ -482,9 +474,7 @@ pub fn unpack_u32_array(buf: &[u8]) -> Result<(Vec<u32>, usize), crate::Error> {
     Ok((result, required))
 }
 
-// =============================================================================
-// DateTime encoding/decoding
-// =============================================================================
+// --- DateTime encoding/decoding ---
 
 /// Pack a DateTime into MTP string format.
 ///

@@ -330,9 +330,7 @@ impl Transport for NusbTransport {
     }
 }
 
-// ============================================================================
-// Platform-specific location ID retrieval
-// ============================================================================
+// --- Platform-specific location ID retrieval ---
 
 /// Map of (vendor_id, product_id, serial) -> location_id
 type LocationMap = std::collections::HashMap<(u16, u16, Option<String>), u64>;

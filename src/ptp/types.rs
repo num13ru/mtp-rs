@@ -15,9 +15,7 @@ use super::pack::{
 };
 use super::{EventCode, ObjectFormatCode, ObjectHandle, OperationCode, StorageId};
 
-// =============================================================================
-// Storage Type Enum
-// =============================================================================
+// --- Storage Type Enum ---
 
 /// Type of storage medium.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,9 +61,7 @@ impl StorageType {
     }
 }
 
-// =============================================================================
-// Filesystem Type Enum
-// =============================================================================
+// --- Filesystem Type Enum ---
 
 /// Type of filesystem on the storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,9 +103,7 @@ impl FilesystemType {
     }
 }
 
-// =============================================================================
-// Access Capability Enum
-// =============================================================================
+// --- Access Capability Enum ---
 
 /// Access capability of the storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -147,9 +141,7 @@ impl AccessCapability {
     }
 }
 
-// =============================================================================
-// Protection Status Enum
-// =============================================================================
+// --- Protection Status Enum ---
 
 /// Protection status of an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -183,9 +175,7 @@ impl ProtectionStatus {
     }
 }
 
-// =============================================================================
-// Association Type Enum
-// =============================================================================
+// --- Association Type Enum ---
 
 /// Association type for objects (folder/container type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -219,9 +209,7 @@ impl AssociationType {
     }
 }
 
-// =============================================================================
-// PropertyValue Enum
-// =============================================================================
+// --- PropertyValue Enum ---
 
 /// A property value with its associated type.
 ///
@@ -335,9 +323,7 @@ impl PropertyValue {
     }
 }
 
-// =============================================================================
-// PropertyFormType Enum
-// =============================================================================
+// --- PropertyFormType Enum ---
 
 /// Form type for property value constraints.
 ///
@@ -377,9 +363,7 @@ impl PropertyFormType {
     }
 }
 
-// =============================================================================
-// PropertyRange Struct
-// =============================================================================
+// --- PropertyRange Struct ---
 
 /// Range constraint for a property value.
 ///
@@ -426,9 +410,7 @@ impl PropertyRange {
     }
 }
 
-// =============================================================================
-// DevicePropDesc Structure
-// =============================================================================
+// --- DevicePropDesc Structure ---
 
 /// Device property descriptor.
 ///
@@ -533,9 +515,7 @@ impl DevicePropDesc {
     }
 }
 
-// =============================================================================
-// DeviceInfo Structure
-// =============================================================================
+// --- DeviceInfo Structure ---
 
 /// Device information returned by GetDeviceInfo.
 ///
@@ -690,9 +670,7 @@ impl DeviceInfo {
     }
 }
 
-// =============================================================================
-// StorageInfo Structure
-// =============================================================================
+// --- StorageInfo Structure ---
 
 /// Storage information returned by GetStorageInfo.
 ///
@@ -768,9 +746,7 @@ impl StorageInfo {
     }
 }
 
-// =============================================================================
-// ObjectInfo Structure
-// =============================================================================
+// --- ObjectInfo Structure ---
 
 /// Object information returned by GetObjectInfo.
 ///
