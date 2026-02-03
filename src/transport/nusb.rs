@@ -332,8 +332,7 @@ fn get_usb_location_ids() -> LocationMap {
         // Get iterator for matching services
         let mut iterator: io_iterator_t = 0;
         #[allow(deprecated)]
-        let result =
-            IOServiceGetMatchingServices(kIOMasterPortDefault, matching, &mut iterator);
+        let result = IOServiceGetMatchingServices(kIOMasterPortDefault, matching, &mut iterator);
         if result != ret::kIOReturnSuccess {
             return map;
         }
@@ -347,10 +346,8 @@ fn get_usb_location_ids() -> LocationMap {
 
             // Get properties we need
             let vendor_id = get_iokit_property_number(service, "idVendor").unwrap_or(0) as u16;
-            let product_id =
-                get_iokit_property_number(service, "idProduct").unwrap_or(0) as u16;
-            let location_id =
-                get_iokit_property_number(service, "locationID").unwrap_or(0) as u64;
+            let product_id = get_iokit_property_number(service, "idProduct").unwrap_or(0) as u16;
+            let location_id = get_iokit_property_number(service, "locationID").unwrap_or(0) as u64;
             let serial = get_iokit_property_string(service, "USB Serial Number");
 
             if vendor_id != 0 && location_id != 0 {
@@ -367,7 +364,10 @@ fn get_usb_location_ids() -> LocationMap {
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn get_iokit_property_number(service: io_kit_sys::types::io_service_t, key: &str) -> Option<i64> {
+unsafe fn get_iokit_property_number(
+    service: io_kit_sys::types::io_service_t,
+    key: &str,
+) -> Option<i64> {
     use core_foundation::base::{kCFAllocatorDefault, TCFType};
     use core_foundation::number::CFNumber;
     use core_foundation::string::CFString;
@@ -389,7 +389,10 @@ unsafe fn get_iokit_property_number(service: io_kit_sys::types::io_service_t, ke
 }
 
 #[cfg(target_os = "macos")]
-unsafe fn get_iokit_property_string(service: io_kit_sys::types::io_service_t, key: &str) -> Option<String> {
+unsafe fn get_iokit_property_string(
+    service: io_kit_sys::types::io_service_t,
+    key: &str,
+) -> Option<String> {
     use core_foundation::base::{kCFAllocatorDefault, TCFType};
     use core_foundation::string::CFString;
     use io_kit_sys::*;
@@ -436,10 +439,7 @@ mod tests {
         for dev in &devices {
             println!(
                 "  {:04x}:{:04x} serial={:?} location={:08x}",
-                dev.vendor_id,
-                dev.product_id,
-                dev.serial_number,
-                dev.location_id,
+                dev.vendor_id, dev.product_id, dev.serial_number, dev.location_id,
             );
         }
     }

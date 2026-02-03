@@ -155,7 +155,13 @@ impl DataContainer {
             )));
         }
 
-        // Validate length
+        // Validate length - must be at least header size and not exceed buffer
+        if length < HEADER_SIZE {
+            return Err(crate::Error::invalid_data(format!(
+                "data container length too small: {} < header size {}",
+                length, HEADER_SIZE
+            )));
+        }
         if buf.len() < length {
             return Err(crate::Error::invalid_data(format!(
                 "data container length mismatch: header says {}, have {}",
@@ -1141,5 +1147,301 @@ mod tests {
             let resp = ResponseContainer::from_bytes(&bytes_with_extra).unwrap();
             prop_assert_eq!(resp.params.len(), 2);
         }
+    }
+
+    // =========================================================================
+    // ADVERSARIAL PROPERTY-BASED TESTS
+    // Goal: Find bugs by testing malformed/invalid/boundary inputs
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // Container with wrong length field tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// DataContainer with length field that doesn't match actual size
+        /// BUG FOUND: When length < HEADER_SIZE (12), line 168 panics:
+        /// `let payload = buf[HEADER_SIZE..length].to_vec()` creates slice 12..N where N < 12
+        /// This test documents the bug - currently skips values < 12 to avoid panic
+        #[test]
+        fn fuzz_data_container_wrong_length(
+            fake_length in 12u32..1000u32, // Skip < 12 to avoid KNOWN BUG (panic)
+            transaction_id: u32,
+            payload in prop::collection::vec(any::<u8>(), 0..50)
+        ) {
+            // Build a container with a lying length field
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&fake_length.to_le_bytes()); // Wrong length
+            buf.extend_from_slice(&2u16.to_le_bytes()); // Data type
+            buf.extend_from_slice(&0x1001u16.to_le_bytes()); // Some code
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            buf.extend_from_slice(&payload);
+
+            // Should handle gracefully - never panic
+            let result = DataContainer::from_bytes(&buf);
+            // If fake_length claims more than we have, should fail
+            let actual_len = buf.len();
+            if fake_length as usize > actual_len {
+                prop_assert!(result.is_err());
+            }
+        }
+
+        /// Test that DataContainer::from_bytes returns Err when length < HEADER_SIZE
+        #[test]
+        fn fuzz_data_container_length_underflow(
+            fake_length in 0u32..12u32,
+            transaction_id: u32,
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&fake_length.to_le_bytes());
+            buf.extend_from_slice(&2u16.to_le_bytes()); // Data type
+            buf.extend_from_slice(&0x1001u16.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+
+            // Should return Err, not panic
+            let result = DataContainer::from_bytes(&buf);
+            prop_assert!(result.is_err());
+        }
+
+        /// ResponseContainer with length field claiming more data than exists
+        #[test]
+        fn fuzz_response_container_wrong_length(
+            fake_length in 13u32..1000u32, // > HEADER_SIZE to claim params
+            transaction_id: u32,
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&fake_length.to_le_bytes());
+            buf.extend_from_slice(&3u16.to_le_bytes()); // Response type
+            buf.extend_from_slice(&0x2001u16.to_le_bytes()); // OK code
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            // No actual params provided
+
+            let result = ResponseContainer::from_bytes(&buf);
+            // Should fail because we claim params but don't provide them
+            prop_assert!(result.is_err());
+        }
+
+        /// EventContainer with wrong length (not 24)
+        #[test]
+        fn fuzz_event_container_wrong_length(
+            fake_length in (0u32..24u32).prop_union(25u32..100u32),
+            transaction_id: u32,
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&fake_length.to_le_bytes());
+            buf.extend_from_slice(&4u16.to_le_bytes()); // Event type
+            buf.extend_from_slice(&0x4002u16.to_le_bytes()); // ObjectAdded
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            // Add 3 params
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+
+            let result = EventContainer::from_bytes(&buf);
+            // Events must be exactly 24 bytes
+            prop_assert!(result.is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Container with invalid type code tests
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Container with invalid type code (0, 5+)
+        #[test]
+        fn fuzz_container_invalid_type(
+            length in 12u32..100u32,
+            invalid_type in prop::sample::select(vec![0u16, 5, 6, 100, 0xFFFF]),
+            code: u16,
+            transaction_id: u32,
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&length.to_le_bytes());
+            buf.extend_from_slice(&invalid_type.to_le_bytes());
+            buf.extend_from_slice(&code.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+
+            let result = container_type(&buf);
+            // Should return error for invalid types
+            prop_assert!(result.is_err());
+        }
+
+        /// DataContainer with wrong container type in header
+        #[test]
+        fn fuzz_data_container_wrong_type(
+            transaction_id: u32,
+            payload in prop::collection::vec(any::<u8>(), 0..20),
+            wrong_type in prop::sample::select(vec![1u16, 3, 4]), // Command, Response, Event
+        ) {
+            let total_len = 12 + payload.len();
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&(total_len as u32).to_le_bytes());
+            buf.extend_from_slice(&wrong_type.to_le_bytes()); // Wrong type!
+            buf.extend_from_slice(&0x1001u16.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            buf.extend_from_slice(&payload);
+
+            let result = DataContainer::from_bytes(&buf);
+            prop_assert!(result.is_err());
+        }
+
+        /// ResponseContainer with wrong container type in header
+        #[test]
+        fn fuzz_response_container_wrong_type(
+            transaction_id: u32,
+            wrong_type in prop::sample::select(vec![1u16, 2, 4]), // Command, Data, Event
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&12u32.to_le_bytes());
+            buf.extend_from_slice(&wrong_type.to_le_bytes()); // Wrong type!
+            buf.extend_from_slice(&0x2001u16.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+
+            let result = ResponseContainer::from_bytes(&buf);
+            prop_assert!(result.is_err());
+        }
+
+        /// EventContainer with wrong container type in header
+        #[test]
+        fn fuzz_event_container_wrong_type(
+            transaction_id: u32,
+            wrong_type in prop::sample::select(vec![1u16, 2, 3]), // Command, Data, Response
+        ) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&24u32.to_le_bytes());
+            buf.extend_from_slice(&wrong_type.to_le_bytes()); // Wrong type!
+            buf.extend_from_slice(&0x4002u16.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+
+            let result = EventContainer::from_bytes(&buf);
+            prop_assert!(result.is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Response container unaligned parameters test
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// ResponseContainer with unaligned parameter bytes (not multiple of 4)
+        #[test]
+        fn fuzz_response_container_unaligned(
+            code: u16,
+            transaction_id: u32,
+            extra_bytes in prop::collection::vec(any::<u8>(), 1..4), // 1-3 bytes, not aligned
+        ) {
+            // Only test lengths 1, 2, 3 (not 0 or 4)
+            prop_assume!(!extra_bytes.is_empty() && extra_bytes.len() < 4);
+
+            let length = 12 + extra_bytes.len() as u32;
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&length.to_le_bytes());
+            buf.extend_from_slice(&3u16.to_le_bytes()); // Response type
+            buf.extend_from_slice(&code.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+            buf.extend_from_slice(&extra_bytes);
+
+            // Should reject unaligned parameter bytes
+            let result = ResponseContainer::from_bytes(&buf);
+            prop_assert!(result.is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Completely random garbage tests - should never panic
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// Random bytes as container_type() input - should never panic
+        #[test]
+        fn fuzz_container_type_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
+            let _ = container_type(&bytes);
+        }
+
+        /// Random bytes as DataContainer - should never panic
+        #[test]
+        fn fuzz_data_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
+            let _ = DataContainer::from_bytes(&bytes);
+        }
+
+        /// Random bytes as ResponseContainer - should never panic
+        #[test]
+        fn fuzz_response_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
+            let _ = ResponseContainer::from_bytes(&bytes);
+        }
+
+        /// Random bytes as EventContainer - should never panic
+        #[test]
+        fn fuzz_event_container_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
+            let _ = EventContainer::from_bytes(&bytes);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Length field edge cases / overflow potential
+    // -------------------------------------------------------------------------
+
+    // Note: fuzz_data_container_tiny_length removed - covered by
+    // fuzz_data_container_length_underflow_bug which documents the panic bug
+
+    proptest! {
+        /// Container with u32::MAX length
+        #[test]
+        fn fuzz_container_max_length(transaction_id: u32) {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&u32::MAX.to_le_bytes());
+            buf.extend_from_slice(&2u16.to_le_bytes());
+            buf.extend_from_slice(&0x1001u16.to_le_bytes());
+            buf.extend_from_slice(&transaction_id.to_le_bytes());
+
+            // Claims to be 4GB, but we only have 12 bytes
+            let result = DataContainer::from_bytes(&buf);
+            prop_assert!(result.is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Boundary tests for header size
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn container_type_exactly_11_bytes() {
+        let buf = [0u8; 11];
+        assert!(container_type(&buf).is_err());
+    }
+
+    #[test]
+    fn container_type_exactly_12_bytes_valid() {
+        let mut buf = [0u8; 12];
+        buf[4] = 1; // Type = Command
+        assert!(container_type(&buf).is_ok());
+    }
+
+    #[test]
+    fn data_container_exactly_12_bytes_empty_payload() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&12u32.to_le_bytes()); // length = 12
+        buf.extend_from_slice(&2u16.to_le_bytes()); // Data type
+        buf.extend_from_slice(&0x1001u16.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        let result = DataContainer::from_bytes(&buf).unwrap();
+        assert!(result.payload.is_empty());
+    }
+
+    #[test]
+    fn response_container_exactly_12_bytes_no_params() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&12u32.to_le_bytes()); // length = 12
+        buf.extend_from_slice(&3u16.to_le_bytes()); // Response type
+        buf.extend_from_slice(&0x2001u16.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes());
+
+        let result = ResponseContainer::from_bytes(&buf).unwrap();
+        assert!(result.params.is_empty());
     }
 }

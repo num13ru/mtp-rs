@@ -2576,4 +2576,279 @@ mod tests {
             prop_assert_eq!(consumed, 12);
         }
     }
+
+    // =========================================================================
+    // ADVERSARIAL PROPERTY-BASED TESTS
+    // Goal: Find bugs by testing malformed/invalid/truncated inputs
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // PropertyValue from_bytes with mismatched/truncated data
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// PropertyValue from_bytes with potentially wrong-sized buffer
+        #[test]
+        fn fuzz_property_value_truncated(
+            data_type_code in 1u16..=8u16, // Int8 through Uint64
+            bytes in prop::collection::vec(any::<u8>(), 0..20)
+        ) {
+            let data_type = PropertyDataType::from_code(data_type_code);
+            // Try to parse with potentially wrong-sized buffer - should not panic
+            let _ = PropertyValue::from_bytes(&bytes, data_type);
+        }
+
+        /// PropertyValue from_bytes with empty buffer
+        #[test]
+        fn fuzz_property_value_empty(data_type_code in 1u16..=8u16) {
+            let data_type = PropertyDataType::from_code(data_type_code);
+            let result = PropertyValue::from_bytes(&[], data_type);
+            // Empty buffer should fail for all types
+            prop_assert!(result.is_err());
+        }
+
+        /// PropertyValue from_bytes with String type and garbage
+        #[test]
+        fn fuzz_property_value_string_garbage(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
+            let result = PropertyValue::from_bytes(&bytes, PropertyDataType::String);
+            // Should not panic
+            let _ = result;
+        }
+
+        /// PropertyValue from_bytes with unsupported types
+        #[test]
+        fn fuzz_property_value_unsupported(bytes in prop::collection::vec(any::<u8>(), 0..20)) {
+            // Undefined, Int128, Uint128 are not supported
+            let result_undefined = PropertyValue::from_bytes(&bytes, PropertyDataType::Undefined);
+            prop_assert!(result_undefined.is_err());
+
+            let result_int128 = PropertyValue::from_bytes(&bytes, PropertyDataType::Int128);
+            prop_assert!(result_int128.is_err());
+
+            let result_uint128 = PropertyValue::from_bytes(&bytes, PropertyDataType::Uint128);
+            prop_assert!(result_uint128.is_err());
+        }
+
+        /// PropertyValue from_bytes with Unknown data type
+        #[test]
+        fn fuzz_property_value_unknown_type(
+            unknown_code in 11u16..=0xFFFEu16, // Not in 0-10 range and not String (0xFFFF)
+            bytes in prop::collection::vec(any::<u8>(), 0..20)
+        ) {
+            let data_type = PropertyDataType::Unknown(unknown_code);
+            let result = PropertyValue::from_bytes(&bytes, data_type);
+            prop_assert!(result.is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // DeviceInfo with truncated/corrupted data
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// DeviceInfo with truncated data should fail gracefully
+        #[test]
+        fn fuzz_device_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
+            // Random short buffers should fail gracefully, never panic
+            let _ = DeviceInfo::from_bytes(&bytes);
+        }
+
+        /// DeviceInfo with random garbage should not panic
+        #[test]
+        fn fuzz_device_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
+            let _ = DeviceInfo::from_bytes(&bytes);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // StorageInfo with truncated/corrupted data
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// StorageInfo with truncated data should fail gracefully
+        #[test]
+        fn fuzz_storage_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
+            let _ = StorageInfo::from_bytes(&bytes);
+        }
+
+        /// StorageInfo with random garbage should not panic
+        #[test]
+        fn fuzz_storage_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
+            let _ = StorageInfo::from_bytes(&bytes);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // ObjectInfo with truncated/corrupted data
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// ObjectInfo with truncated data should fail gracefully
+        #[test]
+        fn fuzz_object_info_truncated(bytes in prop::collection::vec(any::<u8>(), 0..100)) {
+            let _ = ObjectInfo::from_bytes(&bytes);
+        }
+
+        /// ObjectInfo with random garbage should not panic
+        #[test]
+        fn fuzz_object_info_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
+            let _ = ObjectInfo::from_bytes(&bytes);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // DevicePropDesc with truncated/corrupted data
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// DevicePropDesc with truncated data should fail gracefully
+        #[test]
+        fn fuzz_device_prop_desc_truncated(bytes in prop::collection::vec(any::<u8>(), 0..50)) {
+            let _ = DevicePropDesc::from_bytes(&bytes);
+        }
+
+        /// DevicePropDesc with random garbage should not panic
+        #[test]
+        fn fuzz_device_prop_desc_garbage(bytes in prop::collection::vec(any::<u8>(), 0..200)) {
+            let _ = DevicePropDesc::from_bytes(&bytes);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // PropertyRange with truncated data
+    // -------------------------------------------------------------------------
+
+    proptest! {
+        /// PropertyRange with truncated data should fail gracefully
+        #[test]
+        fn fuzz_property_range_truncated(
+            data_type_code in 1u16..=8u16,
+            bytes in prop::collection::vec(any::<u8>(), 0..20)
+        ) {
+            let data_type = PropertyDataType::from_code(data_type_code);
+            let _ = PropertyRange::from_bytes(&bytes, data_type);
+        }
+
+        /// PropertyRange with wrong data type
+        #[test]
+        fn fuzz_property_range_wrong_type(bytes in prop::collection::vec(any::<u8>(), 0..20)) {
+            // Undefined type
+            let result = PropertyRange::from_bytes(&bytes, PropertyDataType::Undefined);
+            prop_assert!(result.is_err());
+
+            // Unknown type
+            let result = PropertyRange::from_bytes(&bytes, PropertyDataType::Unknown(0x1234));
+            prop_assert!(result.is_err());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Boundary tests for minimum valid buffer sizes
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn device_info_minimum_valid() {
+        // DeviceInfo needs at minimum: u16 + u32 + u16 + string + u16 + 5 arrays + 4 strings
+        // This is a lot of bytes. Test that small buffers fail gracefully.
+        assert!(DeviceInfo::from_bytes(&[]).is_err());
+        assert!(DeviceInfo::from_bytes(&[0; 1]).is_err());
+        assert!(DeviceInfo::from_bytes(&[0; 7]).is_err());
+        assert!(DeviceInfo::from_bytes(&[0; 8]).is_err()); // Need at least string data after first fields
+    }
+
+    #[test]
+    fn storage_info_minimum_valid() {
+        // StorageInfo needs: 3 * u16 + 2 * u64 + u32 + 2 strings = 26 bytes minimum + string data
+        assert!(StorageInfo::from_bytes(&[]).is_err());
+        assert!(StorageInfo::from_bytes(&[0; 25]).is_err());
+        assert!(StorageInfo::from_bytes(&[0; 26]).is_err()); // Still need string data
+    }
+
+    #[test]
+    fn object_info_minimum_valid() {
+        // ObjectInfo has many fixed fields before strings
+        // StorageID(4) + Format(2) + Protection(2) + Size(4) + ThumbFormat(2) + ThumbSize(4) +
+        // ThumbW(4) + ThumbH(4) + ImgW(4) + ImgH(4) + BitDepth(4) + Parent(4) + AssocType(2) +
+        // AssocDesc(4) + SeqNum(4) = 52 bytes + 4 strings
+        assert!(ObjectInfo::from_bytes(&[]).is_err());
+        assert!(ObjectInfo::from_bytes(&[0; 51]).is_err());
+        assert!(ObjectInfo::from_bytes(&[0; 52]).is_err()); // Still need string data
+    }
+
+    #[test]
+    fn device_prop_desc_minimum_valid() {
+        // DevicePropDesc needs: PropertyCode(2) + DataType(2) + GetSet(1) + Default + Current + FormFlag(1)
+        // Minimum with Uint8 values: 2 + 2 + 1 + 1 + 1 + 1 = 8 bytes
+        assert!(DevicePropDesc::from_bytes(&[]).is_err());
+        assert!(DevicePropDesc::from_bytes(&[0; 4]).is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // Test PropertyValue size boundaries
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn property_value_int8_boundary() {
+        let bytes = [0x80]; // -128 in signed
+        let (val, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int8).unwrap();
+        assert!(matches!(val, PropertyValue::Int8(-128)));
+        assert_eq!(consumed, 1);
+
+        let bytes = [0x7F]; // 127 in signed
+        let (val, _) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int8).unwrap();
+        assert!(matches!(val, PropertyValue::Int8(127)));
+    }
+
+    #[test]
+    fn property_value_int16_boundary() {
+        let bytes = [0x00, 0x80]; // -32768 in little-endian
+        let (val, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int16).unwrap();
+        assert!(matches!(val, PropertyValue::Int16(-32768)));
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn property_value_int32_boundary() {
+        let bytes = [0x00, 0x00, 0x00, 0x80]; // i32::MIN in little-endian
+        let (val, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int32).unwrap();
+        assert!(matches!(val, PropertyValue::Int32(i32::MIN)));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn property_value_int64_boundary() {
+        let bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80]; // i64::MIN in little-endian
+        let (val, consumed) = PropertyValue::from_bytes(&bytes, PropertyDataType::Int64).unwrap();
+        assert!(matches!(val, PropertyValue::Int64(i64::MIN)));
+        assert_eq!(consumed, 8);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test that certain operations handle arithmetic edge cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn object_info_size_u32_max() {
+        // When size is u32::MAX (0xFFFFFFFF), it indicates >4GB file
+        let mut buf = build_file_object_info_bytes();
+        // Replace size field (bytes 8-11, after StorageID(4) + Format(2) + Protection(2))
+        buf[8] = 0xFF;
+        buf[9] = 0xFF;
+        buf[10] = 0xFF;
+        buf[11] = 0xFF;
+
+        let info = ObjectInfo::from_bytes(&buf).unwrap();
+        assert_eq!(info.size, u32::MAX as u64);
+    }
+
+    #[test]
+    fn storage_info_max_capacity() {
+        let mut buf = build_storage_info_bytes();
+        // Replace MaxCapacity field (bytes 6-13, after 3 u16s = 6 bytes)
+        let max_bytes = u64::MAX.to_le_bytes();
+        buf[6..14].copy_from_slice(&max_bytes);
+
+        let info = StorageInfo::from_bytes(&buf).unwrap();
+        assert_eq!(info.max_capacity, u64::MAX);
+    }
 }
