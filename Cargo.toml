@@ -26,16 +26,14 @@ parking_lot = "0.12"
 
 # For thiserror derive
 thiserror = "1.0"
+
+# Async timeout utilities
 futures-timer = "3.0.3"
 
 [dev-dependencies]
-# Testing
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
-proptest = "1.4"
-tokio-util = { version = "0.7", features = ["io"] }
+proptest = "=1.5.0"  # Pinned for MSRV 1.75 compatibility
 serial_test = "3.1"
 
 [features]
 default = []
-# Enable property-based tests
-proptest = []
