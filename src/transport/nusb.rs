@@ -464,9 +464,13 @@ fn get_usb_location_ids() -> LocationMap {
 }
 
 // Windows and other platforms: fallback to bus:address
+//
+// On Windows, a proper implementation would use SetupAPI to retrieve
+// SPDRP_LOCATION_INFORMATION. For now, we rely on the fallback in
+// find_location_id() which combines bus_number and device_address.
+// This should work via nusb's cross-platform abstraction but is untested.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn get_usb_location_ids() -> LocationMap {
-    // TODO: Implement Windows LocationInformation retrieval
     LocationMap::new()
 }
 
