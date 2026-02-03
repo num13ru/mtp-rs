@@ -96,147 +96,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_object_added_event() {
-        let container = EventContainer {
-            code: EventCode::ObjectAdded,
-            transaction_id: 0,
-            params: [42, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::ObjectAdded { handle } => {
-                assert_eq!(handle, ObjectHandle(42));
-            }
-            _ => panic!("Expected ObjectAdded event"),
+    fn event_parsing() {
+        // Events with object handle param
+        for (code, expected_handle) in [
+            (EventCode::ObjectAdded, 42),
+            (EventCode::ObjectRemoved, 123),
+            (EventCode::ObjectInfoChanged, 99),
+        ] {
+            let container = EventContainer { code, transaction_id: 0, params: [expected_handle, 0, 0] };
+            let event = DeviceEvent::from_container(&container);
+            let handle = match event {
+                DeviceEvent::ObjectAdded { handle } => handle,
+                DeviceEvent::ObjectRemoved { handle } => handle,
+                DeviceEvent::ObjectInfoChanged { handle } => handle,
+                _ => panic!("Unexpected event type"),
+            };
+            assert_eq!(handle, ObjectHandle(expected_handle));
         }
+
+        // Events with storage ID param
+        for (code, expected_id) in [
+            (EventCode::StoreAdded, 0x00010001),
+            (EventCode::StoreRemoved, 0x00010002),
+            (EventCode::StorageInfoChanged, 0x00010001),
+        ] {
+            let container = EventContainer { code, transaction_id: 0, params: [expected_id, 0, 0] };
+            let event = DeviceEvent::from_container(&container);
+            let storage_id = match event {
+                DeviceEvent::StoreAdded { storage_id } => storage_id,
+                DeviceEvent::StoreRemoved { storage_id } => storage_id,
+                DeviceEvent::StorageInfoChanged { storage_id } => storage_id,
+                _ => panic!("Unexpected event type"),
+            };
+            assert_eq!(storage_id, StorageId(expected_id));
+        }
+
+        // DeviceInfoChanged (no params)
+        let container = EventContainer { code: EventCode::DeviceInfoChanged, transaction_id: 0, params: [0, 0, 0] };
+        assert!(matches!(DeviceEvent::from_container(&container), DeviceEvent::DeviceInfoChanged));
     }
 
     #[test]
-    fn test_object_removed_event() {
-        let container = EventContainer {
-            code: EventCode::ObjectRemoved,
-            transaction_id: 0,
-            params: [123, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::ObjectRemoved { handle } => {
-                assert_eq!(handle, ObjectHandle(123));
-            }
-            _ => panic!("Expected ObjectRemoved event"),
-        }
-    }
-
-    #[test]
-    fn test_store_added_event() {
-        let container = EventContainer {
-            code: EventCode::StoreAdded,
-            transaction_id: 0,
-            params: [0x00010001, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::StoreAdded { storage_id } => {
-                assert_eq!(storage_id, StorageId(0x00010001));
-            }
-            _ => panic!("Expected StoreAdded event"),
-        }
-    }
-
-    #[test]
-    fn test_store_removed_event() {
-        let container = EventContainer {
-            code: EventCode::StoreRemoved,
-            transaction_id: 0,
-            params: [0x00010002, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::StoreRemoved { storage_id } => {
-                assert_eq!(storage_id, StorageId(0x00010002));
-            }
-            _ => panic!("Expected StoreRemoved event"),
-        }
-    }
-
-    #[test]
-    fn test_storage_info_changed_event() {
-        let container = EventContainer {
-            code: EventCode::StorageInfoChanged,
-            transaction_id: 5,
-            params: [0x00010001, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::StorageInfoChanged { storage_id } => {
-                assert_eq!(storage_id, StorageId(0x00010001));
-            }
-            _ => panic!("Expected StorageInfoChanged event"),
-        }
-    }
-
-    #[test]
-    fn test_object_info_changed_event() {
-        let container = EventContainer {
-            code: EventCode::ObjectInfoChanged,
-            transaction_id: 0,
-            params: [99, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::ObjectInfoChanged { handle } => {
-                assert_eq!(handle, ObjectHandle(99));
-            }
-            _ => panic!("Expected ObjectInfoChanged event"),
-        }
-    }
-
-    #[test]
-    fn test_device_info_changed_event() {
-        let container = EventContainer {
-            code: EventCode::DeviceInfoChanged,
-            transaction_id: 0,
-            params: [0, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
-            DeviceEvent::DeviceInfoChanged => {}
-            _ => panic!("Expected DeviceInfoChanged event"),
-        }
-    }
-
-    #[test]
-    fn test_unknown_event() {
-        let container = EventContainer {
-            code: EventCode::Unknown(0x9999),
-            transaction_id: 0,
-            params: [1, 2, 3],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
+    fn unknown_events() {
+        // Explicit Unknown code
+        let container = EventContainer { code: EventCode::Unknown(0x9999), transaction_id: 0, params: [1, 2, 3] };
+        match DeviceEvent::from_container(&container) {
             DeviceEvent::Unknown { code, params } => {
                 assert_eq!(code, 0x9999);
                 assert_eq!(params, [1, 2, 3]);
             }
             _ => panic!("Expected Unknown event"),
         }
-    }
 
-    #[test]
-    fn test_device_prop_changed_becomes_unknown() {
-        // DevicePropChanged is a known EventCode but not a known DeviceEvent variant
-        let container = EventContainer {
-            code: EventCode::DevicePropChanged,
-            transaction_id: 0,
-            params: [100, 0, 0],
-        };
-        let event = DeviceEvent::from_container(&container);
-        match event {
+        // Known EventCode without DeviceEvent variant (DevicePropChanged)
+        let container = EventContainer { code: EventCode::DevicePropChanged, transaction_id: 0, params: [100, 0, 0] };
+        match DeviceEvent::from_container(&container) {
             DeviceEvent::Unknown { code, params } => {
-                assert_eq!(code, 0x4006); // DevicePropChanged code
+                assert_eq!(code, 0x4006);
                 assert_eq!(params[0], 100);
             }
-            _ => panic!("Expected Unknown event for DevicePropChanged"),
+            _ => panic!("Expected Unknown event"),
         }
     }
 }

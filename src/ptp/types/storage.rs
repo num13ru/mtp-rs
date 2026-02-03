@@ -204,275 +204,117 @@ impl AssociationType {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- StorageType Tests ---
-
-    #[test]
-    fn storage_type_from_code() {
-        assert_eq!(StorageType::from_code(0), StorageType::Undefined);
-        assert_eq!(StorageType::from_code(1), StorageType::FixedRom);
-        assert_eq!(StorageType::from_code(2), StorageType::RemovableRom);
-        assert_eq!(StorageType::from_code(3), StorageType::FixedRam);
-        assert_eq!(StorageType::from_code(4), StorageType::RemovableRam);
-        assert_eq!(StorageType::from_code(99), StorageType::Unknown(99));
-    }
+    use proptest::prelude::*;
 
     #[test]
-    fn storage_type_to_code() {
-        assert_eq!(StorageType::Undefined.to_code(), 0);
-        assert_eq!(StorageType::FixedRom.to_code(), 1);
-        assert_eq!(StorageType::RemovableRom.to_code(), 2);
-        assert_eq!(StorageType::FixedRam.to_code(), 3);
-        assert_eq!(StorageType::RemovableRam.to_code(), 4);
-        assert_eq!(StorageType::Unknown(99).to_code(), 99);
-    }
-
-    #[test]
-    fn storage_type_roundtrip() {
-        let types = [
-            StorageType::Undefined,
-            StorageType::FixedRom,
-            StorageType::RemovableRom,
-            StorageType::FixedRam,
-            StorageType::RemovableRam,
-        ];
-        for t in types {
-            assert_eq!(StorageType::from_code(t.to_code()), t);
+    fn storage_type_conversions() {
+        for (code, expected) in [
+            (0, StorageType::Undefined),
+            (1, StorageType::FixedRom),
+            (2, StorageType::RemovableRom),
+            (3, StorageType::FixedRam),
+            (4, StorageType::RemovableRam),
+        ] {
+            assert_eq!(StorageType::from_code(code), expected);
+            assert_eq!(expected.to_code(), code);
         }
-    }
-
-    #[test]
-    fn storage_type_default() {
+        assert_eq!(StorageType::from_code(99), StorageType::Unknown(99));
         assert_eq!(StorageType::default(), StorageType::Undefined);
     }
 
-    // --- FilesystemType Tests ---
-
     #[test]
-    fn filesystem_type_from_code() {
-        assert_eq!(FilesystemType::from_code(0), FilesystemType::Undefined);
-        assert_eq!(FilesystemType::from_code(1), FilesystemType::GenericFlat);
-        assert_eq!(
-            FilesystemType::from_code(2),
-            FilesystemType::GenericHierarchical
-        );
-        assert_eq!(FilesystemType::from_code(3), FilesystemType::Dcf);
-        assert_eq!(FilesystemType::from_code(99), FilesystemType::Unknown(99));
-    }
-
-    #[test]
-    fn filesystem_type_to_code() {
-        assert_eq!(FilesystemType::Undefined.to_code(), 0);
-        assert_eq!(FilesystemType::GenericFlat.to_code(), 1);
-        assert_eq!(FilesystemType::GenericHierarchical.to_code(), 2);
-        assert_eq!(FilesystemType::Dcf.to_code(), 3);
-        assert_eq!(FilesystemType::Unknown(99).to_code(), 99);
-    }
-
-    #[test]
-    fn filesystem_type_roundtrip() {
-        let types = [
-            FilesystemType::Undefined,
-            FilesystemType::GenericFlat,
-            FilesystemType::GenericHierarchical,
-            FilesystemType::Dcf,
-        ];
-        for t in types {
-            assert_eq!(FilesystemType::from_code(t.to_code()), t);
+    fn filesystem_type_conversions() {
+        for (code, expected) in [
+            (0, FilesystemType::Undefined),
+            (1, FilesystemType::GenericFlat),
+            (2, FilesystemType::GenericHierarchical),
+            (3, FilesystemType::Dcf),
+        ] {
+            assert_eq!(FilesystemType::from_code(code), expected);
+            assert_eq!(expected.to_code(), code);
         }
-    }
-
-    #[test]
-    fn filesystem_type_default() {
+        assert_eq!(FilesystemType::from_code(99), FilesystemType::Unknown(99));
         assert_eq!(FilesystemType::default(), FilesystemType::Undefined);
     }
 
-    // --- AccessCapability Tests ---
-
     #[test]
-    fn access_capability_from_code() {
-        assert_eq!(AccessCapability::from_code(0), AccessCapability::ReadWrite);
-        assert_eq!(
-            AccessCapability::from_code(1),
-            AccessCapability::ReadOnlyWithoutDeletion
-        );
-        assert_eq!(
-            AccessCapability::from_code(2),
-            AccessCapability::ReadOnlyWithDeletion
-        );
-        assert_eq!(
-            AccessCapability::from_code(99),
-            AccessCapability::Unknown(99)
-        );
-    }
-
-    #[test]
-    fn access_capability_to_code() {
-        assert_eq!(AccessCapability::ReadWrite.to_code(), 0);
-        assert_eq!(AccessCapability::ReadOnlyWithoutDeletion.to_code(), 1);
-        assert_eq!(AccessCapability::ReadOnlyWithDeletion.to_code(), 2);
-        assert_eq!(AccessCapability::Unknown(99).to_code(), 99);
-    }
-
-    #[test]
-    fn access_capability_roundtrip() {
-        let caps = [
-            AccessCapability::ReadWrite,
-            AccessCapability::ReadOnlyWithoutDeletion,
-            AccessCapability::ReadOnlyWithDeletion,
-        ];
-        for c in caps {
-            assert_eq!(AccessCapability::from_code(c.to_code()), c);
+    fn access_capability_conversions() {
+        for (code, expected) in [
+            (0, AccessCapability::ReadWrite),
+            (1, AccessCapability::ReadOnlyWithoutDeletion),
+            (2, AccessCapability::ReadOnlyWithDeletion),
+        ] {
+            assert_eq!(AccessCapability::from_code(code), expected);
+            assert_eq!(expected.to_code(), code);
         }
-    }
-
-    #[test]
-    fn access_capability_default() {
+        assert_eq!(AccessCapability::from_code(99), AccessCapability::Unknown(99));
         assert_eq!(AccessCapability::default(), AccessCapability::ReadWrite);
     }
 
-    // --- ProtectionStatus Tests ---
-
     #[test]
-    fn protection_status_from_code() {
-        assert_eq!(ProtectionStatus::from_code(0), ProtectionStatus::None);
-        assert_eq!(ProtectionStatus::from_code(1), ProtectionStatus::ReadOnly);
-        assert_eq!(
-            ProtectionStatus::from_code(99),
-            ProtectionStatus::Unknown(99)
-        );
-    }
-
-    #[test]
-    fn protection_status_to_code() {
-        assert_eq!(ProtectionStatus::None.to_code(), 0);
-        assert_eq!(ProtectionStatus::ReadOnly.to_code(), 1);
-        assert_eq!(ProtectionStatus::Unknown(99).to_code(), 99);
-    }
-
-    #[test]
-    fn protection_status_roundtrip() {
-        let statuses = [ProtectionStatus::None, ProtectionStatus::ReadOnly];
-        for s in statuses {
-            assert_eq!(ProtectionStatus::from_code(s.to_code()), s);
+    fn protection_status_conversions() {
+        for (code, expected) in [(0, ProtectionStatus::None), (1, ProtectionStatus::ReadOnly)] {
+            assert_eq!(ProtectionStatus::from_code(code), expected);
+            assert_eq!(expected.to_code(), code);
         }
-    }
-
-    #[test]
-    fn protection_status_default() {
+        assert_eq!(ProtectionStatus::from_code(99), ProtectionStatus::Unknown(99));
         assert_eq!(ProtectionStatus::default(), ProtectionStatus::None);
     }
 
-    // --- AssociationType Tests ---
-
     #[test]
-    fn association_type_from_code() {
-        assert_eq!(AssociationType::from_code(0), AssociationType::None);
-        assert_eq!(
-            AssociationType::from_code(1),
-            AssociationType::GenericFolder
-        );
-        assert_eq!(AssociationType::from_code(99), AssociationType::Unknown(99));
-    }
-
-    #[test]
-    fn association_type_to_code() {
-        assert_eq!(AssociationType::None.to_code(), 0);
-        assert_eq!(AssociationType::GenericFolder.to_code(), 1);
-        assert_eq!(AssociationType::Unknown(99).to_code(), 99);
-    }
-
-    #[test]
-    fn association_type_roundtrip() {
-        let types = [AssociationType::None, AssociationType::GenericFolder];
-        for t in types {
-            assert_eq!(AssociationType::from_code(t.to_code()), t);
+    fn association_type_conversions() {
+        for (code, expected) in [(0, AssociationType::None), (1, AssociationType::GenericFolder)] {
+            assert_eq!(AssociationType::from_code(code), expected);
+            assert_eq!(expected.to_code(), code);
         }
-    }
-
-    #[test]
-    fn association_type_default() {
+        assert_eq!(AssociationType::from_code(99), AssociationType::Unknown(99));
         assert_eq!(AssociationType::default(), AssociationType::None);
     }
 
-    // --- Property-based tests ---
-
-    use proptest::prelude::*;
-
     proptest! {
-        /// Known StorageType variants roundtrip correctly
         #[test]
-        fn prop_storage_type_known_roundtrip(code in 0u16..=4u16) {
-            let storage_type = StorageType::from_code(code);
-            prop_assert_eq!(storage_type.to_code(), code);
+        fn prop_storage_type_roundtrip(code: u16) {
+            let st = StorageType::from_code(code);
+            prop_assert_eq!(st.to_code(), code);
+            if code > 4 {
+                prop_assert_eq!(st, StorageType::Unknown(code));
+            }
         }
 
-        /// Unknown StorageType values preserve the original code
         #[test]
-        fn prop_storage_type_unknown_preserves_code(code in 5u16..=u16::MAX) {
-            let storage_type = StorageType::from_code(code);
-            prop_assert_eq!(storage_type, StorageType::Unknown(code));
-            prop_assert_eq!(storage_type.to_code(), code);
+        fn prop_filesystem_type_roundtrip(code: u16) {
+            let ft = FilesystemType::from_code(code);
+            prop_assert_eq!(ft.to_code(), code);
+            if code > 3 {
+                prop_assert_eq!(ft, FilesystemType::Unknown(code));
+            }
         }
 
-        /// Known FilesystemType variants roundtrip correctly
         #[test]
-        fn prop_filesystem_type_known_roundtrip(code in 0u16..=3u16) {
-            let fs_type = FilesystemType::from_code(code);
-            prop_assert_eq!(fs_type.to_code(), code);
+        fn prop_access_capability_roundtrip(code: u16) {
+            let ac = AccessCapability::from_code(code);
+            prop_assert_eq!(ac.to_code(), code);
+            if code > 2 {
+                prop_assert_eq!(ac, AccessCapability::Unknown(code));
+            }
         }
 
-        /// Unknown FilesystemType values preserve the original code
         #[test]
-        fn prop_filesystem_type_unknown_preserves_code(code in 4u16..=u16::MAX) {
-            let fs_type = FilesystemType::from_code(code);
-            prop_assert_eq!(fs_type, FilesystemType::Unknown(code));
-            prop_assert_eq!(fs_type.to_code(), code);
+        fn prop_protection_status_roundtrip(code: u16) {
+            let ps = ProtectionStatus::from_code(code);
+            prop_assert_eq!(ps.to_code(), code);
+            if code > 1 {
+                prop_assert_eq!(ps, ProtectionStatus::Unknown(code));
+            }
         }
 
-        /// Known AccessCapability variants roundtrip correctly
         #[test]
-        fn prop_access_capability_known_roundtrip(code in 0u16..=2u16) {
-            let cap = AccessCapability::from_code(code);
-            prop_assert_eq!(cap.to_code(), code);
-        }
-
-        /// Unknown AccessCapability values preserve the original code
-        #[test]
-        fn prop_access_capability_unknown_preserves_code(code in 3u16..=u16::MAX) {
-            let cap = AccessCapability::from_code(code);
-            prop_assert_eq!(cap, AccessCapability::Unknown(code));
-            prop_assert_eq!(cap.to_code(), code);
-        }
-
-        /// Known ProtectionStatus variants roundtrip correctly
-        #[test]
-        fn prop_protection_status_known_roundtrip(code in 0u16..=1u16) {
-            let status = ProtectionStatus::from_code(code);
-            prop_assert_eq!(status.to_code(), code);
-        }
-
-        /// Unknown ProtectionStatus values preserve the original code
-        #[test]
-        fn prop_protection_status_unknown_preserves_code(code in 2u16..=u16::MAX) {
-            let status = ProtectionStatus::from_code(code);
-            prop_assert_eq!(status, ProtectionStatus::Unknown(code));
-            prop_assert_eq!(status.to_code(), code);
-        }
-
-        /// Known AssociationType variants roundtrip correctly
-        #[test]
-        fn prop_association_type_known_roundtrip(code in 0u16..=1u16) {
-            let assoc = AssociationType::from_code(code);
-            prop_assert_eq!(assoc.to_code(), code);
-        }
-
-        /// Unknown AssociationType values preserve the original code
-        #[test]
-        fn prop_association_type_unknown_preserves_code(code in 2u16..=u16::MAX) {
-            let assoc = AssociationType::from_code(code);
-            prop_assert_eq!(assoc, AssociationType::Unknown(code));
-            prop_assert_eq!(assoc.to_code(), code);
+        fn prop_association_type_roundtrip(code: u16) {
+            let at = AssociationType::from_code(code);
+            prop_assert_eq!(at.to_code(), code);
+            if code > 1 {
+                prop_assert_eq!(at, AssociationType::Unknown(code));
+            }
         }
     }
 }

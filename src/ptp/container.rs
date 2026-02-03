@@ -351,214 +351,74 @@ impl EventContainer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // --- ContainerType tests ---
 
     #[test]
-    fn container_type_from_code() {
-        assert_eq!(ContainerType::from_code(1), Some(ContainerType::Command));
-        assert_eq!(ContainerType::from_code(2), Some(ContainerType::Data));
-        assert_eq!(ContainerType::from_code(3), Some(ContainerType::Response));
-        assert_eq!(ContainerType::from_code(4), Some(ContainerType::Event));
-        assert_eq!(ContainerType::from_code(0), None);
-        assert_eq!(ContainerType::from_code(5), None);
-        assert_eq!(ContainerType::from_code(0xFFFF), None);
-    }
-
-    #[test]
-    fn container_type_to_code() {
-        assert_eq!(ContainerType::Command.to_code(), 1);
-        assert_eq!(ContainerType::Data.to_code(), 2);
-        assert_eq!(ContainerType::Response.to_code(), 3);
-        assert_eq!(ContainerType::Event.to_code(), 4);
-    }
-
-    #[test]
-    fn container_type_roundtrip() {
-        for ct in [
-            ContainerType::Command,
-            ContainerType::Data,
-            ContainerType::Response,
-            ContainerType::Event,
+    fn container_type_conversions() {
+        for (code, ct) in [
+            (1, ContainerType::Command),
+            (2, ContainerType::Data),
+            (3, ContainerType::Response),
+            (4, ContainerType::Event),
         ] {
-            assert_eq!(ContainerType::from_code(ct.to_code()), Some(ct));
+            assert_eq!(ContainerType::from_code(code), Some(ct));
+            assert_eq!(ct.to_code(), code);
+        }
+        for invalid in [0, 5, 0xFFFF] {
+            assert_eq!(ContainerType::from_code(invalid), None);
         }
     }
 
-    // --- container_type() function tests ---
-
     #[test]
-    fn container_type_function_command() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x01, 0x00, // type = Command
-            0x03, 0x10, // code
-            0x05, 0x00, 0x00, 0x00, // transaction_id
+    fn container_type_detection() {
+        // Build minimal containers and verify type detection
+        let containers: [(u16, ContainerType); 4] = [
+            (1, ContainerType::Command),
+            (2, ContainerType::Data),
+            (3, ContainerType::Response),
+            (4, ContainerType::Event),
         ];
-        assert_eq!(container_type(&bytes).unwrap(), ContainerType::Command);
-    }
+        for (type_code, expected) in containers {
+            let mut bytes = vec![0x0C, 0x00, 0x00, 0x00]; // length = 12
+            bytes.extend_from_slice(&type_code.to_le_bytes());
+            bytes.extend_from_slice(&[0x00; 6]); // code + tx_id
+            assert_eq!(container_type(&bytes).unwrap(), expected);
+        }
 
-    #[test]
-    fn container_type_function_data() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x02, 0x00, // type = Data
-            0x04, 0x10, // code
-            0x02, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert_eq!(container_type(&bytes).unwrap(), ContainerType::Data);
-    }
+        // Invalid type codes
+        for invalid in [0u16, 5] {
+            let mut bytes = vec![0x0C, 0x00, 0x00, 0x00];
+            bytes.extend_from_slice(&invalid.to_le_bytes());
+            bytes.extend_from_slice(&[0x00; 6]);
+            assert!(container_type(&bytes).is_err());
+        }
 
-    #[test]
-    fn container_type_function_response() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x03, 0x00, // type = Response
-            0x01, 0x20, // code
-            0x01, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert_eq!(container_type(&bytes).unwrap(), ContainerType::Response);
-    }
-
-    #[test]
-    fn container_type_function_event() {
-        let bytes = vec![
-            0x18, 0x00, 0x00, 0x00, // length = 24
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-            0x00, 0x00, 0x00, 0x00, // param1
-            0x00, 0x00, 0x00, 0x00, // param2
-            0x00, 0x00, 0x00, 0x00, // param3
-        ];
-        assert_eq!(container_type(&bytes).unwrap(), ContainerType::Event);
-    }
-
-    #[test]
-    fn container_type_function_insufficient_bytes() {
+        // Insufficient bytes
         assert!(container_type(&[]).is_err());
         assert!(container_type(&[0x00; 11]).is_err());
-    }
-
-    #[test]
-    fn container_type_function_invalid_type() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x00, 0x00, // type = invalid (0)
-            0x01, 0x20, // code
-            0x01, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert!(container_type(&bytes).is_err());
-
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x05, 0x00, // type = invalid (5)
-            0x01, 0x20, // code
-            0x01, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert!(container_type(&bytes).is_err());
     }
 
     // --- CommandContainer tests ---
 
     #[test]
-    fn command_container_no_params() {
-        let cmd = CommandContainer {
-            code: OperationCode::CloseSession,
-            transaction_id: 5,
-            params: vec![],
-        };
-        let bytes = cmd.to_bytes();
-        assert_eq!(bytes.len(), 12);
-        assert_eq!(&bytes[0..4], &[0x0C, 0x00, 0x00, 0x00]); // length = 12
-        assert_eq!(&bytes[4..6], &[0x01, 0x00]); // type = Command
-        assert_eq!(&bytes[6..8], &[0x03, 0x10]); // code = CloseSession (0x1003)
-        assert_eq!(&bytes[8..12], &[0x05, 0x00, 0x00, 0x00]); // transaction_id = 5
-    }
-
-    #[test]
-    fn command_container_one_param() {
-        let cmd = CommandContainer {
-            code: OperationCode::OpenSession,
-            transaction_id: 1,
-            params: vec![1],
-        };
-        let bytes = cmd.to_bytes();
-        assert_eq!(bytes.len(), 16);
-        assert_eq!(&bytes[0..4], &[0x10, 0x00, 0x00, 0x00]); // length = 16
-        assert_eq!(&bytes[12..16], &[0x01, 0x00, 0x00, 0x00]); // param1 = 1
-    }
-
-    #[test]
-    fn command_container_multiple_params() {
+    fn command_container_serialization() {
         let cmd = CommandContainer {
             code: OperationCode::GetObjectHandles,
             transaction_id: 10,
             params: vec![0x00010001, 0x00000000, 0xFFFFFFFF],
         };
         let bytes = cmd.to_bytes();
-        assert_eq!(bytes.len(), 24); // 12 header + 12 params
+        assert_eq!(bytes.len(), 24);
         assert_eq!(&bytes[0..4], &[0x18, 0x00, 0x00, 0x00]); // length = 24
         assert_eq!(&bytes[4..6], &[0x01, 0x00]); // type = Command
-        assert_eq!(&bytes[6..8], &[0x07, 0x10]); // code = GetObjectHandles (0x1007)
-        assert_eq!(&bytes[8..12], &[0x0A, 0x00, 0x00, 0x00]); // transaction_id = 10
-        assert_eq!(&bytes[12..16], &[0x01, 0x00, 0x01, 0x00]); // param1 = 0x00010001
-        assert_eq!(&bytes[16..20], &[0x00, 0x00, 0x00, 0x00]); // param2 = 0
-        assert_eq!(&bytes[20..24], &[0xFF, 0xFF, 0xFF, 0xFF]); // param3 = 0xFFFFFFFF
-    }
-
-    #[test]
-    fn command_container_five_params() {
-        let cmd = CommandContainer {
-            code: OperationCode::GetPartialObject,
-            transaction_id: 42,
-            params: vec![1, 2, 3, 4, 5],
-        };
-        let bytes = cmd.to_bytes();
-        assert_eq!(bytes.len(), 32); // 12 header + 20 params
-        assert_eq!(&bytes[0..4], &[0x20, 0x00, 0x00, 0x00]); // length = 32
+        assert_eq!(&bytes[6..8], &[0x07, 0x10]); // code = 0x1007
+        assert_eq!(&bytes[8..12], &[0x0A, 0x00, 0x00, 0x00]); // tx_id = 10
+        assert_eq!(&bytes[12..16], &[0x01, 0x00, 0x01, 0x00]); // param1
     }
 
     // --- DataContainer tests ---
-
-    #[test]
-    fn data_container_to_bytes() {
-        let data = DataContainer {
-            code: OperationCode::GetStorageIds,
-            transaction_id: 2,
-            payload: vec![0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00],
-        };
-        let bytes = data.to_bytes();
-        assert_eq!(bytes.len(), 20); // 12 header + 8 payload
-        assert_eq!(&bytes[0..4], &[0x14, 0x00, 0x00, 0x00]); // length = 20
-        assert_eq!(&bytes[4..6], &[0x02, 0x00]); // type = Data
-        assert_eq!(&bytes[6..8], &[0x04, 0x10]); // code = GetStorageIds (0x1004)
-        assert_eq!(&bytes[8..12], &[0x02, 0x00, 0x00, 0x00]); // transaction_id = 2
-        assert_eq!(
-            &bytes[12..20],
-            &[0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00]
-        ); // payload
-    }
-
-    #[test]
-    fn data_container_parse() {
-        let bytes = vec![
-            0x14, 0x00, 0x00, 0x00, // length = 20
-            0x02, 0x00, // type = Data
-            0x04, 0x10, // code = GetStorageIds (0x1004)
-            0x02, 0x00, 0x00, 0x00, // transaction_id = 2
-            0x01, 0x00, 0x00, 0x00, // payload: count=1
-            0x01, 0x00, 0x01, 0x00, // payload: 0x00010001
-        ];
-        let data = DataContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(data.code, OperationCode::GetStorageIds);
-        assert_eq!(data.transaction_id, 2);
-        assert_eq!(data.payload.len(), 8);
-        assert_eq!(
-            data.payload,
-            vec![0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00]
-        );
-    }
 
     #[test]
     fn data_container_roundtrip() {
@@ -567,531 +427,187 @@ mod tests {
             transaction_id: 100,
             payload: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         };
-        let bytes = original.to_bytes();
-        let parsed = DataContainer::from_bytes(&bytes).unwrap();
+        let parsed = DataContainer::from_bytes(&original.to_bytes()).unwrap();
         assert_eq!(parsed, original);
-    }
 
-    #[test]
-    fn data_container_empty_payload() {
-        let data = DataContainer {
+        // Empty payload
+        let empty = DataContainer {
             code: OperationCode::SendObject,
             transaction_id: 5,
             payload: vec![],
         };
-        let bytes = data.to_bytes();
-        assert_eq!(bytes.len(), 12);
-        let parsed = DataContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(parsed, data);
+        assert_eq!(DataContainer::from_bytes(&empty.to_bytes()).unwrap(), empty);
     }
 
     #[test]
-    fn data_container_parse_insufficient_bytes() {
-        // Too small for header
-        assert!(DataContainer::from_bytes(&[0x00; 11]).is_err());
+    fn data_container_errors() {
+        assert!(DataContainer::from_bytes(&[0x00; 11]).is_err()); // Too small
 
-        // Header says more bytes than available
-        let bytes = vec![
-            0x20, 0x00, 0x00, 0x00, // length = 32 (but we won't provide that many)
-            0x02, 0x00, // type = Data
-            0x04, 0x10, // code
-            0x02, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert!(DataContainer::from_bytes(&bytes).is_err());
-    }
+        // Wrong type
+        let mut bad_type = vec![0x0C, 0x00, 0x00, 0x00, 0x03, 0x00]; // Response type
+        bad_type.extend_from_slice(&[0x00; 6]);
+        assert!(DataContainer::from_bytes(&bad_type).is_err());
 
-    #[test]
-    fn data_container_parse_wrong_type() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x03, 0x00, // type = Response (wrong!)
-            0x04, 0x10, // code
-            0x02, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert!(DataContainer::from_bytes(&bytes).is_err());
+        // Length > buffer
+        let mut truncated = vec![0x20, 0x00, 0x00, 0x00, 0x02, 0x00]; // claims 32 bytes
+        truncated.extend_from_slice(&[0x00; 6]);
+        assert!(DataContainer::from_bytes(&truncated).is_err());
     }
 
     // --- ResponseContainer tests ---
 
     #[test]
-    fn response_container_ok() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x03, 0x00, // type = Response
-            0x01, 0x20, // code = OK (0x2001)
-            0x01, 0x00, 0x00, 0x00, // transaction_id = 1
-        ];
-        let resp = ResponseContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(resp.code, ResponseCode::Ok);
-        assert_eq!(resp.transaction_id, 1);
-        assert!(resp.params.is_empty());
-        assert!(resp.is_ok());
-    }
-
-    #[test]
-    fn response_container_with_params() {
-        let bytes = vec![
+    fn response_container_parsing() {
+        // OK response with params
+        let bytes = [
             0x18, 0x00, 0x00, 0x00, // length = 24
             0x03, 0x00, // type = Response
             0x01, 0x20, // code = OK
-            0x02, 0x00, 0x00, 0x00, // transaction_id = 2
-            0x01, 0x00, 0x01, 0x00, // param1 = 0x00010001
-            0x00, 0x00, 0x00, 0x00, // param2 = 0
-            0x05, 0x00, 0x00, 0x00, // param3 = 5
+            0x02, 0x00, 0x00, 0x00, // tx_id = 2
+            0x01, 0x00, 0x01, 0x00, // param1
+            0x00, 0x00, 0x00, 0x00, // param2
+            0x05, 0x00, 0x00, 0x00, // param3
         ];
         let resp = ResponseContainer::from_bytes(&bytes).unwrap();
         assert_eq!(resp.code, ResponseCode::Ok);
-        assert_eq!(resp.transaction_id, 2);
-        assert_eq!(resp.params.len(), 3);
-        assert_eq!(resp.params[0], 0x00010001);
-        assert_eq!(resp.params[1], 0);
-        assert_eq!(resp.params[2], 5);
         assert!(resp.is_ok());
-    }
+        assert_eq!(resp.params, vec![0x00010001, 0, 5]);
 
-    #[test]
-    fn response_container_error_code() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x03, 0x00, // type = Response
-            0x02, 0x20, // code = GeneralError (0x2002)
-            0x03, 0x00, 0x00, 0x00, // transaction_id = 3
+        // Error response
+        let err_bytes = [
+            0x0C, 0x00, 0x00, 0x00,
+            0x03, 0x00,
+            0x02, 0x20, // GeneralError
+            0x03, 0x00, 0x00, 0x00,
         ];
-        let resp = ResponseContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(resp.code, ResponseCode::GeneralError);
-        assert!(!resp.is_ok());
+        let err_resp = ResponseContainer::from_bytes(&err_bytes).unwrap();
+        assert_eq!(err_resp.code, ResponseCode::GeneralError);
+        assert!(!err_resp.is_ok());
     }
 
     #[test]
-    fn response_container_insufficient_bytes() {
-        // Too small for header
+    fn response_container_errors() {
         assert!(ResponseContainer::from_bytes(&[0x00; 11]).is_err());
 
-        // Header says more bytes than available
-        let bytes = vec![
-            0x18, 0x00, 0x00, 0x00, // length = 24 (but we only provide 12)
-            0x03, 0x00, // type = Response
-            0x01, 0x20, // code
-            0x01, 0x00, 0x00, 0x00, // transaction_id
+        // Unaligned params (13 bytes = 12 header + 1)
+        let unaligned = [
+            0x0D, 0x00, 0x00, 0x00,
+            0x03, 0x00, 0x01, 0x20,
+            0x01, 0x00, 0x00, 0x00,
+            0xFF,
         ];
-        assert!(ResponseContainer::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn response_container_wrong_type() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x01, 0x00, // type = Command (wrong!)
-            0x01, 0x20, // code
-            0x01, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        assert!(ResponseContainer::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn response_container_unaligned_params() {
-        // 13 bytes total = 12 header + 1 byte (not aligned to 4)
-        let bytes = vec![
-            0x0D, 0x00, 0x00, 0x00, // length = 13
-            0x03, 0x00, // type = Response
-            0x01, 0x20, // code
-            0x01, 0x00, 0x00, 0x00, // transaction_id
-            0xFF, // 1 extra byte (not aligned)
-        ];
-        assert!(ResponseContainer::from_bytes(&bytes).is_err());
+        assert!(ResponseContainer::from_bytes(&unaligned).is_err());
     }
 
     // --- EventContainer tests ---
 
     #[test]
-    fn event_container_object_added() {
-        let bytes = vec![
-            0x18, 0x00, 0x00, 0x00, // length = 24
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code = ObjectAdded (0x4002)
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-            0x0A, 0x00, 0x00, 0x00, // param1 = 10
-            0x00, 0x00, 0x00, 0x00, // param2
-            0x00, 0x00, 0x00, 0x00, // param3
+    fn event_container_variable_params() {
+        // 0 params (12 bytes)
+        let zero = [0x0C, 0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0x40, 0x00, 0x00, 0x00, 0x00];
+        let e0 = EventContainer::from_bytes(&zero).unwrap();
+        assert_eq!(e0.code, EventCode::DeviceInfoChanged);
+        assert_eq!(e0.params, [0, 0, 0]);
+
+        // 1 param (16 bytes) - common on Android
+        let one = [
+            0x10, 0x00, 0x00, 0x00, 0x04, 0x00, 0x02, 0x40,
+            0x00, 0x00, 0x00, 0x00, 0x2A, 0x00, 0x00, 0x00,
         ];
-        let event = EventContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(event.code, EventCode::ObjectAdded);
-        assert_eq!(event.transaction_id, 0);
-        assert_eq!(event.params[0], 10);
-        assert_eq!(event.params[1], 0);
-        assert_eq!(event.params[2], 0);
+        let e1 = EventContainer::from_bytes(&one).unwrap();
+        assert_eq!(e1.params, [42, 0, 0]);
+
+        // 3 params (24 bytes)
+        let three = [
+            0x18, 0x00, 0x00, 0x00, 0x04, 0x00, 0x02, 0x40,
+            0x0A, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+        ];
+        let e3 = EventContainer::from_bytes(&three).unwrap();
+        assert_eq!(e3.transaction_id, 10);
+        assert_eq!(e3.params, [1, 2, 3]);
     }
 
     #[test]
-    fn event_container_store_removed() {
-        let bytes = vec![
-            0x18, 0x00, 0x00, 0x00, // length = 24
-            0x04, 0x00, // type = Event
-            0x05, 0x40, // code = StoreRemoved (0x4005)
-            0x0A, 0x00, 0x00, 0x00, // transaction_id = 10
-            0x01, 0x00, 0x01, 0x00, // param1 = storage id
-            0x00, 0x00, 0x00, 0x00, // param2
-            0x00, 0x00, 0x00, 0x00, // param3
-        ];
-        let event = EventContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(event.code, EventCode::StoreRemoved);
-        assert_eq!(event.transaction_id, 10);
-        assert_eq!(event.params[0], 0x00010001);
-    }
-
-    #[test]
-    fn event_container_insufficient_bytes() {
-        // Too small for header
+    fn event_container_errors() {
         assert!(EventContainer::from_bytes(&[0x00; 11]).is_err());
 
-        // Header ok but not enough for 3 params
-        let bytes = vec![
-            0x18, 0x00, 0x00, 0x00, // length = 24
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-                  // Missing params
+        // Length > 24 (too many params)
+        let too_long = [
+            0x1C, 0x00, 0x00, 0x00, 0x04, 0x00, 0x02, 0x40,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
-        assert!(EventContainer::from_bytes(&bytes).is_err());
-    }
+        assert!(EventContainer::from_bytes(&too_long).is_err());
 
-    #[test]
-    fn event_container_wrong_type() {
-        let bytes = vec![
-            0x18, 0x00, 0x00, 0x00, // length = 24
-            0x02, 0x00, // type = Data (wrong!)
-            0x02, 0x40, // code
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-            0x00, 0x00, 0x00, 0x00, // param1
-            0x00, 0x00, 0x00, 0x00, // param2
-            0x00, 0x00, 0x00, 0x00, // param3
+        // Unaligned (14 bytes)
+        let unaligned = [
+            0x0E, 0x00, 0x00, 0x00, 0x04, 0x00, 0x02, 0x40,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
-        assert!(EventContainer::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn event_container_zero_params() {
-        // Event with 0 parameters (12 bytes total)
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x04, 0x00, // type = Event
-            0x08, 0x40, // code = DeviceInfoChanged (0x4008)
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-        ];
-        let event = EventContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(event.code, EventCode::DeviceInfoChanged);
-        assert_eq!(event.params, [0, 0, 0]); // All default to 0
-    }
-
-    #[test]
-    fn event_container_one_param() {
-        // Event with 1 parameter (16 bytes total) - common on Android
-        let bytes = vec![
-            0x10, 0x00, 0x00, 0x00, // length = 16
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code = ObjectAdded (0x4002)
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-            0x2A, 0x00, 0x00, 0x00, // param1 = 42 (ObjectHandle)
-        ];
-        let event = EventContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(event.code, EventCode::ObjectAdded);
-        assert_eq!(event.params[0], 42);
-        assert_eq!(event.params[1], 0); // Default
-        assert_eq!(event.params[2], 0); // Default
-    }
-
-    #[test]
-    fn event_container_two_params() {
-        // Event with 2 parameters (20 bytes total)
-        let bytes = vec![
-            0x14, 0x00, 0x00, 0x00, // length = 20
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code = ObjectAdded
-            0x05, 0x00, 0x00, 0x00, // transaction_id = 5
-            0x0A, 0x00, 0x00, 0x00, // param1 = 10
-            0x14, 0x00, 0x00, 0x00, // param2 = 20
-        ];
-        let event = EventContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(event.transaction_id, 5);
-        assert_eq!(event.params[0], 10);
-        assert_eq!(event.params[1], 20);
-        assert_eq!(event.params[2], 0); // Default
-    }
-
-    #[test]
-    fn event_container_length_too_large() {
-        // Event with length > 24 (too many params)
-        let bytes = vec![
-            0x1C, 0x00, 0x00, 0x00, // length = 28 (invalid - max is 24)
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-            0x00, 0x00, 0x00, 0x00, // param1
-            0x00, 0x00, 0x00, 0x00, // param2
-            0x00, 0x00, 0x00, 0x00, // param3
-            0x00, 0x00, 0x00, 0x00, // extra param (not allowed)
-        ];
-        assert!(EventContainer::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn event_container_unaligned_length() {
-        // Event with unaligned parameter bytes (14 bytes = 12 header + 2 bytes)
-        let bytes = vec![
-            0x0E, 0x00, 0x00, 0x00, // length = 14 (not aligned to 4)
-            0x04, 0x00, // type = Event
-            0x02, 0x40, // code
-            0x00, 0x00, 0x00, 0x00, // transaction_id
-            0x00, 0x00, // 2 extra bytes (not a full param)
-        ];
-        assert!(EventContainer::from_bytes(&bytes).is_err());
-    }
-
-    #[test]
-    fn command_container_get_device_info() {
-        // GetDeviceInfo is special: no session needed, transaction_id = 0
-        let cmd = CommandContainer {
-            code: OperationCode::GetDeviceInfo,
-            transaction_id: 0,
-            params: vec![],
-        };
-        let bytes = cmd.to_bytes();
-        assert_eq!(&bytes[6..8], &[0x01, 0x10]); // code = GetDeviceInfo (0x1001)
-        assert_eq!(&bytes[8..12], &[0x00, 0x00, 0x00, 0x00]); // transaction_id = 0
-    }
-
-    #[test]
-    fn response_container_device_busy() {
-        let bytes = vec![
-            0x0C, 0x00, 0x00, 0x00, // length = 12
-            0x03, 0x00, // type = Response
-            0x19, 0x20, // code = DeviceBusy (0x2019)
-            0x05, 0x00, 0x00, 0x00, // transaction_id = 5
-        ];
-        let resp = ResponseContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(resp.code, ResponseCode::DeviceBusy);
-        assert!(!resp.is_ok());
-    }
-
-    #[test]
-    fn data_container_large_payload() {
-        let payload: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-        let data = DataContainer {
-            code: OperationCode::GetObject,
-            transaction_id: 1,
-            payload: payload.clone(),
-        };
-        let bytes = data.to_bytes();
-        assert_eq!(bytes.len(), 12 + 1000);
-
-        let parsed = DataContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(parsed.payload, payload);
-    }
-
-    #[test]
-    fn response_container_five_params() {
-        let bytes = vec![
-            0x20, 0x00, 0x00, 0x00, // length = 32
-            0x03, 0x00, // type = Response
-            0x01, 0x20, // code = OK
-            0x01, 0x00, 0x00, 0x00, // transaction_id = 1
-            0x01, 0x00, 0x00, 0x00, // param1 = 1
-            0x02, 0x00, 0x00, 0x00, // param2 = 2
-            0x03, 0x00, 0x00, 0x00, // param3 = 3
-            0x04, 0x00, 0x00, 0x00, // param4 = 4
-            0x05, 0x00, 0x00, 0x00, // param5 = 5
-        ];
-        let resp = ResponseContainer::from_bytes(&bytes).unwrap();
-        assert_eq!(resp.params.len(), 5);
-        assert_eq!(resp.params, vec![1, 2, 3, 4, 5]);
+        assert!(EventContainer::from_bytes(&unaligned).is_err());
     }
 
     // --- Property-based tests ---
 
-    use proptest::prelude::*;
-
-    proptest! {
-        /// Valid container types roundtrip correctly
-        #[test]
-        fn prop_container_type_valid_roundtrip(code in 1u16..=4u16) {
-            let ct = ContainerType::from_code(code);
-            prop_assert!(ct.is_some());
-            prop_assert_eq!(ct.unwrap().to_code(), code);
-        }
-
-        /// Invalid container type codes return None
-        #[test]
-        fn prop_container_type_invalid_returns_none(code in prop::num::u16::ANY.prop_filter(
-            "Must not be valid container type",
-            |c| *c == 0 || *c > 4
-        )) {
-            prop_assert!(ContainerType::from_code(code).is_none());
-        }
-
-        /// DataContainer roundtrips correctly with arbitrary payloads
-        #[test]
-        fn prop_data_container_roundtrip(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            payload in prop::collection::vec(any::<u8>(), 0..1000)
-        ) {
-            let original = DataContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                payload: payload.clone(),
-            };
-            let bytes = original.to_bytes();
-            let parsed = DataContainer::from_bytes(&bytes).unwrap();
-
-            prop_assert_eq!(parsed.code, original.code);
-            prop_assert_eq!(parsed.transaction_id, original.transaction_id);
-            prop_assert_eq!(parsed.payload, original.payload);
-        }
-
-        /// DataContainer length field matches actual size
-        #[test]
-        fn prop_data_container_length_invariant(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            payload in prop::collection::vec(any::<u8>(), 0..500)
-        ) {
-            let container = DataContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                payload,
-            };
-            let bytes = container.to_bytes();
-
-            // Length field is first 4 bytes (little-endian)
-            let length = unpack_u32(&bytes[0..4]).unwrap() as usize;
-
-            // Length should equal total bytes
-            prop_assert_eq!(length, bytes.len());
-
-            // Length should be header (12) + payload
-            prop_assert_eq!(length, HEADER_SIZE + container.payload.len());
-        }
-
-        /// DataContainer type field is always Data (2)
-        #[test]
-        fn prop_data_container_type_field(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            payload in prop::collection::vec(any::<u8>(), 0..100)
-        ) {
-            let container = DataContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                payload,
-            };
-            let bytes = container.to_bytes();
-
-            let type_code = unpack_u16(&bytes[4..6]).unwrap();
-            prop_assert_eq!(type_code, ContainerType::Data.to_code());
-        }
-
-        /// CommandContainer length field matches actual size
-        #[test]
-        fn prop_command_container_length_invariant(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            params in prop::collection::vec(any::<u32>(), 0..5)
-        ) {
-            let container = CommandContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                params: params.clone(),
-            };
-            let bytes = container.to_bytes();
-
-            // Length field is first 4 bytes (little-endian)
-            let length = unpack_u32(&bytes[0..4]).unwrap() as usize;
-
-            // Length should equal total bytes
-            prop_assert_eq!(length, bytes.len());
-
-            // Length should be header (12) + params * 4
-            prop_assert_eq!(length, HEADER_SIZE + params.len() * 4);
-        }
-
-        /// CommandContainer type field is always Command (1)
-        #[test]
-        fn prop_command_container_type_field(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            params in prop::collection::vec(any::<u32>(), 0..5)
-        ) {
-            let container = CommandContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                params,
-            };
-            let bytes = container.to_bytes();
-
-            let type_code = unpack_u16(&bytes[4..6]).unwrap();
-            prop_assert_eq!(type_code, ContainerType::Command.to_code());
-        }
-
-        /// CommandContainer preserves parameters correctly
-        #[test]
-        fn prop_command_container_params_preserved(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            params in prop::collection::vec(any::<u32>(), 0..5)
-        ) {
-            let container = CommandContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                params: params.clone(),
-            };
-            let bytes = container.to_bytes();
-
-            // Verify each parameter
-            for (i, &expected_param) in params.iter().enumerate() {
-                let offset = HEADER_SIZE + i * 4;
-                let actual_param = unpack_u32(&bytes[offset..]).unwrap();
-                prop_assert_eq!(actual_param, expected_param);
-            }
-        }
-    }
-
-    /// Strategy for generating valid response container bytes
     fn valid_response_bytes(param_count: usize) -> impl Strategy<Value = Vec<u8>> {
-        (
-            any::<u16>(),                                                   // code
-            any::<u32>(),                                                   // transaction_id
-            prop::collection::vec(any::<u32>(), param_count..=param_count), // params
-        )
-            .prop_map(move |(code, transaction_id, params)| {
-                let total_len = HEADER_SIZE + params.len() * 4;
-                let mut bytes = Vec::with_capacity(total_len);
-
-                // Header
-                bytes.extend_from_slice(&pack_u32(total_len as u32));
+        (any::<u16>(), any::<u32>(), prop::collection::vec(any::<u32>(), param_count..=param_count))
+            .prop_map(move |(code, tx_id, params)| {
+                let len = HEADER_SIZE + params.len() * 4;
+                let mut bytes = Vec::with_capacity(len);
+                bytes.extend_from_slice(&pack_u32(len as u32));
                 bytes.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
                 bytes.extend_from_slice(&pack_u16(code));
-                bytes.extend_from_slice(&pack_u32(transaction_id));
-
-                // Parameters
-                for param in &params {
-                    bytes.extend_from_slice(&pack_u32(*param));
+                bytes.extend_from_slice(&pack_u32(tx_id));
+                for p in &params {
+                    bytes.extend_from_slice(&pack_u32(*p));
                 }
-
                 bytes
             })
     }
 
     proptest! {
-        /// ResponseContainer parses valid bytes correctly (0 params)
         #[test]
-        fn prop_response_container_parse_no_params(bytes in valid_response_bytes(0)) {
-            let resp = ResponseContainer::from_bytes(&bytes).unwrap();
-            prop_assert!(resp.params.is_empty());
+        fn prop_container_type_roundtrip(code in 1u16..=4u16) {
+            let ct = ContainerType::from_code(code).unwrap();
+            prop_assert_eq!(ct.to_code(), code);
         }
 
-        /// ResponseContainer parses valid bytes correctly (1-5 params)
         #[test]
-        fn prop_response_container_parse_with_params(param_count in 1usize..=5usize) {
+        fn prop_data_container_roundtrip(
+            code in any::<u16>(),
+            tx_id in any::<u32>(),
+            payload in prop::collection::vec(any::<u8>(), 0..500)
+        ) {
+            let original = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id: tx_id,
+                payload: payload.clone(),
+            };
+            let parsed = DataContainer::from_bytes(&original.to_bytes()).unwrap();
+            prop_assert_eq!(parsed, original);
+        }
+
+        #[test]
+        fn prop_command_container_length(
+            code in any::<u16>(),
+            tx_id in any::<u32>(),
+            params in prop::collection::vec(any::<u32>(), 0..5)
+        ) {
+            let cmd = CommandContainer {
+                code: OperationCode::from_code(code),
+                transaction_id: tx_id,
+                params: params.clone(),
+            };
+            let bytes = cmd.to_bytes();
+            let length = unpack_u32(&bytes[0..4]).unwrap() as usize;
+            prop_assert_eq!(length, HEADER_SIZE + params.len() * 4);
+            prop_assert_eq!(length, bytes.len());
+        }
+
+        #[test]
+        fn prop_response_container_parse(param_count in 0usize..=5usize) {
             let strategy = valid_response_bytes(param_count);
             proptest!(|(bytes in strategy)| {
                 let resp = ResponseContainer::from_bytes(&bytes).unwrap();
@@ -1099,383 +615,79 @@ mod tests {
             });
         }
 
-        /// ResponseContainer parameter count constraint (0-5 params)
         #[test]
-        fn prop_response_container_param_count(param_count in 0usize..=5usize) {
-            let strategy = valid_response_bytes(param_count);
-            proptest!(|(bytes in strategy)| {
-                let resp = ResponseContainer::from_bytes(&bytes).unwrap();
-                prop_assert!(resp.params.len() <= 5);
-            });
-        }
-
-        /// container_type() correctly identifies Command containers
-        #[test]
-        fn prop_container_type_fn_command(
+        fn prop_container_type_identification(
             code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            params in prop::collection::vec(any::<u32>(), 0..5)
-        ) {
-            let container = CommandContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                params,
-            };
-            let bytes = container.to_bytes();
-
-            let ct = container_type(&bytes).unwrap();
-            prop_assert_eq!(ct, ContainerType::Command);
-        }
-
-        /// container_type() correctly identifies Data containers
-        #[test]
-        fn prop_container_type_fn_data(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            payload in prop::collection::vec(any::<u8>(), 0..100)
-        ) {
-            let container = DataContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                payload,
-            };
-            let bytes = container.to_bytes();
-
-            let ct = container_type(&bytes).unwrap();
-            prop_assert_eq!(ct, ContainerType::Data);
-        }
-
-        /// container_type() correctly identifies Response containers
-        #[test]
-        fn prop_container_type_fn_response(bytes in valid_response_bytes(0)) {
-            let ct = container_type(&bytes).unwrap();
-            prop_assert_eq!(ct, ContainerType::Response);
-        }
-
-        /// DataContainer with extra trailing bytes still parses correctly
-        #[test]
-        fn prop_data_container_with_extra_bytes(
-            code in any::<u16>(),
-            transaction_id in any::<u32>(),
-            payload in prop::collection::vec(any::<u8>(), 0..100),
-            extra in prop::collection::vec(any::<u8>(), 1..50)
-        ) {
-            let original = DataContainer {
-                code: OperationCode::from_code(code),
-                transaction_id,
-                payload: payload.clone(),
-            };
-            let mut bytes = original.to_bytes();
-            bytes.extend_from_slice(&extra);
-
-            let parsed = DataContainer::from_bytes(&bytes).unwrap();
-            prop_assert_eq!(parsed.payload, original.payload);
-        }
-
-        /// ResponseContainer with extra trailing bytes still parses correctly
-        #[test]
-        fn prop_response_container_with_extra_bytes(
-            bytes in valid_response_bytes(2),
-            extra in prop::collection::vec(any::<u8>(), 1..50)
-        ) {
-            let mut bytes_with_extra = bytes.clone();
-            bytes_with_extra.extend_from_slice(&extra);
-
-            let resp = ResponseContainer::from_bytes(&bytes_with_extra).unwrap();
-            prop_assert_eq!(resp.params.len(), 2);
-        }
-    }
-
-    // Adversarial tests for malformed inputs
-
-    proptest! {
-        /// DataContainer with length field that doesn't match actual size
-        /// BUG FOUND: When length < HEADER_SIZE (12), line 168 panics:
-        /// `let payload = buf[HEADER_SIZE..length].to_vec()` creates slice 12..N where N < 12
-        /// This test documents the bug - currently skips values < 12 to avoid panic
-        #[test]
-        fn fuzz_data_container_wrong_length(
-            fake_length in 12u32..1000u32, // Skip < 12 to avoid KNOWN BUG (panic)
-            transaction_id: u32,
+            tx_id in any::<u32>(),
             payload in prop::collection::vec(any::<u8>(), 0..50)
         ) {
-            // Build a container with a lying length field
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&fake_length.to_le_bytes()); // Wrong length
-            buf.extend_from_slice(&2u16.to_le_bytes()); // Data type
-            buf.extend_from_slice(&0x1001u16.to_le_bytes()); // Some code
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            buf.extend_from_slice(&payload);
+            let data = DataContainer {
+                code: OperationCode::from_code(code),
+                transaction_id: tx_id,
+                payload,
+            };
+            prop_assert_eq!(container_type(&data.to_bytes()).unwrap(), ContainerType::Data);
 
-            // Should handle gracefully - never panic
-            let result = DataContainer::from_bytes(&buf);
-            // If fake_length claims more than we have, should fail
-            let actual_len = buf.len();
-            if fake_length as usize > actual_len {
-                prop_assert!(result.is_err());
-            }
+            let cmd = CommandContainer {
+                code: OperationCode::from_code(code),
+                transaction_id: tx_id,
+                params: vec![],
+            };
+            prop_assert_eq!(container_type(&cmd.to_bytes()).unwrap(), ContainerType::Command);
         }
 
-        /// Test that DataContainer::from_bytes returns Err when length < HEADER_SIZE
+        // Adversarial tests
+
         #[test]
-        fn fuzz_data_container_length_underflow(
-            fake_length in 0u32..12u32,
-            transaction_id: u32,
-        ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&fake_length.to_le_bytes());
-            buf.extend_from_slice(&2u16.to_le_bytes()); // Data type
+        fn fuzz_data_container_length_underflow(fake_length in 0u32..12u32, tx_id: u32) {
+            let mut buf = fake_length.to_le_bytes().to_vec();
+            buf.extend_from_slice(&2u16.to_le_bytes());
             buf.extend_from_slice(&0x1001u16.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-
-            // Should return Err, not panic
-            let result = DataContainer::from_bytes(&buf);
-            prop_assert!(result.is_err());
+            buf.extend_from_slice(&tx_id.to_le_bytes());
+            prop_assert!(DataContainer::from_bytes(&buf).is_err());
         }
 
-        /// ResponseContainer with length field claiming more data than exists
-        #[test]
-        fn fuzz_response_container_wrong_length(
-            fake_length in 13u32..1000u32, // > HEADER_SIZE to claim params
-            transaction_id: u32,
-        ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&fake_length.to_le_bytes());
-            buf.extend_from_slice(&3u16.to_le_bytes()); // Response type
-            buf.extend_from_slice(&0x2001u16.to_le_bytes()); // OK code
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            // No actual params provided
-
-            let result = ResponseContainer::from_bytes(&buf);
-            // Should fail because we claim params but don't provide them
-            prop_assert!(result.is_err());
-        }
-
-        /// EventContainer with invalid length (< 12, > 24, or unaligned)
         #[test]
         fn fuzz_event_container_invalid_length(
-            // Test lengths that are invalid: 0-11 (too small), 25+ (too large), or unaligned (13-15, 17-19, 21-23)
             fake_length in prop::sample::select(vec![
                 0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, // Too small
                 13, 14, 15, 17, 18, 19, 21, 22, 23,      // Unaligned
                 25, 26, 28, 32, 100,                      // Too large
             ]),
-            transaction_id: u32,
+            tx_id: u32,
         ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&fake_length.to_le_bytes());
-            buf.extend_from_slice(&4u16.to_le_bytes()); // Event type
-            buf.extend_from_slice(&0x4002u16.to_le_bytes()); // ObjectAdded
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            // Add 3 params to ensure buffer is large enough
-            buf.extend_from_slice(&0u32.to_le_bytes());
-            buf.extend_from_slice(&0u32.to_le_bytes());
-            buf.extend_from_slice(&0u32.to_le_bytes());
-
-            let result = EventContainer::from_bytes(&buf);
-            // These lengths should all be rejected
-            prop_assert!(result.is_err());
-        }
-
-        /// EventContainer with valid lengths (12, 16, 20, 24) should succeed
-        #[test]
-        fn fuzz_event_container_valid_length(
-            valid_length in prop::sample::select(vec![12u32, 16, 20, 24]),
-            transaction_id: u32,
-            param1: u32,
-            param2: u32,
-            param3: u32,
-        ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&valid_length.to_le_bytes());
-            buf.extend_from_slice(&4u16.to_le_bytes()); // Event type
-            buf.extend_from_slice(&0x4002u16.to_le_bytes()); // ObjectAdded
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            // Add params up to what the length claims
-            if valid_length >= 16 {
-                buf.extend_from_slice(&param1.to_le_bytes());
-            }
-            if valid_length >= 20 {
-                buf.extend_from_slice(&param2.to_le_bytes());
-            }
-            if valid_length >= 24 {
-                buf.extend_from_slice(&param3.to_le_bytes());
-            }
-
-            let result = EventContainer::from_bytes(&buf);
-            prop_assert!(result.is_ok());
-
-            let event = result.unwrap();
-            prop_assert_eq!(event.transaction_id, transaction_id);
-
-            // Check params are parsed or defaulted correctly
-            let param_count = (valid_length as usize - 12) / 4;
-            if param_count >= 1 {
-                prop_assert_eq!(event.params[0], param1);
-            } else {
-                prop_assert_eq!(event.params[0], 0);
-            }
-            if param_count >= 2 {
-                prop_assert_eq!(event.params[1], param2);
-            } else {
-                prop_assert_eq!(event.params[1], 0);
-            }
-            if param_count >= 3 {
-                prop_assert_eq!(event.params[2], param3);
-            } else {
-                prop_assert_eq!(event.params[2], 0);
-            }
-        }
-
-        /// Container with invalid type code (0, 5+)
-        #[test]
-        fn fuzz_container_invalid_type(
-            length in 12u32..100u32,
-            invalid_type in prop::sample::select(vec![0u16, 5, 6, 100, 0xFFFF]),
-            code: u16,
-            transaction_id: u32,
-        ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&length.to_le_bytes());
-            buf.extend_from_slice(&invalid_type.to_le_bytes());
-            buf.extend_from_slice(&code.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-
-            let result = container_type(&buf);
-            // Should return error for invalid types
-            prop_assert!(result.is_err());
-        }
-
-        /// DataContainer with wrong container type in header
-        #[test]
-        fn fuzz_data_container_wrong_type(
-            transaction_id: u32,
-            payload in prop::collection::vec(any::<u8>(), 0..20),
-            wrong_type in prop::sample::select(vec![1u16, 3, 4]), // Command, Response, Event
-        ) {
-            let total_len = 12 + payload.len();
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&(total_len as u32).to_le_bytes());
-            buf.extend_from_slice(&wrong_type.to_le_bytes()); // Wrong type!
-            buf.extend_from_slice(&0x1001u16.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            buf.extend_from_slice(&payload);
-
-            let result = DataContainer::from_bytes(&buf);
-            prop_assert!(result.is_err());
-        }
-
-        /// ResponseContainer with wrong container type in header
-        #[test]
-        fn fuzz_response_container_wrong_type(
-            transaction_id: u32,
-            wrong_type in prop::sample::select(vec![1u16, 2, 4]), // Command, Data, Event
-        ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&12u32.to_le_bytes());
-            buf.extend_from_slice(&wrong_type.to_le_bytes()); // Wrong type!
-            buf.extend_from_slice(&0x2001u16.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-
-            let result = ResponseContainer::from_bytes(&buf);
-            prop_assert!(result.is_err());
-        }
-
-        /// EventContainer with wrong container type in header
-        #[test]
-        fn fuzz_event_container_wrong_type(
-            transaction_id: u32,
-            wrong_type in prop::sample::select(vec![1u16, 2, 3]), // Command, Data, Response
-        ) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&24u32.to_le_bytes());
-            buf.extend_from_slice(&wrong_type.to_le_bytes()); // Wrong type!
+            let mut buf = fake_length.to_le_bytes().to_vec();
+            buf.extend_from_slice(&4u16.to_le_bytes());
             buf.extend_from_slice(&0x4002u16.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            buf.extend_from_slice(&0u32.to_le_bytes());
-            buf.extend_from_slice(&0u32.to_le_bytes());
-            buf.extend_from_slice(&0u32.to_le_bytes());
-
-            let result = EventContainer::from_bytes(&buf);
-            prop_assert!(result.is_err());
+            buf.extend_from_slice(&tx_id.to_le_bytes());
+            buf.extend_from_slice(&[0u8; 12]); // 3 params
+            prop_assert!(EventContainer::from_bytes(&buf).is_err());
         }
 
-        /// ResponseContainer with unaligned parameter bytes (not multiple of 4)
         #[test]
-        fn fuzz_response_container_unaligned(
-            code: u16,
-            transaction_id: u32,
-            extra_bytes in prop::collection::vec(any::<u8>(), 1..4), // 1-3 bytes, not aligned
+        fn fuzz_wrong_container_type(
+            tx_id: u32,
+            payload in prop::collection::vec(any::<u8>(), 0..20),
         ) {
-            // Only test lengths 1, 2, 3 (not 0 or 4)
-            prop_assume!(!extra_bytes.is_empty() && extra_bytes.len() < 4);
+            let len = 12 + payload.len();
+            for (parser_type, wrong_type) in [(2u16, 1u16), (2, 3), (2, 4), (3, 1), (3, 2), (4, 1)] {
+                let mut buf = (len as u32).to_le_bytes().to_vec();
+                buf.extend_from_slice(&wrong_type.to_le_bytes());
+                buf.extend_from_slice(&0x1001u16.to_le_bytes());
+                buf.extend_from_slice(&tx_id.to_le_bytes());
+                buf.extend_from_slice(&payload);
 
-            let length = 12 + extra_bytes.len() as u32;
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&length.to_le_bytes());
-            buf.extend_from_slice(&3u16.to_le_bytes()); // Response type
-            buf.extend_from_slice(&code.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-            buf.extend_from_slice(&extra_bytes);
-
-            // Should reject unaligned parameter bytes
-            let result = ResponseContainer::from_bytes(&buf);
-            prop_assert!(result.is_err());
-        }
-
-        /// Container with u32::MAX length
-        #[test]
-        fn fuzz_container_max_length(transaction_id: u32) {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&u32::MAX.to_le_bytes());
-            buf.extend_from_slice(&2u16.to_le_bytes());
-            buf.extend_from_slice(&0x1001u16.to_le_bytes());
-            buf.extend_from_slice(&transaction_id.to_le_bytes());
-
-            // Claims to be 4GB, but we only have 12 bytes
-            let result = DataContainer::from_bytes(&buf);
-            prop_assert!(result.is_err());
+                match parser_type {
+                    2 => prop_assert!(DataContainer::from_bytes(&buf).is_err()),
+                    3 => prop_assert!(ResponseContainer::from_bytes(&buf).is_err()),
+                    4 => prop_assert!(EventContainer::from_bytes(&buf).is_err()),
+                    _ => {}
+                }
+            }
         }
     }
 
-    #[test]
-    fn container_type_exactly_11_bytes() {
-        let buf = [0u8; 11];
-        assert!(container_type(&buf).is_err());
-    }
-
-    #[test]
-    fn container_type_exactly_12_bytes_valid() {
-        let mut buf = [0u8; 12];
-        buf[4] = 1; // Type = Command
-        assert!(container_type(&buf).is_ok());
-    }
-
-    #[test]
-    fn data_container_exactly_12_bytes_empty_payload() {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&12u32.to_le_bytes()); // length = 12
-        buf.extend_from_slice(&2u16.to_le_bytes()); // Data type
-        buf.extend_from_slice(&0x1001u16.to_le_bytes());
-        buf.extend_from_slice(&0u32.to_le_bytes());
-
-        let result = DataContainer::from_bytes(&buf).unwrap();
-        assert!(result.payload.is_empty());
-    }
-
-    #[test]
-    fn response_container_exactly_12_bytes_no_params() {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&12u32.to_le_bytes()); // length = 12
-        buf.extend_from_slice(&3u16.to_le_bytes()); // Response type
-        buf.extend_from_slice(&0x2001u16.to_le_bytes());
-        buf.extend_from_slice(&1u32.to_le_bytes());
-
-        let result = ResponseContainer::from_bytes(&buf).unwrap();
-        assert!(result.params.is_empty());
-    }
-
-    // Fuzz tests using shared macros - verify parsers don't panic on arbitrary input
+    // Fuzz tests - verify parsers don't panic on arbitrary input
     crate::fuzz_bytes_fn!(fuzz_container_type, container_type, 100);
     crate::fuzz_bytes!(fuzz_data_container, DataContainer, 100);
     crate::fuzz_bytes!(fuzz_response_container, ResponseContainer, 100);

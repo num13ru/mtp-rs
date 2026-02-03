@@ -159,74 +159,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_progress_percent() {
-        let p = Progress {
-            bytes_transferred: 50,
-            total_bytes: Some(100),
-        };
-        assert_eq!(p.percent(), Some(50.0));
+    fn progress_calculations() {
+        let cases = [
+            (50, Some(100), Some(50.0), Some(0.5)),
+            (100, Some(100), Some(100.0), Some(1.0)),
+            (25, Some(100), Some(25.0), Some(0.25)),
+            (0, Some(0), Some(100.0), Some(1.0)), // Empty file
+            (50, None, None, None),               // Unknown total
+        ];
+        for (transferred, total, expected_pct, expected_frac) in cases {
+            let p = Progress { bytes_transferred: transferred, total_bytes: total };
+            assert_eq!(p.percent(), expected_pct, "percent failed for {transferred}/{total:?}");
+            assert_eq!(p.fraction(), expected_frac, "fraction failed for {transferred}/{total:?}");
+        }
 
-        let p = Progress {
-            bytes_transferred: 100,
-            total_bytes: Some(100),
-        };
-        assert_eq!(p.percent(), Some(100.0));
-
-        let p = Progress {
-            bytes_transferred: 0,
-            total_bytes: Some(0),
-        };
-        assert_eq!(p.percent(), Some(100.0)); // Special case: empty file
-
-        let p = Progress {
-            bytes_transferred: 50,
-            total_bytes: None,
-        };
-        assert_eq!(p.percent(), None);
-    }
-
-    #[test]
-    fn test_progress_fraction() {
-        let p = Progress {
-            bytes_transferred: 50,
-            total_bytes: Some(100),
-        };
-        assert_eq!(p.fraction(), Some(0.5));
-
-        let p = Progress {
-            bytes_transferred: 25,
-            total_bytes: Some(100),
-        };
-        assert_eq!(p.fraction(), Some(0.25));
-
-        let p = Progress {
-            bytes_transferred: 0,
-            total_bytes: Some(0),
-        };
-        assert_eq!(p.fraction(), Some(1.0)); // Special case: empty file
-
-        let p = Progress {
-            bytes_transferred: 50,
-            total_bytes: None,
-        };
-        assert_eq!(p.fraction(), None);
-    }
-
-    #[test]
-    fn test_progress_edge_cases() {
-        // Test with very large numbers
-        let p = Progress {
-            bytes_transferred: u64::MAX / 2,
-            total_bytes: Some(u64::MAX),
-        };
-        assert!(p.fraction().unwrap() > 0.49 && p.fraction().unwrap() < 0.51);
-
-        // Test 100% progress
-        let p = Progress {
-            bytes_transferred: 1000,
-            total_bytes: Some(1000),
-        };
-        assert_eq!(p.percent(), Some(100.0));
-        assert_eq!(p.fraction(), Some(1.0));
+        // Large numbers
+        let large = Progress { bytes_transferred: u64::MAX / 2, total_bytes: Some(u64::MAX) };
+        let frac = large.fraction().unwrap();
+        assert!(frac > 0.49 && frac < 0.51);
     }
 }

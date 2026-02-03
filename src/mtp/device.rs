@@ -414,51 +414,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_list_devices() {
-        // This test doesn't need mock - it just tests the function exists
-        // Real devices test should be #[ignore]
-        let result = MtpDevice::list_devices();
-        // Will be empty or have devices depending on what's connected
-        assert!(result.is_ok());
+    fn list_devices_returns_ok() {
+        assert!(MtpDevice::list_devices().is_ok());
     }
 
     #[test]
-    fn test_builder_default() {
+    fn builder_timeouts() {
+        // Default values
         let builder = MtpDeviceBuilder::new();
         assert_eq!(builder.timeout, NusbTransport::DEFAULT_TIMEOUT);
         assert_eq!(builder.event_timeout, NusbTransport::DEFAULT_EVENT_TIMEOUT);
+
+        // Custom values
+        let custom = MtpDeviceBuilder::new()
+            .timeout(Duration::from_secs(45))
+            .event_timeout(Duration::from_millis(100));
+        assert_eq!(custom.timeout, Duration::from_secs(45));
+        assert_eq!(custom.event_timeout, Duration::from_millis(100));
     }
 
     #[test]
-    fn test_builder_timeout() {
-        let custom_timeout = Duration::from_secs(60);
-        let builder = MtpDeviceBuilder::new().timeout(custom_timeout);
-        assert_eq!(builder.timeout, custom_timeout);
-        assert_eq!(builder.event_timeout, NusbTransport::DEFAULT_EVENT_TIMEOUT);
-    }
-
-    #[test]
-    fn test_builder_event_timeout() {
-        let custom_event_timeout = Duration::from_millis(500);
-        let builder = MtpDeviceBuilder::new().event_timeout(custom_event_timeout);
-        assert_eq!(builder.timeout, NusbTransport::DEFAULT_TIMEOUT);
-        assert_eq!(builder.event_timeout, custom_event_timeout);
-    }
-
-    #[test]
-    fn test_builder_both_timeouts() {
-        let custom_timeout = Duration::from_secs(45);
-        let custom_event_timeout = Duration::from_millis(100);
-        let builder = MtpDeviceBuilder::new()
-            .timeout(custom_timeout)
-            .event_timeout(custom_event_timeout);
-        assert_eq!(builder.timeout, custom_timeout);
-        assert_eq!(builder.event_timeout, custom_event_timeout);
-    }
-
-    #[test]
-    fn test_mtp_device_info_display() {
-        let info = MtpDeviceInfo {
+    fn device_info_display() {
+        let with_serial = MtpDeviceInfo {
             vendor_id: 0x04e8,
             product_id: 0x6860,
             manufacturer: Some("Samsung".to_string()),
@@ -466,71 +443,27 @@ mod tests {
             serial_number: Some("ABC123".to_string()),
             location_id: 0x00200000,
         };
-        let display = info.display();
-        assert!(display.contains("Samsung"));
-        assert!(display.contains("Galaxy S24"));
-        assert!(display.contains("ABC123"));
-        assert!(display.contains("00200000"));
-    }
+        let display = with_serial.display();
+        assert!(display.contains("Samsung") && display.contains("Galaxy S24"));
+        assert!(display.contains("ABC123") && display.contains("00200000"));
 
-    #[test]
-    fn test_mtp_device_info_display_no_serial() {
-        let info = MtpDeviceInfo {
-            vendor_id: 0x04e8,
-            product_id: 0x6860,
-            manufacturer: Some("Samsung".to_string()),
-            product: Some("Galaxy S24".to_string()),
-            serial_number: None,
-            location_id: 0x00200000,
-        };
-        let display = info.display();
-        assert!(display.contains("Samsung"));
-        assert!(display.contains("Galaxy S24"));
-        assert!(display.contains("00200000"));
-        assert!(!display.contains("serial:"));
-    }
+        // Without serial
+        let no_serial = MtpDeviceInfo { serial_number: None, ..with_serial.clone() };
+        assert!(!no_serial.display().contains("serial:"));
 
-    #[test]
-    fn test_mtp_device_info_display_unknown_manufacturer() {
-        let info = MtpDeviceInfo {
-            vendor_id: 0x04e8,
-            product_id: 0x6860,
-            manufacturer: None,
-            product: None,
-            serial_number: None,
-            location_id: 0x00200000,
-        };
-        let display = info.display();
-        assert!(display.contains("Unknown"));
+        // Unknown manufacturer
+        let unknown = MtpDeviceInfo { manufacturer: None, product: None, ..with_serial };
+        assert!(unknown.display().contains("Unknown"));
     }
 
     #[tokio::test]
     #[ignore] // Requires real MTP device
-    async fn test_open_first_device() {
+    async fn real_device_operations() {
         let device = MtpDevice::open_first().await.unwrap();
         println!("Connected to: {}", device.device_info().model);
-
-        let storages = device.storages().await.unwrap();
-        for storage in &storages {
+        for storage in device.storages().await.unwrap() {
             println!("Storage: {}", storage.info().description);
         }
-
-        device.close().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires real MTP device
-    async fn test_builder_with_custom_timeout() {
-        let device = MtpDevice::builder()
-            .timeout(Duration::from_secs(60))
-            .open_first()
-            .await
-            .unwrap();
-
-        let info = device.device_info();
-        println!("Model: {}", info.model);
-        println!("Manufacturer: {}", info.manufacturer);
-
         device.close().await.unwrap();
     }
 }
