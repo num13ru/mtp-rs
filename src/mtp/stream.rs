@@ -163,17 +163,31 @@ mod tests {
             (50, Some(100), 50.0, 0.5),
             (100, Some(100), 100.0, 1.0),
             (25, Some(100), 25.0, 0.25),
-            (0, Some(0), 100.0, 1.0),   // Empty file
-            (50, None, 100.0, 1.0),     // Unknown total defaults to complete
+            (0, Some(0), 100.0, 1.0), // Empty file
+            (50, None, 100.0, 1.0),   // Unknown total defaults to complete
         ];
         for (transferred, total, expected_pct, expected_frac) in cases {
-            let p = Progress { bytes_transferred: transferred, total_bytes: total };
-            assert_eq!(p.percent(), expected_pct, "percent failed for {transferred}/{total:?}");
-            assert_eq!(p.fraction(), expected_frac, "fraction failed for {transferred}/{total:?}");
+            let p = Progress {
+                bytes_transferred: transferred,
+                total_bytes: total,
+            };
+            assert_eq!(
+                p.percent(),
+                expected_pct,
+                "percent failed for {transferred}/{total:?}"
+            );
+            assert_eq!(
+                p.fraction(),
+                expected_frac,
+                "fraction failed for {transferred}/{total:?}"
+            );
         }
 
         // Large numbers
-        let large = Progress { bytes_transferred: u64::MAX / 2, total_bytes: Some(u64::MAX) };
+        let large = Progress {
+            bytes_transferred: u64::MAX / 2,
+            total_bytes: Some(u64::MAX),
+        };
         let frac = large.fraction();
         assert!(frac > 0.49 && frac < 0.51);
     }

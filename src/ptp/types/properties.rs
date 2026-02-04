@@ -9,7 +9,8 @@
 use crate::ptp::codes::{DevicePropertyCode, PropertyDataType};
 use crate::ptp::pack::{
     pack_i16, pack_i32, pack_i64, pack_i8, pack_string, pack_u16, pack_u32, pack_u64, pack_u8,
-    unpack_i16, unpack_i32, unpack_i64, unpack_i8, unpack_string, unpack_u16, unpack_u64, unpack_u8,
+    unpack_i16, unpack_i32, unpack_i64, unpack_i8, unpack_string, unpack_u16, unpack_u64,
+    unpack_u8,
 };
 
 // --- PropertyValue Enum ---
@@ -399,7 +400,10 @@ mod tests {
             assert_eq!(PropertyFormType::from_code(code), expected);
             assert_eq!(expected.to_code(), code);
         }
-        assert_eq!(PropertyFormType::from_code(0x99), PropertyFormType::Unknown(0x99));
+        assert_eq!(
+            PropertyFormType::from_code(0x99),
+            PropertyFormType::Unknown(0x99)
+        );
     }
 
     #[test]
@@ -412,7 +416,11 @@ mod tests {
 
     #[test]
     fn property_form_type_roundtrip() {
-        for f in [PropertyFormType::None, PropertyFormType::Range, PropertyFormType::Enumeration] {
+        for f in [
+            PropertyFormType::None,
+            PropertyFormType::Range,
+            PropertyFormType::Enumeration,
+        ] {
             assert_eq!(PropertyFormType::from_code(f.to_code()), f);
         }
     }
@@ -513,12 +521,15 @@ mod tests {
         assert_eq!(desc.current_value, PropertyValue::Uint16(800));
         assert_eq!(desc.form_type, PropertyFormType::Enumeration);
         let values = desc.enum_values.unwrap();
-        assert_eq!(values, vec![
-            PropertyValue::Uint16(100),
-            PropertyValue::Uint16(200),
-            PropertyValue::Uint16(400),
-            PropertyValue::Uint16(800),
-        ]);
+        assert_eq!(
+            values,
+            vec![
+                PropertyValue::Uint16(100),
+                PropertyValue::Uint16(200),
+                PropertyValue::Uint16(400),
+                PropertyValue::Uint16(800),
+            ]
+        );
     }
 
     fn build_datetime_prop_desc() -> Vec<u8> {
@@ -538,7 +549,10 @@ mod tests {
         let desc = DevicePropDesc::from_bytes(&build_datetime_prop_desc()).unwrap();
         assert_eq!(desc.property_code, DevicePropertyCode::DateTime);
         assert_eq!(desc.data_type, PropertyDataType::String);
-        assert_eq!(desc.current_value, PropertyValue::String("20240315T120000".into()));
+        assert_eq!(
+            desc.current_value,
+            PropertyValue::String("20240315T120000".into())
+        );
         assert_eq!(desc.form_type, PropertyFormType::None);
     }
 
@@ -559,7 +573,10 @@ mod tests {
     #[test]
     fn device_prop_desc_parse_exposure_bias_signed() {
         let desc = DevicePropDesc::from_bytes(&build_exposure_bias_prop_desc()).unwrap();
-        assert_eq!(desc.property_code, DevicePropertyCode::ExposureBiasCompensation);
+        assert_eq!(
+            desc.property_code,
+            DevicePropertyCode::ExposureBiasCompensation
+        );
         assert_eq!(desc.current_value, PropertyValue::Int16(-1000));
         let range = desc.range.unwrap();
         assert_eq!(range.min, PropertyValue::Int16(-3000));

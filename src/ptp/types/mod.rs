@@ -16,4 +16,6 @@ mod storage;
 pub use device::{DeviceInfo, StorageInfo};
 pub use objects::ObjectInfo;
 pub use properties::{DevicePropDesc, PropertyFormType, PropertyRange, PropertyValue};
-pub use storage::{AccessCapability, AssociationType, FilesystemType, ProtectionStatus, StorageType};
+pub use storage::{
+    AccessCapability, AssociationType, FilesystemType, ProtectionStatus, StorageType,
+};

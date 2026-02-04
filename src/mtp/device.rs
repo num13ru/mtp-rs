@@ -455,11 +455,18 @@ mod tests {
         assert!(display.contains("ABC123") && display.contains("00200000"));
 
         // Without serial
-        let no_serial = MtpDeviceInfo { serial_number: None, ..with_serial.clone() };
+        let no_serial = MtpDeviceInfo {
+            serial_number: None,
+            ..with_serial.clone()
+        };
         assert!(!no_serial.display().contains("serial:"));
 
         // Unknown manufacturer
-        let unknown = MtpDeviceInfo { manufacturer: None, product: None, ..with_serial };
+        let unknown = MtpDeviceInfo {
+            manufacturer: None,
+            product: None,
+            ..with_serial
+        };
         assert!(unknown.display().contains("Unknown"));
     }
 

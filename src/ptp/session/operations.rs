@@ -392,7 +392,9 @@ mod tests {
     use crate::ptp::session::tests::{
         data_container, mock_transport, ok_response, response_with_params,
     };
-    use crate::ptp::{pack_string, pack_u16, pack_u32, pack_u32_array, ContainerType, ResponseCode};
+    use crate::ptp::{
+        pack_string, pack_u16, pack_u32, pack_u32_array, ContainerType, ResponseCode,
+    };
 
     fn event_container(code: u16, params: [u32; 3]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(24);

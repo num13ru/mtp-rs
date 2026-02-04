@@ -3,7 +3,9 @@
 //! This module contains methods for getting and setting device properties,
 //! primarily used for digital cameras to query/set settings like ISO, aperture, etc.
 
-use crate::ptp::{DevicePropDesc, DevicePropertyCode, OperationCode, PropertyDataType, PropertyValue};
+use crate::ptp::{
+    DevicePropDesc, DevicePropertyCode, OperationCode, PropertyDataType, PropertyValue,
+};
 use crate::Error;
 
 use super::PtpSession;

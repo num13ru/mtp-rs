@@ -32,7 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check for --location argument
     let args: Vec<String> = std::env::args().collect();
     let location_id = if let Some(pos) = args.iter().position(|a| a == "--location") {
-        let loc_str = args.get(pos + 1).ok_or("Missing location ID after --location")?;
+        let loc_str = args
+            .get(pos + 1)
+            .ok_or("Missing location ID after --location")?;
         if loc_str.starts_with("0x") || loc_str.starts_with("0X") {
             u64::from_str_radix(&loc_str[2..], 16)?
         } else {
@@ -61,12 +63,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check write-related operations
     println!("=== Write Operation Support ===");
     let write_ops = [
-        (OperationCode::SendObjectInfo, "SendObjectInfo (upload metadata)"),
+        (
+            OperationCode::SendObjectInfo,
+            "SendObjectInfo (upload metadata)",
+        ),
         (OperationCode::SendObject, "SendObject (upload data)"),
         (OperationCode::DeleteObject, "DeleteObject"),
         (OperationCode::MoveObject, "MoveObject"),
         (OperationCode::CopyObject, "CopyObject"),
-        (OperationCode::SetObjectPropValue, "SetObjectPropValue (rename)"),
+        (
+            OperationCode::SetObjectPropValue,
+            "SetObjectPropValue (rename)",
+        ),
     ];
 
     let mut has_any_write = false;
@@ -78,7 +86,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "✗ NOT SUPPORTED"
         };
-        println!("  {:?} (0x{:04X}): {} - {}", op, u16::from(op), status, desc);
+        println!(
+            "  {:?} (0x{:04X}): {} - {}",
+            op,
+            u16::from(op),
+            status,
+            desc
+        );
     }
     println!();
 
@@ -140,7 +154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show all supported operations for reference
-    println!("=== All Supported Operations ({}) ===", info.operations_supported.len());
+    println!(
+        "=== All Supported Operations ({}) ===",
+        info.operations_supported.len()
+    );
     for op in &info.operations_supported {
         println!("  0x{:04X} {:?}", u16::from(*op), op);
     }

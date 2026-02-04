@@ -183,7 +183,10 @@ mod tests {
 
     #[test]
     fn association_type_conversions() {
-        for (code, expected) in [(0, AssociationType::None), (1, AssociationType::GenericFolder)] {
+        for (code, expected) in [
+            (0, AssociationType::None),
+            (1, AssociationType::GenericFolder),
+        ] {
             assert_eq!(AssociationType::from(code), expected);
             assert_eq!(u16::from(expected), code);
         }

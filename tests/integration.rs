@@ -94,19 +94,38 @@ async fn find_file_in_common_folders(
 ) -> Option<(ObjectHandle, u64, String)> {
     let root_objects = storage.list_objects(None).await.ok()?;
 
-    let common_folders = ["Download", "Downloads", "DCIM", "Pictures", "Music", "Documents"];
+    let common_folders = [
+        "Download",
+        "Downloads",
+        "DCIM",
+        "Pictures",
+        "Music",
+        "Documents",
+    ];
 
     for folder_name in &common_folders {
-        let Some(folder) = root_objects.iter().find(|o| o.is_folder() && o.filename == *folder_name) else {
+        let Some(folder) = root_objects
+            .iter()
+            .find(|o| o.is_folder() && o.filename == *folder_name)
+        else {
             continue;
         };
 
-        let objects = storage.list_objects(Some(folder.handle)).await.unwrap_or_default();
+        let objects = storage
+            .list_objects(Some(folder.handle))
+            .await
+            .unwrap_or_default();
 
         // For DCIM, also check Camera subfolder
         let objects_to_check = if *folder_name == "DCIM" {
-            if let Some(camera) = objects.iter().find(|o| o.is_folder() && o.filename == "Camera") {
-                storage.list_objects(Some(camera.handle)).await.unwrap_or_default()
+            if let Some(camera) = objects
+                .iter()
+                .find(|o| o.is_folder() && o.filename == "Camera")
+            {
+                storage
+                    .list_objects(Some(camera.handle))
+                    .await
+                    .unwrap_or_default()
             } else {
                 objects
             }
@@ -174,7 +193,12 @@ mod readonly {
     async fn test_device_connection() {
         let device = try_device!(MtpDevice::open_first().await, "open device");
         let info = device.device_info();
-        tlog!("Connected: {} {} ({})", info.manufacturer, info.model, info.serial_number);
+        tlog!(
+            "Connected: {} {} ({})",
+            info.manufacturer,
+            info.model,
+            info.serial_number
+        );
         assert!(!info.manufacturer.is_empty());
         assert!(!info.model.is_empty());
         device.close().await.expect("close failed");
@@ -213,7 +237,11 @@ mod readonly {
 
         for obj in objects.iter().take(20) {
             let kind = if obj.is_folder() { "DIR " } else { "FILE" };
-            let size = if obj.is_folder() { "-".to_string() } else { format!("{}", obj.size) };
+            let size = if obj.is_folder() {
+                "-".to_string()
+            } else {
+                format!("{}", obj.size)
+            };
             tlog!("  {} {:>12} {}", kind, size, obj.filename);
         }
         if objects.len() > 20 {
@@ -242,7 +270,12 @@ mod readonly {
 
         let folders = objects.iter().filter(|o| o.is_folder()).count();
         let files = objects.iter().filter(|o| o.is_file()).count();
-        tlog!("Total: {} objects ({} folders, {} files)", objects.len(), folders, files);
+        tlog!(
+            "Total: {} objects ({} folders, {} files)",
+            objects.len(),
+            folders,
+            files
+        );
     }
 
     #[tokio::test]
@@ -254,7 +287,9 @@ mod readonly {
         let storage = &storages[0];
 
         tlog!("Searching for file (100KB-10MB)...");
-        let Some((handle, file_size, file_name)) = find_suitable_file(storage, 100_000, 10_000_000).await else {
+        let Some((handle, file_size, file_name)) =
+            find_suitable_file(storage, 100_000, 10_000_000).await
+        else {
             tlog!("No suitable file found, skipping");
             return;
         };
@@ -280,7 +315,10 @@ mod readonly {
     #[serial]
     async fn test_custom_timeout() {
         let device = try_device!(
-            MtpDevice::builder().timeout(Duration::from_secs(60)).open_first().await,
+            MtpDevice::builder()
+                .timeout(Duration::from_secs(60))
+                .open_first()
+                .await,
             "open with timeout"
         );
         tlog!("Opened with 60s timeout: {}", device.device_info().model);
@@ -324,7 +362,9 @@ mod readonly {
         let storage = &storages[0];
 
         tlog!("Searching for file (100KB-5MB)...");
-        let Some((handle, file_size, file_name)) = find_suitable_file(storage, 100_000, 5_000_000).await else {
+        let Some((handle, file_size, file_name)) =
+            find_suitable_file(storage, 100_000, 5_000_000).await
+        else {
             tlog!("No suitable file found, skipping");
             return;
         };
@@ -342,7 +382,11 @@ mod readonly {
             chunk_count += 1;
         }
 
-        tlog!("Received {} bytes in {} chunks", total_received, chunk_count);
+        tlog!(
+            "Received {} bytes in {} chunks",
+            total_received,
+            chunk_count
+        );
         assert_eq!(total_received, file_size);
     }
 }
@@ -357,7 +401,8 @@ mod destructive {
     use mtp_rs::Error;
 
     /// Helper to get device, storage, and Download folder handle
-    async fn setup_with_download_folder() -> Option<(MtpDevice, mtp_rs::mtp::Storage, ObjectHandle)> {
+    async fn setup_with_download_folder() -> Option<(MtpDevice, mtp_rs::mtp::Storage, ObjectHandle)>
+    {
         let device = MtpDevice::open_first().await.ok()?;
         let storages = device.storages().await.ok()?;
         let storage = storages.into_iter().next()?;
@@ -380,11 +425,19 @@ mod destructive {
 
         tlog!("Uploading {} bytes...", content_bytes.len());
         let info = NewObjectInfo::file("mtp-rs-test.txt", content_bytes.len() as u64);
-        let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(content_bytes.to_vec()))]);
-        let handle = storage.upload(Some(download_handle), info, Box::pin(stream)).await.expect("upload failed");
+        let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+            content_bytes.to_vec(),
+        ))]);
+        let handle = storage
+            .upload(Some(download_handle), info, Box::pin(stream))
+            .await
+            .expect("upload failed");
 
         // Verify
-        let obj_info = storage.get_object_info(handle).await.expect("get info failed");
+        let obj_info = storage
+            .get_object_info(handle)
+            .await
+            .expect("get info failed");
         assert_eq!(obj_info.filename, "mtp-rs-test.txt");
         assert_eq!(obj_info.size, content_bytes.len() as u64);
 
@@ -396,7 +449,13 @@ mod destructive {
         // Delete and verify
         storage.delete(handle).await.expect("delete failed");
         let result = storage.get_object_info(handle).await;
-        assert!(matches!(result, Err(Error::Protocol { code: mtp_rs::ptp::ResponseCode::InvalidObjectHandle, .. })));
+        assert!(matches!(
+            result,
+            Err(Error::Protocol {
+                code: mtp_rs::ptp::ResponseCode::InvalidObjectHandle,
+                ..
+            })
+        ));
         tlog!("Upload/download/delete PASSED");
     }
 
@@ -412,9 +471,15 @@ mod destructive {
         let folder_name = format!("mtp-rs-test-{}", std::process::id());
         tlog!("Creating folder: {}", folder_name);
 
-        let handle = storage.create_folder(Some(download_handle), &folder_name).await.expect("create failed");
+        let handle = storage
+            .create_folder(Some(download_handle), &folder_name)
+            .await
+            .expect("create failed");
 
-        let info = storage.get_object_info(handle).await.expect("get info failed");
+        let info = storage
+            .get_object_info(handle)
+            .await
+            .expect("get info failed");
         assert!(info.is_folder());
         assert_eq!(info.filename, folder_name);
 
@@ -436,24 +501,37 @@ mod destructive {
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
         let root = try_device!(storage.list_objects(None).await, "list root");
-        let download = root.iter().find(|o| o.filename == "Download").expect("no Download folder");
+        let download = root
+            .iter()
+            .find(|o| o.filename == "Download")
+            .expect("no Download folder");
 
         let original = format!("mtp-rs-rename-{}.txt", std::process::id());
         let renamed = format!("mtp-rs-renamed-{}.txt", std::process::id());
         let content = b"rename test";
 
         let info = NewObjectInfo::file(&original, content.len() as u64);
-        let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(content.to_vec()))]);
-        let handle = storage.upload(Some(download.handle), info, Box::pin(stream)).await.expect("upload failed");
+        let stream =
+            futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(content.to_vec()))]);
+        let handle = storage
+            .upload(Some(download.handle), info, Box::pin(stream))
+            .await
+            .expect("upload failed");
 
         tlog!("Renaming {} -> {}", original, renamed);
         match storage.rename(handle, &renamed).await {
             Ok(()) => {
-                let info = storage.get_object_info(handle).await.expect("get info failed");
+                let info = storage
+                    .get_object_info(handle)
+                    .await
+                    .expect("get info failed");
                 assert_eq!(info.filename, renamed);
                 tlog!("Rename verified");
             }
-            Err(Error::Protocol { code: mtp_rs::ptp::ResponseCode::OperationNotSupported, .. }) => {
+            Err(Error::Protocol {
+                code: mtp_rs::ptp::ResponseCode::OperationNotSupported,
+                ..
+            }) => {
                 tlog!("Rename not actually supported (device lied)");
             }
             Err(e) => {
@@ -487,16 +565,24 @@ mod destructive {
 
         let filename = format!("mtp-rs-stream-{}.bin", std::process::id());
         let info = NewObjectInfo::file(&filename, total_size as u64);
-        let handle = storage.upload(Some(download_handle), info, futures::stream::iter(chunks)).await.expect("upload failed");
+        let handle = storage
+            .upload(Some(download_handle), info, futures::stream::iter(chunks))
+            .await
+            .expect("upload failed");
 
         // Verify
-        let obj_info = storage.get_object_info(handle).await.expect("get info failed");
+        let obj_info = storage
+            .get_object_info(handle)
+            .await
+            .expect("get info failed");
         assert_eq!(obj_info.size, total_size as u64);
 
         let downloaded = storage.download(handle).await.expect("download failed");
         for i in 0..num_chunks {
             let start = i * chunk_size;
-            assert!(downloaded[start..start + chunk_size].iter().all(|&b| b == i as u8));
+            assert!(downloaded[start..start + chunk_size]
+                .iter()
+                .all(|&b| b == i as u8));
         }
 
         storage.delete(handle).await.expect("cleanup failed");
@@ -513,8 +599,14 @@ mod destructive {
         };
 
         // Find a file to copy
-        let objects = storage.list_objects(Some(download_handle)).await.unwrap_or_default();
-        let Some(source) = objects.iter().find(|o| o.is_file() && o.size > 50_000 && o.size < 500_000) else {
+        let objects = storage
+            .list_objects(Some(download_handle))
+            .await
+            .unwrap_or_default();
+        let Some(source) = objects
+            .iter()
+            .find(|o| o.is_file() && o.size > 50_000 && o.size < 500_000)
+        else {
             tlog!("No suitable source file (50KB-500KB), skipping");
             return;
         };
@@ -524,17 +616,27 @@ mod destructive {
         tlog!("Copying {} ({} bytes)", source.filename, source_size);
 
         // Download
-        let download = storage.download_stream(source_handle).await.expect("download failed");
+        let download = storage
+            .download_stream(source_handle)
+            .await
+            .expect("download failed");
         let data = download.collect().await.expect("collect failed");
 
         // Upload copy
         let dest_name = format!("mtp-rs-copy-{}.bin", std::process::id());
         let info = NewObjectInfo::file(&dest_name, source_size);
-        let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(data.clone()))]);
-        let dest_handle = storage.upload(Some(download_handle), info, stream).await.expect("upload failed");
+        let stream =
+            futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(data.clone()))]);
+        let dest_handle = storage
+            .upload(Some(download_handle), info, stream)
+            .await
+            .expect("upload failed");
 
         // Verify
-        let copy_data = storage.download(dest_handle).await.expect("download copy failed");
+        let copy_data = storage
+            .download(dest_handle)
+            .await
+            .expect("download copy failed");
         assert_eq!(copy_data, data);
 
         storage.delete(dest_handle).await.expect("cleanup failed");

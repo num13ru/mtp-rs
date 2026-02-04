@@ -5,8 +5,8 @@
 //! buffering entire files in memory.
 
 use crate::ptp::{
-    container_type, pack_u16, pack_u32, unpack_u32, CommandContainer, ContainerType,
-    ObjectHandle, OperationCode, ResponseCode, ResponseContainer,
+    container_type, pack_u16, pack_u32, unpack_u32, CommandContainer, ContainerType, ObjectHandle,
+    OperationCode, ResponseCode, ResponseContainer,
 };
 use crate::transport::Transport;
 use crate::Error;

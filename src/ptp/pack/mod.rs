@@ -347,7 +347,10 @@ mod tests {
         // Verify little-endian byte order
         assert_eq!(pack_u16(0x1234), [0x34, 0x12]);
         assert_eq!(pack_u32(0x12345678), [0x78, 0x56, 0x34, 0x12]);
-        assert_eq!(pack_u64(0x0102030405060708), [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
+        assert_eq!(
+            pack_u64(0x0102030405060708),
+            [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
         assert_eq!(pack_i16(-1), [0xFF, 0xFF]);
         assert_eq!(pack_i32(-1), [0xFF, 0xFF, 0xFF, 0xFF]);
     }
@@ -386,7 +389,7 @@ mod tests {
     fn unpack_string_errors() {
         assert!(unpack_string(&[]).is_err());
         assert!(unpack_string(&[0x03, 0x41, 0x00]).is_err()); // truncated
-        // Invalid surrogate pair
+                                                              // Invalid surrogate pair
         assert!(unpack_string(&[0x02, 0x00, 0xD8, 0x00, 0x00]).is_err());
     }
 

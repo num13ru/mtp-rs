@@ -101,7 +101,11 @@ mod tests {
             (EventCode::ObjectRemoved, 123),
             (EventCode::ObjectInfoChanged, 99),
         ] {
-            let container = EventContainer { code, transaction_id: 0, params: [expected_handle, 0, 0] };
+            let container = EventContainer {
+                code,
+                transaction_id: 0,
+                params: [expected_handle, 0, 0],
+            };
             let event = DeviceEvent::from_container(&container);
             let handle = match event {
                 DeviceEvent::ObjectAdded { handle } => handle,
@@ -118,7 +122,11 @@ mod tests {
             (EventCode::StoreRemoved, 0x00010002),
             (EventCode::StorageInfoChanged, 0x00010001),
         ] {
-            let container = EventContainer { code, transaction_id: 0, params: [expected_id, 0, 0] };
+            let container = EventContainer {
+                code,
+                transaction_id: 0,
+                params: [expected_id, 0, 0],
+            };
             let event = DeviceEvent::from_container(&container);
             let storage_id = match event {
                 DeviceEvent::StoreAdded { storage_id } => storage_id,
@@ -130,14 +138,25 @@ mod tests {
         }
 
         // DeviceInfoChanged (no params)
-        let container = EventContainer { code: EventCode::DeviceInfoChanged, transaction_id: 0, params: [0, 0, 0] };
-        assert!(matches!(DeviceEvent::from_container(&container), DeviceEvent::DeviceInfoChanged));
+        let container = EventContainer {
+            code: EventCode::DeviceInfoChanged,
+            transaction_id: 0,
+            params: [0, 0, 0],
+        };
+        assert!(matches!(
+            DeviceEvent::from_container(&container),
+            DeviceEvent::DeviceInfoChanged
+        ));
     }
 
     #[test]
     fn unknown_events() {
         // Explicit Unknown code
-        let container = EventContainer { code: EventCode::Unknown(0x9999), transaction_id: 0, params: [1, 2, 3] };
+        let container = EventContainer {
+            code: EventCode::Unknown(0x9999),
+            transaction_id: 0,
+            params: [1, 2, 3],
+        };
         match DeviceEvent::from_container(&container) {
             DeviceEvent::Unknown { code, params } => {
                 assert_eq!(code, 0x9999);
@@ -147,7 +166,11 @@ mod tests {
         }
 
         // Known EventCode without DeviceEvent variant (DevicePropChanged)
-        let container = EventContainer { code: EventCode::DevicePropChanged, transaction_id: 0, params: [100, 0, 0] };
+        let container = EventContainer {
+            code: EventCode::DevicePropChanged,
+            transaction_id: 0,
+            params: [100, 0, 0],
+        };
         match DeviceEvent::from_container(&container) {
             DeviceEvent::Unknown { code, params } => {
                 assert_eq!(code, 0x4006);

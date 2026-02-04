@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn datetime_parse_basic() {
         let dt = DateTime::parse("20240315T143022").unwrap();
-        assert_eq!((dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second), (2024, 3, 15, 14, 30, 22));
+        assert_eq!(
+            (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second),
+            (2024, 3, 15, 14, 30, 22)
+        );
     }
 
     #[test]
@@ -222,14 +225,16 @@ mod tests {
 
     #[test]
     fn datetime_parse_invalid_month() {
-        for s in ["20240015T143022", "20241315T143022"] { // month=0, month=13
+        for s in ["20240015T143022", "20241315T143022"] {
+            // month=0, month=13
             assert!(DateTime::parse(s).is_none());
         }
     }
 
     #[test]
     fn datetime_parse_invalid_day() {
-        for s in ["20240100T143022", "20240132T143022"] { // day=0, day=32
+        for s in ["20240100T143022", "20240132T143022"] {
+            // day=0, day=32
             assert!(DateTime::parse(s).is_none());
         }
     }
@@ -253,29 +258,45 @@ mod tests {
 
     #[test]
     fn datetime_format() {
-        assert_eq!(DateTime::new(2024, 3, 15, 14, 30, 22).unwrap().format(), Some("20240315T143022".into()));
+        assert_eq!(
+            DateTime::new(2024, 3, 15, 14, 30, 22).unwrap().format(),
+            Some("20240315T143022".into())
+        );
     }
 
     #[test]
     fn datetime_format_with_leading_zeros() {
-        assert_eq!(DateTime::new(2024, 1, 5, 9, 5, 3).unwrap().format(), Some("20240105T090503".into()));
+        assert_eq!(
+            DateTime::new(2024, 1, 5, 9, 5, 3).unwrap().format(),
+            Some("20240105T090503".into())
+        );
     }
 
     #[test]
     fn datetime_roundtrip() {
         let original = DateTime::new(2024, 12, 31, 23, 59, 59).unwrap();
-        assert_eq!(DateTime::parse(&original.format().unwrap()).unwrap(), original);
+        assert_eq!(
+            DateTime::parse(&original.format().unwrap()).unwrap(),
+            original
+        );
     }
 
     #[test]
     fn datetime_format_invalid_returns_none() {
         let invalid_cases = [
-            (2024, 13, 1, 0, 0, 0),  // invalid month
-            (2024, 1, 1, 0, 60, 0),  // invalid minute
-            (10000, 1, 1, 0, 0, 0),  // year too large
+            (2024, 13, 1, 0, 0, 0), // invalid month
+            (2024, 1, 1, 0, 60, 0), // invalid minute
+            (10000, 1, 1, 0, 0, 0), // year too large
         ];
         for (y, mo, d, h, mi, s) in invalid_cases {
-            let dt = DateTime { year: y, month: mo, day: d, hour: h, minute: mi, second: s };
+            let dt = DateTime {
+                year: y,
+                month: mo,
+                day: d,
+                hour: h,
+                minute: mi,
+                second: s,
+            };
             assert_eq!(dt.format(), None);
         }
     }
@@ -283,7 +304,10 @@ mod tests {
     #[test]
     fn datetime_default() {
         let dt = DateTime::default();
-        assert_eq!((dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second), (0, 0, 0, 0, 0, 0));
+        assert_eq!(
+            (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second),
+            (0, 0, 0, 0, 0, 0)
+        );
     }
 
     // --- Pack/unpack tests ---
@@ -296,7 +320,14 @@ mod tests {
 
     #[test]
     fn pack_datetime_invalid_returns_error() {
-        let invalid = DateTime { year: 2024, month: 13, day: 1, hour: 0, minute: 0, second: 0 };
+        let invalid = DateTime {
+            year: 2024,
+            month: 13,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
         assert!(pack_datetime(&invalid).is_err());
     }
 
@@ -334,14 +365,28 @@ mod tests {
 
     #[test]
     fn datetime_boundary_day_31() {
-        let dt = DateTime { year: 2024, month: 1, day: 31, hour: 0, minute: 0, second: 0 };
+        let dt = DateTime {
+            year: 2024,
+            month: 1,
+            day: 31,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
         let parsed = DateTime::parse(&dt.format().unwrap()).unwrap();
         assert_eq!(parsed.day, 31);
     }
 
     #[test]
     fn datetime_boundary_year_0() {
-        let dt = DateTime { year: 0, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        let dt = DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
         if let Some(p) = DateTime::parse(&dt.format().unwrap()) {
             assert_eq!(p.year, 0);
         }
@@ -349,13 +394,27 @@ mod tests {
 
     #[test]
     fn datetime_boundary_year_9999() {
-        let dt = DateTime { year: 9999, month: 12, day: 31, hour: 23, minute: 59, second: 59 };
+        let dt = DateTime {
+            year: 9999,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 59,
+        };
         assert_eq!(DateTime::parse(&dt.format().unwrap()).unwrap().year, 9999);
     }
 
     #[test]
     fn datetime_boundary_year_10000() {
-        let dt = DateTime { year: 10000, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        let dt = DateTime {
+            year: 10000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
         assert!(dt.format().is_none());
         assert!(pack_datetime(&dt).is_err());
     }
@@ -363,8 +422,22 @@ mod tests {
     // --- Property-based tests ---
 
     fn valid_datetime() -> impl Strategy<Value = DateTime> {
-        (1000u16..9999u16, 1u8..=12u8, 1u8..=28u8, 0u8..=23u8, 0u8..=59u8, 0u8..=59u8)
-            .prop_map(|(year, month, day, hour, minute, second)| DateTime { year, month, day, hour, minute, second })
+        (
+            1000u16..9999u16,
+            1u8..=12u8,
+            1u8..=28u8,
+            0u8..=23u8,
+            0u8..=59u8,
+            0u8..=59u8,
+        )
+            .prop_map(|(year, month, day, hour, minute, second)| DateTime {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            })
     }
 
     proptest! {

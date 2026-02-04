@@ -65,7 +65,6 @@ pub enum OperationCode {
     Unknown(u16),
 }
 
-
 /// PTP response codes (status returned by device).
 ///
 /// These codes indicate the result of an operation.
@@ -125,7 +124,6 @@ pub enum ResponseCode {
     Unknown(u16),
 }
 
-
 /// PTP event codes (asynchronous notifications from device).
 ///
 /// These codes identify events that the device sends asynchronously.
@@ -154,7 +152,6 @@ pub enum EventCode {
     #[num_enum(catch_all)]
     Unknown(u16),
 }
-
 
 /// PTP/MTP object format codes.
 ///
@@ -345,7 +342,6 @@ pub enum ObjectPropertyCode {
     Unknown(u16),
 }
 
-
 /// PTP property data type codes.
 ///
 /// These codes identify the data type of property values in property descriptors.
@@ -482,7 +478,6 @@ pub enum DevicePropertyCode {
     Unknown(u16),
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,34 +485,82 @@ mod tests {
     #[test]
     fn from_extension_detection() {
         // Audio (representative samples)
-        assert_eq!(ObjectFormatCode::from_extension("mp3"), ObjectFormatCode::Mp3);
-        assert_eq!(ObjectFormatCode::from_extension("flac"), ObjectFormatCode::FlacAudio);
-        assert_eq!(ObjectFormatCode::from_extension("aif"), ObjectFormatCode::Aiff); // alternate ext
+        assert_eq!(
+            ObjectFormatCode::from_extension("mp3"),
+            ObjectFormatCode::Mp3
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("flac"),
+            ObjectFormatCode::FlacAudio
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("aif"),
+            ObjectFormatCode::Aiff
+        ); // alternate ext
 
         // Video
-        assert_eq!(ObjectFormatCode::from_extension("mp4"), ObjectFormatCode::Mp4Container);
-        assert_eq!(ObjectFormatCode::from_extension("avi"), ObjectFormatCode::Avi);
-        assert_eq!(ObjectFormatCode::from_extension("mpg"), ObjectFormatCode::Mpeg); // alternate ext
+        assert_eq!(
+            ObjectFormatCode::from_extension("mp4"),
+            ObjectFormatCode::Mp4Container
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("avi"),
+            ObjectFormatCode::Avi
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("mpg"),
+            ObjectFormatCode::Mpeg
+        ); // alternate ext
 
         // Image
-        assert_eq!(ObjectFormatCode::from_extension("jpg"), ObjectFormatCode::Jpeg);
-        assert_eq!(ObjectFormatCode::from_extension("png"), ObjectFormatCode::Png);
-        assert_eq!(ObjectFormatCode::from_extension("tif"), ObjectFormatCode::Tiff); // alternate ext
+        assert_eq!(
+            ObjectFormatCode::from_extension("jpg"),
+            ObjectFormatCode::Jpeg
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("png"),
+            ObjectFormatCode::Png
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("tif"),
+            ObjectFormatCode::Tiff
+        ); // alternate ext
 
         // Text/Documents
-        assert_eq!(ObjectFormatCode::from_extension("txt"), ObjectFormatCode::Text);
-        assert_eq!(ObjectFormatCode::from_extension("htm"), ObjectFormatCode::Html); // alternate ext
+        assert_eq!(
+            ObjectFormatCode::from_extension("txt"),
+            ObjectFormatCode::Text
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("htm"),
+            ObjectFormatCode::Html
+        ); // alternate ext
 
         // Executables/Scripts
-        assert_eq!(ObjectFormatCode::from_extension("exe"), ObjectFormatCode::Executable);
-        assert_eq!(ObjectFormatCode::from_extension("sh"), ObjectFormatCode::Script);
+        assert_eq!(
+            ObjectFormatCode::from_extension("exe"),
+            ObjectFormatCode::Executable
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension("sh"),
+            ObjectFormatCode::Script
+        );
 
         // Case insensitivity (one example suffices since .to_lowercase() is used)
-        assert_eq!(ObjectFormatCode::from_extension("MP3"), ObjectFormatCode::Mp3);
+        assert_eq!(
+            ObjectFormatCode::from_extension("MP3"),
+            ObjectFormatCode::Mp3
+        );
 
         // Unknown extensions
-        assert_eq!(ObjectFormatCode::from_extension("xyz"), ObjectFormatCode::Undefined);
-        assert_eq!(ObjectFormatCode::from_extension(""), ObjectFormatCode::Undefined);
+        assert_eq!(
+            ObjectFormatCode::from_extension("xyz"),
+            ObjectFormatCode::Undefined
+        );
+        assert_eq!(
+            ObjectFormatCode::from_extension(""),
+            ObjectFormatCode::Undefined
+        );
     }
 
     // ==================== Format Category Tests ====================
