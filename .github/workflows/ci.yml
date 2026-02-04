@@ -65,3 +65,5 @@ jobs:
 
       - name: Check compilation on MSRV
         run: cargo check --all-features
+        env:
+          RUSTFLAGS: "-D warnings"

@@ -533,7 +533,6 @@ mod tests {
     }
 
     fn build_datetime_prop_desc() -> Vec<u8> {
-        use crate::ptp::pack::pack_string;
         let mut buf = Vec::new();
         buf.extend_from_slice(&pack_u16(0x5011)); // DateTime
         buf.extend_from_slice(&pack_u16(0xFFFF)); // String

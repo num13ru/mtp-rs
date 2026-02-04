@@ -10,6 +10,7 @@
 #     test        - Run tests
 #     test-all    - Run tests with all features
 #     doc         - Build documentation
+#     msrv        - Check MSRV (1.75) compatibility
 #     audit       - Security audit (requires cargo-audit)
 #     deny        - License/dependency check (requires cargo-deny)
 #     udeps       - Find unused dependencies (requires nightly + cargo-udeps)
@@ -70,6 +71,16 @@ doc:
     @cargo doc --no-deps --quiet
     @echo "[+] Docs built"
 
+# Check MSRV compatibility (requires rustup with 1.75 toolchain)
+msrv:
+    @echo "[*] Checking MSRV (1.75) compatibility..."
+    @if ! rustup run 1.75.0 rustc --version &> /dev/null; then \
+        echo "[!] Rust 1.75 not found. Install with: rustup toolchain install 1.75.0"; \
+        exit 1; \
+    fi
+    @RUSTFLAGS="-D warnings" cargo +1.75.0 check --all-features --quiet
+    @echo "[+] MSRV check passed"
+
 # Run security audit (requires cargo-audit)
 audit:
     @echo "[*] Running security audit..."
@@ -113,8 +124,8 @@ check: fmt-check clippy test doc
     @echo ""
     @echo "[+] All fast checks passed!"
 
-# Run all checks including slow ones: check + audit + deny
-check-all: check audit deny
+# Run all checks including slow ones: check + msrv + audit + deny
+check-all: check msrv audit deny
     @echo ""
     @echo "[+] All checks passed!"
 

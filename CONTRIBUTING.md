@@ -18,12 +18,23 @@ You don't need an MTP device for most development. The test suite uses mock tran
 We use [`just`](https://github.com/casey/just) as a command runner. Install it, then:
 
 ```bash
-just            # Run all checks: format, lint, test, doc (~1s cached, ~17s clean)
-just fix        # Auto-fix formatting and clippy warnings (~3s)
-just check-all  # Include security audit and license check (~4s)
+just            # Run all checks: format, lint, test, doc
+just fix        # Auto-fix formatting and clippy warnings
+just check-all  # Include MSRV check, security audit, and license check
 ```
 
 Run `just --list` to see all available commands.
+
+### MSRV (Minimum Supported Rust Version)
+
+We support Rust 1.75. Before submitting PRs, verify MSRV compatibility:
+
+```bash
+rustup toolchain install 1.75.0  # One-time setup
+just msrv                         # Check MSRV compatibility
+```
+
+This catches issues that only appear on older Rust versions (different lint behavior, etc.). CI runs this check, so `just msrv` locally saves a round-trip.
 
 ## Project structure
 
@@ -130,8 +141,9 @@ Everything is little-endian. Strings are UTF-16LE with a length prefix.
 1. Fork and create a branch
 2. Make your changes
 3. Run `just` (checks format, lint, test, and doc)
-4. If you have a device, run integration tests: `cargo test --test integration -- --ignored`
-5. Open a PR with a clear description including how you tested your changes
+4. Run `just msrv` to verify Rust 1.75 compatibility
+5. If you have a device, run integration tests: `cargo test --test integration -- --ignored`
+6. Open a PR with a clear description including how you tested your changes
 
 For non-trivial changes, consider opening an issue first to discuss the approach.
 
