@@ -9,6 +9,20 @@ repository = "https://github.com/vdavid/mtp-rs"
 keywords = ["mtp", "android", "usb", "media", "transfer"]
 categories = ["hardware-support", "filesystem"]
 readme = "README.md"
+documentation = "https://docs.rs/mtp-rs"
+exclude = [
+    ".github/",
+    "AGENTS.md",
+    "docs/",
+    "justfile",
+    "deny.toml",
+    "clippy.toml",
+    "rustfmt.toml",
+    "proptest-regressions/",
+]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 # USB transport (Phase 3+)

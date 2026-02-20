@@ -1,5 +1,11 @@
 # mtp-rs
 
+[![Crates.io](https://img.shields.io/crates/v/mtp-rs)](https://crates.io/crates/mtp-rs)
+[![docs.rs](https://img.shields.io/docsrs/mtp-rs)](https://docs.rs/mtp-rs)
+[![CI](https://github.com/vdavid/mtp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/vdavid/mtp-rs/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates/l/mtp-rs)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.75-blue)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html)
+
 The first pure-Rust MTP/PTP library with no C dependencies.
 
 Talk to Android phones, e-book readers incl. Kindle, and digital cameras over USB.

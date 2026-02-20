@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-02-20
+
+Initial release targeting modern Android devices.
+
 ### Added
 
+- Connect to Android phones/tablets over USB
+- List, download, upload, delete, move, and copy files
+- Create and delete folders
+- Stream large file downloads with progress tracking
+- Listen for device events (file added, storage removed, etc.)
+- Two-layer API: high-level `mtp::` and low-level `ptp::`
+- Runtime-agnostic async design (works with tokio, async-std, etc.)
+- Pure Rust implementation using `nusb` for USB access
 - Smart recursive listing that auto-detects Android and uses manual traversal
 - `Storage::list_objects_recursive_manual()` for explicit manual traversal
 - `Storage::list_objects_recursive_native()` for explicit native MTP recursive listing
@@ -34,21 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list_objects_recursive()` now automatically chooses the best strategy:
   - Android devices: manual folder-by-folder traversal
   - Other devices: native recursive, with fallback to manual if results look incomplete
-
-## [0.1.0] - Unreleased
-
-Initial release targeting modern Android devices.
-
-### Features
-
-- Connect to Android phones/tablets over USB
-- List, download, upload, delete, move, and copy files
-- Create and delete folders
-- Stream large file downloads with progress tracking
-- Listen for device events (file added, storage removed, etc.)
-- Two-layer API: high-level `mtp::` and low-level `ptp::`
-- Runtime-agnostic async design (works with tokio, async-std, etc.)
-- Pure Rust implementation using `nusb` for USB access
 
 ### Not included (by design)
 
