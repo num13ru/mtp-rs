@@ -6,7 +6,7 @@ Publishing is manual — there's no CI automation for it.
 
 1. **Bump version** in `Cargo.toml`
 2. **Update `CHANGELOG.md`** — set the new version and date
-3. **Run all checks**: `just check-all` (includes MSRV, audit, license)
+3. **Run `just check-all`** (formatting, clippy, tests, docs, MSRV, audit, license). Fix everything — the release commit must produce zero warnings, zero formatting diffs, zero doc-link issues. Re-run until fully clean.
 4. **Commit and tag**:
    ```bash
    git commit -m "Prepare vX.Y.Z for release"

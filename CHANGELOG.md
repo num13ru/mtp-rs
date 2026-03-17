@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-17
+
+### Added
+
+- `Storage::list_objects_stream()` — streaming object listing that yields `ObjectInfo` items one at a time from USB, with `total()` and `fetched()` for progress reporting
+- `ObjectListing` struct for iterating over streamed results
+- Reproducible benchmark suite (`mtp-bench` crate at `benchmarks/mtp-rs-vs-libmtp/`) comparing mtp-rs against libmtp
+- Benchmark results in README: mtp-rs is 1.06x–4.04x faster across all operations
+- Release process documentation (`docs/releasing.md`)
+
+### Changed
+
+- `list_objects()` refactored to use `list_objects_stream()` internally — no behavior change
+
 ## [0.1.0] - 2026-02-20
 
 Initial release targeting modern Android devices.
