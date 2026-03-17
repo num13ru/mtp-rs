@@ -54,7 +54,7 @@ enum ParentFilter {
 impl ObjectListing {
     /// Total number of object handles returned by the device.
     ///
-    /// When a [`ParentFilter`] is active (e.g., Fuji devices that return all objects
+    /// When a parent filter is active (e.g., Fuji devices that return all objects
     /// for root), some items may be skipped, so the actual yielded count can be lower.
     #[must_use]
     pub fn total(&self) -> usize {
@@ -90,9 +90,7 @@ impl ObjectListing {
             if let Some(filter) = &self.parent_filter {
                 let matches = match filter {
                     ParentFilter::Exact(expected) => info.parent == *expected,
-                    ParentFilter::AndroidRoot => {
-                        info.parent.0 == 0 || info.parent.0 == 0xFFFFFFFF
-                    }
+                    ParentFilter::AndroidRoot => info.parent.0 == 0 || info.parent.0 == 0xFFFFFFFF,
                 };
                 if !matches {
                     continue;
@@ -536,8 +534,8 @@ impl Storage {
 mod tests {
     use super::*;
     use crate::ptp::{
-        pack_u16, pack_u32, pack_u32_array, ContainerType, DateTime, DeviceInfo,
-        ObjectFormatCode, OperationCode, PtpSession, ResponseCode, StorageInfo,
+        pack_u16, pack_u32, pack_u32_array, ContainerType, DateTime, DeviceInfo, ObjectFormatCode,
+        OperationCode, PtpSession, ResponseCode, StorageInfo,
     };
     use crate::transport::mock::MockTransport;
 
@@ -607,7 +605,12 @@ mod tests {
             parent: ObjectHandle(parent),
             filename: filename.to_string(),
             created: Some(DateTime {
-                year: 2024, month: 1, day: 1, hour: 0, minute: 0, second: 0,
+                year: 2024,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
             }),
             ..ObjectInfo::default()
         };
@@ -617,7 +620,11 @@ mod tests {
     /// Queue GetObjectHandles response (data + ok) for a given transaction ID.
     fn queue_handles(mock: &MockTransport, tx_id: u32, handles: &[u32]) {
         let data = pack_u32_array(handles);
-        mock.queue_response(data_container(tx_id, OperationCode::GetObjectHandles, &data));
+        mock.queue_response(data_container(
+            tx_id,
+            OperationCode::GetObjectHandles,
+            &data,
+        ));
         mock.queue_response(ok_response(tx_id));
     }
 
@@ -684,9 +691,9 @@ mod tests {
         mock.queue_response(ok_response(1)); // OpenSession
 
         queue_handles(&mock, 2, &[10, 20, 30]);
-        queue_object_info(&mock, 3, "root_file.jpg", 0);    // parent=ROOT, included
-        queue_object_info(&mock, 4, "nested.jpg", 99);       // parent=99, filtered out
-        queue_object_info(&mock, 5, "another_root.txt", 0);  // parent=ROOT, included
+        queue_object_info(&mock, 3, "root_file.jpg", 0); // parent=ROOT, included
+        queue_object_info(&mock, 4, "nested.jpg", 99); // parent=99, filtered out
+        queue_object_info(&mock, 5, "another_root.txt", 0); // parent=ROOT, included
 
         let storage = mock_storage(transport, "").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
@@ -711,9 +718,9 @@ mod tests {
         mock.queue_response(ok_response(1)); // OpenSession
 
         queue_handles(&mock, 2, &[10, 20, 30]);
-        queue_object_info(&mock, 3, "dcim", 0);              // parent=0, root
-        queue_object_info(&mock, 4, "download", 0xFFFFFFFF);  // parent=ALL, also root on Android
-        queue_object_info(&mock, 5, "nested", 42);            // not root
+        queue_object_info(&mock, 3, "dcim", 0); // parent=0, root
+        queue_object_info(&mock, 4, "download", 0xFFFFFFFF); // parent=ALL, also root on Android
+        queue_object_info(&mock, 5, "nested", 42); // not root
 
         let storage = mock_storage(transport, "android.com").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
