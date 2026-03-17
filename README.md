@@ -6,7 +6,8 @@
 [![License](https://img.shields.io/crates/l/mtp-rs)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.75-blue)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html)
 
-The first pure-Rust MTP/PTP library with no C dependencies.
+A pure-Rust, async MTP/PTP library.
+No C dependencies, consistently faster than libmtp (up to 4x for large transfers), and dramatically more predictable.
 
 Talk to Android phones, e-book readers incl. Kindle, and digital cameras over USB.
 No libmtp, no libusb, no FFI—just async Rust built on [`nusb`](https://crates.io/crates/nusb).
@@ -297,21 +298,21 @@ and any issues encountered.
 
 ## Benchmarks
 
-The repo includes a reproducible benchmark that compares mtp-rs against libmtp (via libmtp-rs) for common MTP operations. Here are the results from a Google Pixel 9 Pro XL (5 warmup + 10 measured runs per scenario):
+mtp-rs is faster than libmtp across every operation we tested, and the gap widens with file size. On a Google Pixel 9 Pro XL (USB, 5 warmup + 10 measured runs per scenario):
 
-| Operation | Size | mtp-rs Median | mtp-rs Throughput | libmtp Median | libmtp Throughput | Speedup |
-|-----------|------|---------------|-------------------|---------------|-------------------|---------|
-| download | 1 MB | 33.9ms | 29.51 MB/s | 45.3ms | 22.07 MB/s | 1.34x |
-| download | 10 MB | 258.3ms | 38.72 MB/s | 391.1ms | 25.57 MB/s | 1.51x |
-| download | 100 MB | 2.447s | 40.86 MB/s | 9.897s | 10.10 MB/s | 4.04x |
-| upload | 1 MB | 76.1ms | 13.15 MB/s | 115.0ms | 8.70 MB/s | 1.51x |
-| upload | 10 MB | 326.9ms | 30.59 MB/s | 345.1ms | 28.97 MB/s | 1.06x |
-| upload | 100 MB | 2.388s | 41.88 MB/s | 2.796s | 35.76 MB/s | 1.17x |
-| list_files | — | 15.5ms | — | 24.9ms | — | 1.61x |
+| Operation | Size | mtp-rs | libmtp | Speedup |
+|-----------|------|--------|--------|---------|
+| download | 1 MB | 33.9ms | 45.3ms | **1.34x** |
+| download | 10 MB | 258.3ms | 391.1ms | **1.51x** |
+| download | 100 MB | 2.447s | 9.897s | **4.04x** |
+| upload | 1 MB | 76.1ms | 115.0ms | **1.51x** |
+| upload | 10 MB | 326.9ms | 345.1ms | **1.06x** |
+| upload | 100 MB | 2.388s | 2.796s | **1.17x** |
+| list_files | — | 15.5ms | 24.9ms | **1.61x** |
 
-Notable: libmtp showed high variance at 100 MB downloads (std dev of 4.6s) while mtp-rs was stable (4.7ms std dev).
+Beyond raw speed, mtp-rs is far more predictable. At 100 MB downloads, libmtp's individual runs ranged from 3.7s to 18.2s (std dev 4.6s — that's 47% of its median). mtp-rs stayed within a 15ms band (std dev 4.7ms — 0.2% of its median). In practice this means a 100 MB transfer with mtp-rs reliably takes ~2.4s, while with libmtp it could take anywhere from 4s to 18s.
 
-To reproduce these benchmarks yourself, see [`benchmarks/mtp-rs-vs-libmtp/`](benchmarks/mtp-rs-vs-libmtp/).
+The benchmark tool is included in the repo — [run it yourself](benchmarks/mtp-rs-vs-libmtp/) with `cargo run -p mtp-bench -- --warmup 5 --runs 10`.
 
 ## Comparison with other libraries
 
