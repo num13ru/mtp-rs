@@ -1,0 +1,37 @@
+[package]
+name = "mtp-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Benchmark comparing mtp-rs (pure Rust) vs libmtp-rs (C library) for MTP file transfers"
+
+[[bin]]
+name = "mtp-bench"
+path = "src/main.rs"
+
+[dependencies]
+# The crate under test
+mtp-rs = { path = "../.." }
+
+# C-library baseline
+libmtp-rs = "0.7"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async runtime (mtp-rs is async)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
+
+# Serialization for JSON output
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Terminal table output
+comfy-table = "7"
+
+# Needed by mtp-rs upload API (Stream + Bytes)
+bytes = "1"
+futures = "0.3"
+
+# Needed by libmtp-rs FileMetadata (DateTime<Utc>)
+chrono = "0.4"

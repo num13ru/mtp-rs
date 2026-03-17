@@ -295,6 +295,24 @@ The library automatically detects this and falls back to recursive listing with 
 We welcome reports of other tested devices! Please open an issue or PR with your device model, Android version,
 and any issues encountered.
 
+## Benchmarks
+
+The repo includes a reproducible benchmark that compares mtp-rs against libmtp (via libmtp-rs) for common MTP operations. Here are the results from a Google Pixel 9 Pro XL (5 warmup + 10 measured runs per scenario):
+
+| Operation | Size | mtp-rs Median | mtp-rs Throughput | libmtp Median | libmtp Throughput | Speedup |
+|-----------|------|---------------|-------------------|---------------|-------------------|---------|
+| download | 1 MB | 33.9ms | 29.51 MB/s | 45.3ms | 22.07 MB/s | 1.34x |
+| download | 10 MB | 258.3ms | 38.72 MB/s | 391.1ms | 25.57 MB/s | 1.51x |
+| download | 100 MB | 2.447s | 40.86 MB/s | 9.897s | 10.10 MB/s | 4.04x |
+| upload | 1 MB | 76.1ms | 13.15 MB/s | 115.0ms | 8.70 MB/s | 1.51x |
+| upload | 10 MB | 326.9ms | 30.59 MB/s | 345.1ms | 28.97 MB/s | 1.06x |
+| upload | 100 MB | 2.388s | 41.88 MB/s | 2.796s | 35.76 MB/s | 1.17x |
+| list_files | — | 15.5ms | — | 24.9ms | — | 1.61x |
+
+Notable: libmtp showed high variance at 100 MB downloads (std dev of 4.6s) while mtp-rs was stable (4.7ms std dev).
+
+To reproduce these benchmarks yourself, see [`benchmarks/mtp-rs-vs-libmtp/`](benchmarks/mtp-rs-vs-libmtp/).
+
 ## Comparison with other libraries
 
 ### vs libmtp / libmtp-rs
