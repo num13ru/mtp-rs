@@ -38,5 +38,5 @@ mod stream;
 pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
 pub use event::DeviceEvent;
 pub use object::NewObjectInfo;
-pub use storage::Storage;
+pub use storage::{ObjectListing, Storage};
 pub use stream::{FileDownload, Progress};
