@@ -8,7 +8,10 @@ targets = []
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    # Transitive dep of libmtp-rs (benchmark-only, not published). Nothing we can do upstream.
+    "RUSTSEC-2024-0388",  # derivative unmaintained
+]
 
 [licenses]
 confidence-threshold = 0.8

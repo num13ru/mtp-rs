@@ -28,6 +28,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  checks: write
+  contents: read
+
 jobs:
   # =============================================================================
   # Security Audit Job

@@ -88,7 +88,7 @@ audit:
         echo "[!] cargo-audit not found. Install with: just install-tools"; \
         exit 1; \
     fi
-    @cargo audit --quiet
+    @cargo audit --deny warnings --ignore RUSTSEC-2024-0388
     @echo "[+] Security audit passed"
 
 # Run cargo-deny checks (requires cargo-deny)
