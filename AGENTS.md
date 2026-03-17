@@ -73,4 +73,5 @@ Run `just check` before committing. `cargo fmt`, `cargo clippy -D warnings`, tes
 ## References
 
 - [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md), [docs/debugging.md](docs/debugging.md)
+- [docs/releasing.md](docs/releasing.md) — how to publish a new version to crates.io
 - [MTP v1.1 Spec](https://github.com/vdavid/mtp-v1_1-spec-md)

@@ -136,6 +136,10 @@ The protocol is essentially:
 
 Everything is little-endian. Strings are UTF-16LE with a length prefix.
 
+## Releasing
+
+See [`docs/releasing.md`](docs/releasing.md) for how to publish a new version to crates.io.
+
 ## Submitting changes
 
 1. Fork and create a branch
