@@ -7,15 +7,16 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.75-blue)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html)
 
 A pure-Rust, async MTP/PTP library.
-No C dependencies, consistently faster than libmtp (up to 4x for large transfers), and dramatically more predictable.
+No C dependencies, consistently faster than libmtp (up to 4x for large transfers), and way more predictable.
 
 Talk to Android phones, e-book readers incl. Kindle, and digital cameras over USB.
-No libmtp, no libusb, no FFI—just async Rust built on [`nusb`](https://crates.io/crates/nusb).
+No `libmtp`, no `libusb`, no FFI, just async Rust built on [`nusb`](https://crates.io/crates/nusb).
 
 **Why this matters:**
-- Cross-compile without system library headaches
-- No `pkg-config`, no `-sys` crates, no build.rs surprises
-- Works anywhere Rust compiles (including musl, cross-compilation targets)
+
+- Cross-compile without system lib headaches
+- No `pkg-config`, no `-sys` crates, no `build.rs` surprises
+- Works anywhere Rust compiles (including `musl` and cross-compilation targets)
 - Fully async and runtime-agnostic
 
 ## What it does
@@ -25,6 +26,7 @@ No libmtp, no libusb, no FFI—just async Rust built on [`nusb`](https://crates.
 - Create, delete, and rename folders
 - Stream large file downloads with continued progress indication
 - Listen for device events (file added, storage removed, etc.)
+- See free space
 - Also exposes a lower-level interface for PTP, so it can be used for cameras too.
 
 ## What it doesn't do
@@ -51,14 +53,14 @@ async fn main() -> Result<(), mtp_rs::Error> {
     let device = MtpDevice::open_first().await?;
 
     println!("Connected to {} {}",
-        device.device_info().manufacturer,
-        device.device_info().model);
+             device.device_info().manufacturer,
+             device.device_info().model);
 
     // List storages (internal storage, SD card, etc.)
     for storage in device.storages().await? {
         println!("{}: {:.2} GB free",
-            storage.info().description,
-            storage.info().free_space_bytes as f64 / 1e9);
+                 storage.info().description,
+                 storage.info().free_space_bytes as f64 / 1e9);
 
         // List files in root
         for file in storage.list_objects(None).await? {
@@ -80,7 +82,8 @@ Add to your `Cargo.toml`:
 mtp-rs = "0.1"
 ```
 
-You'll also need an async runtime. The library is runtime-agnostic, but [tokio](https://github.com/tokio-rs/tokio) is the most common choice:
+You'll also need an async runtime. The library is runtime-agnostic, but [tokio](https://github.com/tokio-rs/tokio) is
+the most common choice:
 
 ```toml
 [dependencies]
@@ -128,7 +131,8 @@ honestly, any) library.
 - This library provides `Error::is_exclusive_access()`. Use this to detect this condition and guide users to apply
   one of the workarounds above.
 - Query IORegistry for `UsbExclusiveOwner` to show which process (pid, name) holds the device for even more helpful info
-- App Store sandboxed apps cannot kill processes. If your app is such, then provide the command for users to run manually.
+- App Store sandboxed apps cannot kill processes. If your app is such, then provide the command for users to run
+  manually.
   If your app isn't in the App Store, then you're in a better position and may be able to use the workarounds, BUT
   it's a bit murky territory with Apple.
 - See [Cmdr](https://github.com/vdavid/cmdr) and [Commander One](https://mac.eltima.com/file-manager.html) for UX
@@ -145,15 +149,15 @@ These might come in handy:
 ### Download a file
 
 ```rust
-let storage = &device.storages().await?[0];
+let storage = & device.storages().await?[0];
 
 // Find a file
 let files = storage.list_objects(None).await?;
-let photo = files.iter().find(|f| f.filename == "photo.jpg").unwrap();
+let photo = files.iter().find( | f| f.filename == "photo.jpg").unwrap();
 
 // Download it
 let data = storage.download(photo.handle).await?.collect().await?;
-std::fs::write("photo.jpg", data)?;
+std::fs::write("photo.jpg", data) ?;
 ```
 
 ### Upload a file
@@ -162,7 +166,7 @@ std::fs::write("photo.jpg", data)?;
 use mtp_rs::mtp::NewObjectInfo;
 use bytes::Bytes;
 
-let content = std::fs::read("document.pdf")?;
+let content = std::fs::read("document.pdf") ?;
 let info = NewObjectInfo::file("document.pdf", content.len() as u64);
 
 let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(content))]);
@@ -178,9 +182,9 @@ let mut download = storage.download_stream(file.handle).await?;
 println!("Downloading {} bytes...", download.size());
 
 while let Some(chunk) = download.next_chunk().await {
-    let bytes = chunk?;
-    // Process bytes...
-    println!("{:.1}%", download.progress() * 100.0);
+let bytes = chunk ?;
+// Process bytes...
+println ! ("{:.1}%", download.progress() * 100.0);
 }
 ```
 
@@ -188,20 +192,20 @@ while let Some(chunk) = download.next_chunk().await {
 
 ```rust
 loop {
-    match device.next_event().await {
-        Ok(event) => match event {
-            DeviceEvent::ObjectAdded { handle } => {
-                println!("New file: {:?}", handle);
-            }
-            DeviceEvent::StoreRemoved { storage_id } => {
-                println!("Storage unplugged: {:?}", storage_id);
-            }
-            _ => {}
-        },
-        Err(Error::Timeout) => continue,
-        Err(Error::Disconnected) => break,
-        Err(e) => eprintln!("Error: {}", e),
-    }
+match device.next_event().await {
+Ok(event) => match event {
+DeviceEvent::ObjectAdded { handle } => {
+println ! ("New file: {:?}", handle);
+}
+DeviceEvent::StoreRemoved { storage_id } => {
+println ! ("Storage unplugged: {:?}", storage_id);
+}
+_ => {}
+},
+Err(Error::Timeout) => continue,
+Err(Error::Disconnected) => break,
+Err(e) => eprintln ! ("Error: {}", e),
+}
 }
 ```
 
@@ -233,7 +237,8 @@ camera-specific code because this is mainly for MTP and file transfer.
 
 ## Runtime compatibility
 
-The library uses `futures` traits and is runtime-agnostic. It's tested with tokio but should work with async-std or any other runtime.
+The library uses `futures` traits and is runtime-agnostic. It's tested with tokio but should work with async-std or any
+other runtime.
 
 We use `nusb` for USB access, which is also runtime-agnostic.
 
@@ -267,7 +272,8 @@ Android's MTP implementation has some quirks that this library handles automatic
     - **What happens:** Most phones report as USB class 0 (composite)
     - **How we handle it:** We inspect interfaces to find MTP
 
-The library detects Android devices via the `"android.com"` vendor extension and applies appropriate handling automatically.
+The library detects Android devices via the `"android.com"` vendor extension and applies appropriate handling
+automatically.
 You generally don't need to worry about these details.
 
 **Tip**: When uploading files, use a known folder like `Download/` rather than the storage root:
@@ -275,7 +281,7 @@ You generally don't need to worry about these details.
 ```rust
 // Find the Download folder
 let objects = storage.list_objects(None).await?;
-let download = objects.iter().find(|o| o.filename == "Download").unwrap();
+let download = objects.iter().find( | o| o.filename == "Download").unwrap();
 
 // Upload to Download folder (not root)
 storage.upload(Some(download.handle), file_info, data).await?;
@@ -298,21 +304,26 @@ and any issues encountered.
 
 ## Benchmarks
 
-mtp-rs is faster than libmtp across every operation we tested, and the gap widens with file size. On a Google Pixel 9 Pro XL (USB, 5 warmup + 10 measured runs per scenario):
+mtp-rs is faster than libmtp across every operation we tested, and the gap widens with file size. On a Google Pixel 9
+Pro XL (USB, 5 warmup + 10 measured runs per scenario):
 
-| Operation | Size | mtp-rs | libmtp | Speedup |
-|-----------|------|--------|--------|---------|
-| download | 1 MB | 33.9ms | 45.3ms | **1.34x** |
-| download | 10 MB | 258.3ms | 391.1ms | **1.51x** |
-| download | 100 MB | 2.447s | 9.897s | **4.04x** |
-| upload | 1 MB | 76.1ms | 115.0ms | **1.51x** |
-| upload | 10 MB | 326.9ms | 345.1ms | **1.06x** |
-| upload | 100 MB | 2.388s | 2.796s | **1.17x** |
-| list_files | — | 15.5ms | 24.9ms | **1.61x** |
+| Operation  | Size   | mtp-rs  | libmtp  | Speedup   |
+|------------|--------|---------|---------|-----------|
+| download   | 1 MB   | 33.9ms  | 45.3ms  | **1.34x** |
+| download   | 10 MB  | 258.3ms | 391.1ms | **1.51x** |
+| download   | 100 MB | 2.447s  | 9.897s  | **4.04x** |
+| upload     | 1 MB   | 76.1ms  | 115.0ms | **1.51x** |
+| upload     | 10 MB  | 326.9ms | 345.1ms | **1.06x** |
+| upload     | 100 MB | 2.388s  | 2.796s  | **1.17x** |
+| list_files | -      | 15.5ms  | 24.9ms  | **1.61x** |
 
-Beyond raw speed, mtp-rs is far more predictable. At 100 MB downloads, libmtp's individual runs ranged from 3.7s to 18.2s (std dev 4.6s — that's 47% of its median). mtp-rs stayed within a 15ms band (std dev 4.7ms — 0.2% of its median). In practice this means a 100 MB transfer with mtp-rs reliably takes ~2.4s, while with libmtp it could take anywhere from 4s to 18s.
+Beyond raw speed, mtp-rs is far more predictable. At 100 MB downloads, libmtp's individual runs ranged from 3.7s to
+18.2s (std dev 4.6s — that's 47% of its median). mtp-rs stayed within a 15ms band (std dev 4.7ms — 0.2% of its median).
+In practice this means a 100 MB transfer with mtp-rs reliably takes ~2.4s, while with libmtp it could take anywhere from
+4s to 18s.
 
-The benchmark tool is included in the repo — [run it yourself](benchmarks/mtp-rs-vs-libmtp/) with `cargo run -p mtp-bench -- --warmup 5 --runs 10`.
+The benchmark tool is included in the repo. [Run it yourself](benchmarks/mtp-rs-vs-libmtp/) with
+`cargo run -p mtp-bench -- --warmup 5 --runs 10`.
 
 ## Comparison with other libraries
 
@@ -340,18 +351,22 @@ Note that `libptp` is much more mature, though!
 
 ### vs winmtp
 
-[winmtp](https://crates.io/crates/winmtp) wraps the Windows COM API—Windows only. `mtp-rs` works on Linux, macOS, and Windows.
+[winmtp](https://crates.io/crates/winmtp) wraps the Windows COM API, which is Windows only. `mtp-rs` works on Linux,
+macOS, and Windows.
 
 ## Implementation notes
 
 - I used Opus 4.5 extensively for this implementation. I know it's controversial these days, but the bottom line to me
   is that the implementation WORKS, it has a bunch of integration tests which pass, and hey, I can use it to copy data
-  to/from my phone and other phones and I can display async progress and I don't need to rely on C libraries. So no hate,
+  to/from my phone and other phones and I can display async progress and I don't need to rely on C libraries. So no
+  hate,
   please. If you dislike or distrust AI-gen code, use the alternatives listed above (if you can live with the libmtp
   dependency), handcraft your own Rust implementation, or fork this repo and add your human thing and use it.
   PRs are also welcome.
-- For the protocol spec, I tried to use usb.org's [Media Transfer Protocol v.1.1 Spec](https://www.usb.org/document-library/media-transfer-protocol-v11-spec-and-mtp-v11-adopters-agreement)
-  but it was a pain to get AI agents to work from it, so I've converted it to Markdown. You can find it here: https://github.com/vdavid/mtp-v1_1-spec-md
+- For the protocol spec, I tried to use
+  usb.org's [Media Transfer Protocol v.1.1 Spec](https://www.usb.org/document-library/media-transfer-protocol-v11-spec-and-mtp-v11-adopters-agreement),
+  but it was a pain to get AI agents to work from it, so I've converted it to Markdown. You can find it
+  here: https://github.com/vdavid/mtp-v1_1-spec-md
   I've also shared it back with the USB.org team, so they might link it on the official page.
 
 ## Contributing
