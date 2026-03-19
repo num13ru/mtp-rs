@@ -133,25 +133,25 @@ mod tests {
 
     #[test]
     fn test_is_exclusive_access_macos_message() {
-        // macOS nusb error message
+        // macOS nusb error message (tested via Io variant; same logic as Usb variant)
         let io_err = IoError::other("could not be opened for exclusive access");
-        let err = Error::Usb(io_err);
+        let err = Error::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
     #[test]
     fn test_is_exclusive_access_linux_busy() {
-        // Linux EBUSY style message
+        // Linux EBUSY style message (tested via Io variant; same logic as Usb variant)
         let io_err = IoError::other("Device or resource busy");
-        let err = Error::Usb(io_err);
+        let err = Error::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
     #[test]
     fn test_is_exclusive_access_windows_denied() {
-        // Windows access denied style message
+        // Windows access denied style message (tested via Io variant; same logic as Usb variant)
         let io_err = IoError::new(ErrorKind::PermissionDenied, "Access is denied");
-        let err = Error::Usb(io_err);
+        let err = Error::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
@@ -171,6 +171,6 @@ mod tests {
         assert!(!Error::invalid_data("some error").is_exclusive_access());
 
         let io_err = IoError::new(ErrorKind::NotFound, "device not found");
-        assert!(!Error::Usb(io_err).is_exclusive_access());
+        assert!(!Error::Io(io_err).is_exclusive_access());
     }
 }

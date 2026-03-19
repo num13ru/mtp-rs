@@ -2,7 +2,10 @@
 
 use super::Transport;
 use async_trait::async_trait;
-use nusb::transfer::{Direction, EndpointType, RequestBuffer, TransferError};
+use nusb::descriptors::TransferType;
+use nusb::transfer::{Buffer, Bulk, Direction, In, Interrupt, Out, TransferError};
+use nusb::MaybeFuture;
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// MTP interface class code (Still Image).
@@ -35,17 +38,16 @@ pub struct UsbDeviceInfo {
 
 impl UsbDeviceInfo {
     /// Open the USB device.
-    pub fn open(&self) -> Result<nusb::Device, std::io::Error> {
-        self.nusb_info.open()
+    pub fn open(&self) -> Result<nusb::Device, nusb::Error> {
+        self.nusb_info.open().wait()
     }
 }
 
 /// USB transport implementation using nusb.
 pub struct NusbTransport {
-    interface: nusb::Interface,
-    bulk_in: u8,
-    bulk_out: u8,
-    interrupt_in: u8,
+    bulk_in: Mutex<nusb::Endpoint<Bulk, In>>,
+    bulk_out: Mutex<nusb::Endpoint<Bulk, Out>>,
+    interrupt_in: Mutex<nusb::Endpoint<Interrupt, In>>,
     /// Timeout for bulk transfers (sending commands, receiving data).
     timeout: Duration,
     /// Timeout for event polling on the interrupt endpoint.
@@ -72,6 +74,7 @@ impl NusbTransport {
         let location_map = get_usb_location_ids();
 
         let devices = nusb::list_devices()
+            .wait()
             .map_err(crate::Error::Usb)?
             .filter(Self::is_mtp_device)
             .map(|dev| {
@@ -98,9 +101,16 @@ impl NusbTransport {
         }
 
         // Many Android devices are composite (class 0) with MTP as one interface.
-        // We need to open the device and inspect the interfaces.
+        // Check interface-level class info available from DeviceInfo without opening.
         if dev.class() == 0 {
-            if let Ok(device) = dev.open() {
+            for intf in dev.interfaces() {
+                if Self::is_mtp_class(intf.class(), intf.subclass(), intf.protocol()) {
+                    return true;
+                }
+            }
+
+            // Fall back to opening the device and inspecting configuration descriptors.
+            if let Ok(device) = dev.open().wait() {
                 if let Ok(config) = device.active_configuration() {
                     for interface in config.interfaces() {
                         if let Some(alt) = interface.alt_settings().next() {
@@ -159,9 +169,9 @@ impl NusbTransport {
         })?;
 
         let mut mtp_interface_number = None;
-        let mut bulk_in = None;
-        let mut bulk_out = None;
-        let mut interrupt_in = None;
+        let mut bulk_in_addr = None;
+        let mut bulk_out_addr = None;
+        let mut interrupt_in_addr = None;
 
         for interface in config.interfaces() {
             // Get the first alternate setting for this interface
@@ -180,14 +190,14 @@ impl NusbTransport {
                 // Find endpoints
                 for endpoint in alt_setting.endpoints() {
                     match (endpoint.direction(), endpoint.transfer_type()) {
-                        (Direction::Out, EndpointType::Bulk) => {
-                            bulk_out = Some(endpoint.address());
+                        (Direction::Out, TransferType::Bulk) => {
+                            bulk_out_addr = Some(endpoint.address());
                         }
-                        (Direction::In, EndpointType::Bulk) => {
-                            bulk_in = Some(endpoint.address());
+                        (Direction::In, TransferType::Bulk) => {
+                            bulk_in_addr = Some(endpoint.address());
                         }
-                        (Direction::In, EndpointType::Interrupt) => {
-                            interrupt_in = Some(endpoint.address());
+                        (Direction::In, TransferType::Interrupt) => {
+                            interrupt_in_addr = Some(endpoint.address());
                         }
                         _ => {}
                     }
@@ -200,23 +210,34 @@ impl NusbTransport {
         let interface_number = mtp_interface_number
             .ok_or_else(|| crate::Error::invalid_data("No MTP interface found on device"))?;
 
-        let bulk_in =
-            bulk_in.ok_or_else(|| crate::Error::invalid_data("No bulk IN endpoint found"))?;
-        let bulk_out =
-            bulk_out.ok_or_else(|| crate::Error::invalid_data("No bulk OUT endpoint found"))?;
-        let interrupt_in = interrupt_in
+        let bulk_in_addr =
+            bulk_in_addr.ok_or_else(|| crate::Error::invalid_data("No bulk IN endpoint found"))?;
+        let bulk_out_addr = bulk_out_addr
+            .ok_or_else(|| crate::Error::invalid_data("No bulk OUT endpoint found"))?;
+        let interrupt_in_addr = interrupt_in_addr
             .ok_or_else(|| crate::Error::invalid_data("No interrupt IN endpoint found"))?;
 
         // Claim the interface
         let interface = device
             .claim_interface(interface_number)
+            .wait()
+            .map_err(crate::Error::Usb)?;
+
+        // Open endpoints
+        let bulk_in = interface
+            .endpoint::<Bulk, In>(bulk_in_addr)
+            .map_err(crate::Error::Usb)?;
+        let bulk_out = interface
+            .endpoint::<Bulk, Out>(bulk_out_addr)
+            .map_err(crate::Error::Usb)?;
+        let interrupt_in = interface
+            .endpoint::<Interrupt, In>(interrupt_in_addr)
             .map_err(crate::Error::Usb)?;
 
         Ok(Self {
-            interface,
-            bulk_in,
-            bulk_out,
-            interrupt_in,
+            bulk_in: Mutex::new(bulk_in),
+            bulk_out: Mutex::new(bulk_out),
+            interrupt_in: Mutex::new(interrupt_in),
             timeout,
             event_timeout,
         })
@@ -248,32 +269,19 @@ impl NusbTransport {
         self.event_timeout = timeout;
     }
 
-    /// Get the bulk IN endpoint address.
-    #[must_use]
-    pub fn bulk_in_endpoint(&self) -> u8 {
-        self.bulk_in
-    }
-
-    /// Get the bulk OUT endpoint address.
-    #[must_use]
-    pub fn bulk_out_endpoint(&self) -> u8 {
-        self.bulk_out
-    }
-
-    /// Get the interrupt IN endpoint address.
-    #[must_use]
-    pub fn interrupt_in_endpoint(&self) -> u8 {
-        self.interrupt_in
-    }
-
     /// Convert a nusb TransferError to crate::Error.
     fn convert_transfer_error(err: TransferError) -> crate::Error {
         match err {
-            TransferError::Cancelled => crate::Error::Cancelled,
+            // nusb returns Cancelled when transfer_blocking times out (it cancels
+            // the transfer internally). Since we never explicitly cancel transfers,
+            // Cancelled always means the timeout expired. Map to Timeout so that
+            // Error::is_retryable() treats it correctly.
+            TransferError::Cancelled => crate::Error::Timeout,
             TransferError::Disconnected => crate::Error::Disconnected,
-            TransferError::Stall | TransferError::Fault | TransferError::Unknown => {
-                crate::Error::Usb(std::io::Error::other(err.to_string()))
-            }
+            TransferError::Stall
+            | TransferError::Fault
+            | TransferError::InvalidArgument
+            | TransferError::Unknown(_) => crate::Error::Io(std::io::Error::other(err.to_string())),
         }
     }
 }
@@ -281,57 +289,63 @@ impl NusbTransport {
 #[async_trait]
 impl Transport for NusbTransport {
     async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error> {
-        let result = futures::future::select(
-            Box::pin(self.interface.bulk_out(self.bulk_out, data.to_vec())),
-            Box::pin(futures_timer::Delay::new(self.timeout)),
-        )
-        .await;
-
-        match result {
-            futures::future::Either::Left((completion, _)) => {
-                completion.status.map_err(Self::convert_transfer_error)?;
-                Ok(())
-            }
-            futures::future::Either::Right((_, _)) => Err(crate::Error::Timeout),
-        }
+        let completion = {
+            let mut ep = self.bulk_out.lock().expect("bulk_out mutex poisoned");
+            let buf: Buffer = data.to_vec().into();
+            ep.transfer_blocking(buf, self.timeout)
+        };
+        completion.status.map_err(Self::convert_transfer_error)?;
+        Ok(())
     }
 
     async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, crate::Error> {
-        let result = futures::future::select(
-            Box::pin(
-                self.interface
-                    .bulk_in(self.bulk_in, RequestBuffer::new(max_size)),
-            ),
-            Box::pin(futures_timer::Delay::new(self.timeout)),
-        )
-        .await;
+        let completion = {
+            let mut ep = self.bulk_in.lock().expect("bulk_in mutex poisoned");
 
-        match result {
-            futures::future::Either::Left((completion, _)) => {
-                completion.status.map_err(Self::convert_transfer_error)?;
-                Ok(completion.data)
-            }
-            futures::future::Either::Right((_, _)) => Err(crate::Error::Timeout),
-        }
+            // Align max_size up to max_packet_size for nusb 0.2's requirement
+            // that IN transfer sizes are multiples of max_packet_size.
+            let max_packet_size = ep.max_packet_size();
+            let aligned_size = align_to_packet_size(max_size, max_packet_size);
+
+            ep.transfer_blocking(Buffer::new(aligned_size), self.timeout)
+        };
+        completion.status.map_err(Self::convert_transfer_error)?;
+        Ok(completion.buffer[..completion.actual_len].to_vec())
     }
 
     async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error> {
-        let result = futures::future::select(
-            Box::pin(self.interface.interrupt_in(
-                self.interrupt_in,
-                RequestBuffer::new(Self::INTERRUPT_BUFFER_SIZE),
-            )),
-            Box::pin(futures_timer::Delay::new(self.event_timeout)),
-        )
-        .await;
+        let completion = {
+            let mut ep = self
+                .interrupt_in
+                .lock()
+                .expect("interrupt_in mutex poisoned");
 
-        match result {
-            futures::future::Either::Left((completion, _)) => {
-                completion.status.map_err(Self::convert_transfer_error)?;
-                Ok(completion.data)
-            }
-            futures::future::Either::Right((_, _)) => Err(crate::Error::Timeout),
-        }
+            // Align to max_packet_size
+            let max_packet_size = ep.max_packet_size();
+            let aligned_size = align_to_packet_size(Self::INTERRUPT_BUFFER_SIZE, max_packet_size);
+
+            ep.transfer_blocking(Buffer::new(aligned_size), self.event_timeout)
+        };
+        completion.status.map_err(Self::convert_transfer_error)?;
+        Ok(completion.buffer[..completion.actual_len].to_vec())
+    }
+}
+
+/// Round `size` up to the nearest multiple of `packet_size`.
+///
+/// nusb 0.2 requires that IN transfer buffer sizes are non-zero multiples of
+/// the endpoint's maximum packet size.
+fn align_to_packet_size(size: usize, packet_size: usize) -> usize {
+    if packet_size == 0 {
+        return size.max(1);
+    }
+    if size == 0 {
+        return packet_size;
+    }
+    if size % packet_size == 0 {
+        size
+    } else {
+        ((size / packet_size) + 1) * packet_size
     }
 }
 
@@ -357,9 +371,9 @@ fn find_location_id(dev: &nusb::DeviceInfo, map: &LocationMap) -> u64 {
         return loc;
     }
 
-    // Last resort fallback: combine bus and address (works on Linux)
-    // This is not unique on macOS but better than nothing
-    ((dev.bus_number() as u64) << 32) | (dev.device_address() as u64)
+    // Last resort fallback: combine bus_id and address
+    let bus = dev.bus_id().parse::<u64>().unwrap_or(0);
+    (bus << 32) | (dev.device_address() as u64)
 }
 
 // macOS implementation using IOKit
@@ -472,7 +486,7 @@ fn get_usb_location_ids() -> LocationMap {
 //
 // On Windows, a proper implementation would use SetupAPI to retrieve
 // SPDRP_LOCATION_INFORMATION. For now, we rely on the fallback in
-// find_location_id() which combines bus_number and device_address.
+// find_location_id() which combines bus_id and device_address.
 // This should work via nusb's cross-platform abstraction but is untested.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn get_usb_location_ids() -> LocationMap {
@@ -556,6 +570,23 @@ mod tests {
 
         assert_eq!(transport.timeout(), bulk_timeout);
         assert_eq!(transport.event_timeout(), event_timeout);
+    }
+
+    #[test]
+    fn test_align_to_packet_size() {
+        // Zero size rounds up to packet_size
+        assert_eq!(align_to_packet_size(0, 512), 512);
+        // Size smaller than packet rounds up
+        assert_eq!(align_to_packet_size(1, 512), 512);
+        // Exact multiple stays the same
+        assert_eq!(align_to_packet_size(512, 512), 512);
+        assert_eq!(align_to_packet_size(1024, 512), 1024);
+        // Non-multiple rounds up
+        assert_eq!(align_to_packet_size(513, 512), 1024);
+        assert_eq!(align_to_packet_size(100, 64), 128);
+        // Zero packet_size edge case
+        assert_eq!(align_to_packet_size(0, 0), 1);
+        assert_eq!(align_to_packet_size(100, 0), 100);
     }
 
     #[test]

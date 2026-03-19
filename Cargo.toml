@@ -5,7 +5,7 @@ members = [".", "benchmarks/mtp-rs-vs-libmtp"]
 name = "mtp-rs"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.79"
 license = "MIT OR Apache-2.0"
 description = "Pure-Rust MTP (Media Transfer Protocol) library for modern Android devices"
 repository = "https://github.com/vdavid/mtp-rs"
@@ -29,7 +29,7 @@ all-features = true
 
 [dependencies]
 # USB transport (Phase 3+)
-nusb = "0.1"
+nusb = "0.2"
 
 # Async runtime agnostic
 futures = "0.3"
@@ -44,18 +44,15 @@ thiserror = "1.0"
 # Enum conversion derives
 num_enum = "0.7"
 
-# Async timeout utilities
-futures-timer = "3.0.3"
-
 # macOS: IOKit for USB location_id
 # Versions match nusb's dependencies to ensure deduplication (no extra compile cost)
 [target.'cfg(target_os = "macos")'.dependencies]
-io-kit-sys = "0.4"
-core-foundation = "0.9"
+io-kit-sys = "0.5"
+core-foundation = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
-proptest = "=1.5.0"  # Pinned for MSRV 1.75 compatibility
+proptest = "=1.5.0"  # Pinned for MSRV 1.79 compatibility
 serial_test = "3.1"
 parking_lot = "0.12"  # Used by MockTransport
 

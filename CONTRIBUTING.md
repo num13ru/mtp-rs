@@ -27,10 +27,10 @@ Run `just --list` to see all available commands.
 
 ### MSRV (Minimum Supported Rust Version)
 
-We support Rust 1.75. Before submitting PRs, verify MSRV compatibility:
+We support Rust 1.79. Before submitting PRs, verify MSRV compatibility:
 
 ```bash
-rustup toolchain install 1.75.0  # One-time setup
+rustup toolchain install 1.79.0  # One-time setup
 just msrv                         # Check MSRV compatibility
 ```
 
@@ -145,7 +145,7 @@ See [`docs/releasing.md`](docs/releasing.md) for how to publish a new version to
 1. Fork and create a branch
 2. Make your changes
 3. Run `just` (checks format, lint, test, and doc)
-4. Run `just msrv` to verify Rust 1.75 compatibility
+4. Run `just msrv` to verify Rust 1.79 compatibility
 5. If you have a device, run integration tests: `cargo test --test integration -- --ignored`
 6. Open a PR with a clear description including how you tested your changes
 

@@ -2,10 +2,12 @@
 //!
 //! Run with: cargo run --example list_all_usb
 
+use nusb::MaybeFuture;
+
 fn main() {
     println!("Listing all USB devices...\n");
 
-    let devices = match nusb::list_devices() {
+    let devices = match nusb::list_devices().wait() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("Error listing devices: {}", e);
@@ -21,7 +23,7 @@ fn main() {
             "Device: {:04x}:{:04x} at bus {} address {}",
             dev.vendor_id(),
             dev.product_id(),
-            dev.bus_number(),
+            dev.bus_id(),
             dev.device_address()
         );
         println!(
@@ -47,7 +49,7 @@ fn main() {
         }
 
         // Try to open and inspect interfaces
-        match dev.open() {
+        match dev.open().wait() {
             Ok(device) => {
                 if let Ok(config) = device.active_configuration() {
                     println!("  Interfaces:");
