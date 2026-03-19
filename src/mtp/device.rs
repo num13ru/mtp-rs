@@ -291,10 +291,7 @@ pub struct MtpDeviceInfo {
     /// across reconnections to the same physical port, but changes if the
     /// device is moved to a different port.
     ///
-    /// Platform details:
-    /// - **macOS**: IOKit `locationID` encoding the port path
-    /// - **Linux**: Derived from sysfs bus/port path
-    /// - **Windows**: `LocationInformation` property
+    /// Derived cross-platform from the USB bus ID and port chain (topology).
     pub location_id: u64,
 }
 

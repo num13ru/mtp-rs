@@ -595,9 +595,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "bytes",
- "core-foundation",
  "futures",
- "io-kit-sys",
  "num_enum",
  "nusb",
  "parking_lot",

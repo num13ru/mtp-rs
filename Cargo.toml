@@ -44,12 +44,6 @@ thiserror = "1.0"
 # Enum conversion derives
 num_enum = "0.7"
 
-# macOS: IOKit for USB location_id
-# Versions match nusb's dependencies to ensure deduplication (no extra compile cost)
-[target.'cfg(target_os = "macos")'.dependencies]
-io-kit-sys = "0.5"
-core-foundation = "0.10"
-
 [dev-dependencies]
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
 proptest = "=1.5.0"  # Pinned for MSRV 1.79 compatibility

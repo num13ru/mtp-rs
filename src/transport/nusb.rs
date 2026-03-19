@@ -17,7 +17,7 @@ const MTP_SUBCLASS: u8 = 0x01;
 /// MTP protocol code (PTP).
 const MTP_PROTOCOL: u8 = 0x01;
 
-/// USB device information with platform-specific location ID.
+/// USB device information with topology-based location ID.
 #[derive(Debug, Clone)]
 pub struct UsbDeviceInfo {
     /// USB vendor ID
@@ -30,7 +30,7 @@ pub struct UsbDeviceInfo {
     pub product: Option<String>,
     /// Device serial number (if available)
     pub serial_number: Option<String>,
-    /// Physical USB location identifier (stable per port)
+    /// USB location identifier derived from bus and port topology (stable per port)
     pub location_id: u64,
     /// Reference to the underlying nusb device info for opening
     nusb_info: nusb::DeviceInfo,
@@ -70,15 +70,12 @@ impl NusbTransport {
 
     /// List all available MTP devices with location IDs.
     pub fn list_mtp_devices() -> Result<Vec<UsbDeviceInfo>, crate::Error> {
-        // Get location IDs for all USB devices (platform-specific)
-        let location_map = get_usb_location_ids();
-
         let devices = nusb::list_devices()
             .wait()
             .map_err(crate::Error::Usb)?
             .filter(Self::is_mtp_device)
             .map(|dev| {
-                let location_id = find_location_id(&dev, &location_map);
+                let location_id = location_id_from_topology(&dev);
                 UsbDeviceInfo {
                     vendor_id: dev.vendor_id(),
                     product_id: dev.product_id(),
@@ -349,148 +346,29 @@ fn align_to_packet_size(size: usize, packet_size: usize) -> usize {
     }
 }
 
-// --- Platform-specific location ID retrieval ---
+/// Derive a stable location identifier from USB topology (bus + port chain).
+///
+/// Uses FNV-1a to hash `bus_id` and `port_chain` into a deterministic `u64`.
+/// The result is stable across calls for the same physical USB port, regardless
+/// of which device is plugged in.
+fn location_id_from_topology(dev: &nusb::DeviceInfo) -> u64 {
+    // FNV-1a 64-bit constants
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
 
-/// Map of (vendor_id, product_id, serial) -> location_id
-type LocationMap = std::collections::HashMap<(u16, u16, Option<String>), u64>;
-
-/// Find the location_id for a device using the pre-built map.
-fn find_location_id(dev: &nusb::DeviceInfo, map: &LocationMap) -> u64 {
-    let key = (
-        dev.vendor_id(),
-        dev.product_id(),
-        dev.serial_number().map(String::from),
-    );
-    if let Some(&loc) = map.get(&key) {
-        return loc;
+    let mut hash = FNV_OFFSET;
+    for byte in dev.bus_id().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
     }
-
-    // Fallback: try without serial (some devices don't report serial before open)
-    let key_no_serial = (dev.vendor_id(), dev.product_id(), None);
-    if let Some(&loc) = map.get(&key_no_serial) {
-        return loc;
+    // Separator so bus_id "1" + port [2,3] differs from bus_id "12" + port [3]
+    hash ^= 0xFF;
+    hash = hash.wrapping_mul(FNV_PRIME);
+    for byte in dev.port_chain() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
     }
-
-    // Last resort fallback: combine bus_id and address
-    let bus = dev.bus_id().parse::<u64>().unwrap_or(0);
-    (bus << 32) | (dev.device_address() as u64)
-}
-
-// macOS implementation using IOKit
-#[cfg(target_os = "macos")]
-fn get_usb_location_ids() -> LocationMap {
-    use io_kit_sys::types::io_iterator_t;
-    use io_kit_sys::*;
-
-    let mut map = LocationMap::new();
-
-    unsafe {
-        // Create matching dictionary for USB devices
-        let matching = IOServiceMatching(usb::lib::kIOUSBDeviceClassName);
-        if matching.is_null() {
-            return map;
-        }
-
-        // Get iterator for matching services
-        let mut iterator: io_iterator_t = 0;
-        #[allow(deprecated)]
-        let result = IOServiceGetMatchingServices(kIOMasterPortDefault, matching, &mut iterator);
-        if result != ret::kIOReturnSuccess {
-            return map;
-        }
-
-        // Iterate through USB devices
-        loop {
-            let service = IOIteratorNext(iterator);
-            if service == 0 {
-                break;
-            }
-
-            // Get properties we need
-            let vendor_id = get_iokit_property_number(service, "idVendor").unwrap_or(0) as u16;
-            let product_id = get_iokit_property_number(service, "idProduct").unwrap_or(0) as u16;
-            let location_id = get_iokit_property_number(service, "locationID").unwrap_or(0) as u64;
-            let serial = get_iokit_property_string(service, "USB Serial Number");
-
-            if vendor_id != 0 && location_id != 0 {
-                map.insert((vendor_id, product_id, serial), location_id);
-            }
-
-            IOObjectRelease(service);
-        }
-
-        IOObjectRelease(iterator);
-    }
-
-    map
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn get_iokit_property_number(
-    service: io_kit_sys::types::io_service_t,
-    key: &str,
-) -> Option<i64> {
-    use core_foundation::base::{kCFAllocatorDefault, TCFType};
-    use core_foundation::number::CFNumber;
-    use core_foundation::string::CFString;
-    use io_kit_sys::*;
-
-    let cf_key = CFString::new(key);
-    let cf_value = IORegistryEntryCreateCFProperty(
-        service,
-        cf_key.as_concrete_TypeRef() as _,
-        kCFAllocatorDefault,
-        0,
-    );
-    if cf_value.is_null() {
-        return None;
-    }
-
-    let number = CFNumber::wrap_under_create_rule(cf_value as _);
-    number.to_i64()
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn get_iokit_property_string(
-    service: io_kit_sys::types::io_service_t,
-    key: &str,
-) -> Option<String> {
-    use core_foundation::base::{kCFAllocatorDefault, TCFType};
-    use core_foundation::string::CFString;
-    use io_kit_sys::*;
-
-    let cf_key = CFString::new(key);
-    let cf_value = IORegistryEntryCreateCFProperty(
-        service,
-        cf_key.as_concrete_TypeRef() as _,
-        kCFAllocatorDefault,
-        0,
-    );
-    if cf_value.is_null() {
-        return None;
-    }
-
-    let cf_string = CFString::wrap_under_create_rule(cf_value as _);
-    Some(cf_string.to_string())
-}
-
-// Linux: bus:address is reliable there, so we use that as location_id
-#[cfg(target_os = "linux")]
-fn get_usb_location_ids() -> LocationMap {
-    // On Linux, bus:address is unique and stable per port
-    // We'll build the location_id from bus/address in find_location_id fallback
-    LocationMap::new()
-}
-
-// Windows and other platforms: fallback to bus:address
-//
-// On Windows, a proper implementation would use SetupAPI to retrieve
-// SPDRP_LOCATION_INFORMATION. For now, we rely on the fallback in
-// find_location_id() which combines bus_id and device_address.
-// This should work via nusb's cross-platform abstraction but is untested.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn get_usb_location_ids() -> LocationMap {
-    LocationMap::new()
+    hash
 }
 
 #[cfg(test)]
