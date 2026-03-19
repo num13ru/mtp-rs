@@ -50,20 +50,11 @@ pub struct NusbTransport {
     interrupt_in: Mutex<nusb::Endpoint<Interrupt, In>>,
     /// Timeout for bulk transfers (sending commands, receiving data).
     timeout: Duration,
-    /// Timeout for event polling on the interrupt endpoint.
-    event_timeout: Duration,
 }
 
 impl NusbTransport {
     /// Default timeout for bulk transfers (30 seconds for large file transfers).
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// Default timeout for event polling (200ms for responsive UI).
-    ///
-    /// This timeout is used for `receive_interrupt()` which polls for device events.
-    /// A short timeout allows callers to poll frequently without blocking other operations.
-    /// Adjust via `set_event_timeout()` if you need different responsiveness.
-    pub const DEFAULT_EVENT_TIMEOUT: Duration = Duration::from_millis(200);
 
     /// Default buffer size for interrupt transfers.
     const INTERRUPT_BUFFER_SIZE: usize = 64;
@@ -132,33 +123,13 @@ impl NusbTransport {
 
     /// Open a specific device and claim the MTP interface.
     pub async fn open(device: nusb::Device) -> Result<Self, crate::Error> {
-        Self::open_with_timeouts(device, Self::DEFAULT_TIMEOUT, Self::DEFAULT_EVENT_TIMEOUT).await
+        Self::open_with_timeout(device, Self::DEFAULT_TIMEOUT).await
     }
 
     /// Open with custom bulk transfer timeout.
-    ///
-    /// Uses the default event timeout. For full control over both timeouts,
-    /// use `open_with_timeouts()`.
     pub async fn open_with_timeout(
         device: nusb::Device,
         timeout: Duration,
-    ) -> Result<Self, crate::Error> {
-        Self::open_with_timeouts(device, timeout, Self::DEFAULT_EVENT_TIMEOUT).await
-    }
-
-    /// Open with custom timeouts for both bulk transfers and event polling.
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - The USB device to open
-    /// * `timeout` - Timeout for bulk transfers (commands, file data). Use 30+ seconds
-    ///   for large file operations.
-    /// * `event_timeout` - Timeout for event polling via `receive_interrupt()`. Use
-    ///   100-500ms for responsive event loops without blocking other operations.
-    pub async fn open_with_timeouts(
-        device: nusb::Device,
-        timeout: Duration,
-        event_timeout: Duration,
     ) -> Result<Self, crate::Error> {
         // Find the MTP interface
         let config = device.active_configuration().map_err(|e| {
@@ -236,7 +207,6 @@ impl NusbTransport {
             bulk_out: Mutex::new(bulk_out),
             interrupt_in: Mutex::new(interrupt_in),
             timeout,
-            event_timeout,
         })
     }
 
@@ -249,21 +219,6 @@ impl NusbTransport {
     /// Set the bulk transfer timeout.
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
-    }
-
-    /// Get the event polling timeout.
-    #[must_use]
-    pub fn event_timeout(&self) -> Duration {
-        self.event_timeout
-    }
-
-    /// Set the event polling timeout.
-    ///
-    /// This controls how long `receive_interrupt()` waits for device events.
-    /// Shorter timeouts (100-500ms) allow responsive event loops; longer timeouts
-    /// reduce polling overhead but block callers longer when no events are pending.
-    pub fn set_event_timeout(&mut self, timeout: Duration) {
-        self.event_timeout = timeout;
     }
 
     /// Convert a nusb TransferError to crate::Error.
@@ -321,7 +276,7 @@ impl Transport for NusbTransport {
             let max_packet_size = ep.max_packet_size();
             let aligned_size = align_to_packet_size(Self::INTERRUPT_BUFFER_SIZE, max_packet_size);
 
-            ep.transfer_blocking(Buffer::new(aligned_size), self.event_timeout)
+            ep.transfer_blocking(Buffer::new(aligned_size), self.timeout)
         };
         completion.status.map_err(Self::convert_transfer_error)?;
         Ok(completion.buffer[..completion.actual_len].to_vec())
@@ -398,10 +353,6 @@ mod tests {
         let transport = NusbTransport::open(device).await.unwrap();
 
         assert_eq!(transport.timeout(), NusbTransport::DEFAULT_TIMEOUT);
-        assert_eq!(
-            transport.event_timeout(),
-            NusbTransport::DEFAULT_EVENT_TIMEOUT
-        );
     }
 
     #[tokio::test]
@@ -416,38 +367,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Bulk timeout should be custom, event timeout should be default
         assert_eq!(transport.timeout(), custom_timeout);
-        assert_eq!(
-            transport.event_timeout(),
-            NusbTransport::DEFAULT_EVENT_TIMEOUT
-        );
 
-        // Test setters
+        // Test setter
         let new_timeout = Duration::from_secs(10);
         transport.set_timeout(new_timeout);
         assert_eq!(transport.timeout(), new_timeout);
-
-        let new_event_timeout = Duration::from_millis(500);
-        transport.set_event_timeout(new_event_timeout);
-        assert_eq!(transport.event_timeout(), new_event_timeout);
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires real MTP device
-    async fn test_open_with_timeouts() {
-        let devices = NusbTransport::list_mtp_devices().unwrap();
-        assert!(!devices.is_empty(), "No MTP device found");
-
-        let device = devices[0].open().unwrap();
-        let bulk_timeout = Duration::from_secs(45);
-        let event_timeout = Duration::from_millis(100);
-        let transport = NusbTransport::open_with_timeouts(device, bulk_timeout, event_timeout)
-            .await
-            .unwrap();
-
-        assert_eq!(transport.timeout(), bulk_timeout);
-        assert_eq!(transport.event_timeout(), event_timeout);
     }
 
     #[test]

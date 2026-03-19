@@ -158,31 +158,26 @@ impl MtpDevice {
 
     /// Receive the next event from the device.
     ///
-    /// This method waits for an event on the USB interrupt endpoint, returning when
-    /// an event arrives or the event timeout expires (default: 200ms). The short
-    /// default timeout allows responsive event loops without blocking other operations.
-    ///
-    /// Configure the timeout via [`MtpDeviceBuilder::event_timeout()`].
+    /// This method waits for an event on the USB interrupt endpoint. It will block
+    /// (up to the bulk transfer timeout) until an event arrives. Callers should use
+    /// their own async cancellation (e.g., `tokio::select!` or `tokio::time::timeout`)
+    /// for event loop control.
     ///
     /// # Returns
     ///
     /// - `Ok(event)` - An event was received from the device
-    /// - `Err(Error::Timeout)` - No event within the timeout period (normal, keep polling)
+    /// - `Err(Error::Timeout)` - No event within the timeout period
     /// - `Err(Error::Disconnected)` - Device was disconnected
     /// - `Err(_)` - Other communication error
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Configure event timeout if needed (default is 200ms)
-    /// let device = MtpDevice::builder()
-    ///     .event_timeout(Duration::from_millis(100))
-    ///     .open_first()
-    ///     .await?;
+    /// use tokio::time::{timeout, Duration};
     ///
     /// loop {
-    ///     match device.next_event().await {
-    ///         Ok(event) => {
+    ///     match timeout(Duration::from_millis(200), device.next_event()).await {
+    ///         Ok(Ok(event)) => {
     ///             match event {
     ///                 DeviceEvent::ObjectAdded { handle } => {
     ///                     println!("New object: {:?}", handle);
@@ -193,12 +188,12 @@ impl MtpDevice {
     ///                 _ => {}
     ///             }
     ///         }
-    ///         Err(Error::Disconnected) => break,
-    ///         Err(Error::Timeout) => continue,  // No event, keep polling
-    ///         Err(e) => {
+    ///         Ok(Err(Error::Disconnected)) => break,
+    ///         Ok(Err(e)) => {
     ///             eprintln!("Error: {}", e);
     ///             break;
     ///         }
+    ///         Err(_elapsed) => continue,  // Timeout, check for shutdown etc.
     ///     }
     /// }
     /// ```
@@ -317,7 +312,6 @@ impl MtpDeviceInfo {
 /// Builder for MtpDevice configuration.
 pub struct MtpDeviceBuilder {
     timeout: Duration,
-    event_timeout: Duration,
 }
 
 impl MtpDeviceBuilder {
@@ -325,28 +319,16 @@ impl MtpDeviceBuilder {
     pub fn new() -> Self {
         Self {
             timeout: NusbTransport::DEFAULT_TIMEOUT,
-            event_timeout: NusbTransport::DEFAULT_EVENT_TIMEOUT,
         }
     }
 
     /// Set bulk transfer timeout (default: 30 seconds).
     ///
-    /// This timeout applies to file transfers and command responses.
+    /// This timeout applies to file transfers, command responses, and event polling.
     /// Use longer timeouts for large file operations.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
-        self
-    }
-
-    /// Set event polling timeout (default: 200ms).
-    ///
-    /// This timeout controls how long `next_event()` waits for device events.
-    /// Shorter timeouts (100-500ms) enable responsive event loops without
-    /// blocking other operations. Longer timeouts reduce polling overhead.
-    #[must_use]
-    pub fn event_timeout(mut self, timeout: Duration) -> Self {
-        self.event_timeout = timeout;
         self
     }
 
@@ -388,8 +370,7 @@ impl MtpDeviceBuilder {
     /// Internal: open an already-discovered device.
     async fn open_device(self, device: nusb::Device) -> Result<MtpDevice, Error> {
         // Open transport
-        let transport =
-            NusbTransport::open_with_timeouts(device, self.timeout, self.event_timeout).await?;
+        let transport = NusbTransport::open_with_timeout(device, self.timeout).await?;
         let transport: Arc<dyn Transport> = Arc::new(transport);
 
         // Open session (use session ID 1)
@@ -423,18 +404,14 @@ mod tests {
     }
 
     #[test]
-    fn builder_timeouts() {
-        // Default values
+    fn builder_timeout() {
+        // Default value
         let builder = MtpDeviceBuilder::new();
         assert_eq!(builder.timeout, NusbTransport::DEFAULT_TIMEOUT);
-        assert_eq!(builder.event_timeout, NusbTransport::DEFAULT_EVENT_TIMEOUT);
 
-        // Custom values
-        let custom = MtpDeviceBuilder::new()
-            .timeout(Duration::from_secs(45))
-            .event_timeout(Duration::from_millis(100));
+        // Custom value
+        let custom = MtpDeviceBuilder::new().timeout(Duration::from_secs(45));
         assert_eq!(custom.timeout, Duration::from_secs(45));
-        assert_eq!(custom.event_timeout, Duration::from_millis(100));
     }
 
     #[test]

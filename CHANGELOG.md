@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replaced platform-specific IOKit/location_id code with nusb's cross-platform `port_chain()` + `bus_id()`
 - **Breaking:** `location_id` values will differ from previous versions (now derived from USB topology instead of macOS IOKit)
+- `receive_interrupt()` now uses the bulk transfer timeout instead of a separate event timeout
 
 ### Removed
 
 - Removed `io-kit-sys` and `core-foundation` macOS dependencies (location info now provided by nusb)
+- **Breaking:** Removed `event_timeout`, `DEFAULT_EVENT_TIMEOUT`, `set_event_timeout()`, `event_timeout()`, and `open_with_timeouts()` from `NusbTransport`
+- **Breaking:** Removed `event_timeout()` from `MtpDeviceBuilder`
 
 ## [0.3.0] - 2026-03-20
 
