@@ -11,7 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replaced platform-specific IOKit/location_id code with nusb's cross-platform `port_chain()` + `bus_id()`
 - **Breaking:** `location_id` values will differ from previous versions (now derived from USB topology instead of macOS IOKit)
-- `receive_interrupt()` now uses the bulk transfer timeout instead of a separate event timeout
+- Fixed timeout race condition: `receive_bulk` now leaves USB transfers pending on timeout instead of cancelling them, preventing data loss on retry
+- `receive_interrupt()` now awaits indefinitely for events (no timeout); callers should use async cancellation
+- Switched from `std::sync::Mutex` to `futures::lock::Mutex` for async-safe locking across `.await` points
+- Re-added `futures-timer` dependency for async timeout support
 
 ### Removed
 

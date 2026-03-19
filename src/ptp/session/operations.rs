@@ -372,7 +372,7 @@ impl PtpSession {
     /// # Returns
     ///
     /// - `Ok(Some(container))` - An event was received
-    /// - `Ok(None)` - Timeout occurred (no event available)
+    /// - `Ok(None)` - Timeout (only if caller wraps with their own timeout)
     /// - `Err(_)` - Communication error
     pub async fn poll_event(&self) -> Result<Option<EventContainer>, Error> {
         match self.transport.receive_interrupt().await {

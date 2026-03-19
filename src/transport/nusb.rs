@@ -2,10 +2,11 @@
 
 use super::Transport;
 use async_trait::async_trait;
+use futures::lock::Mutex;
+use futures_timer::Delay;
 use nusb::descriptors::TransferType;
 use nusb::transfer::{Buffer, Bulk, Direction, In, Interrupt, Out, TransferError};
 use nusb::MaybeFuture;
-use std::sync::Mutex;
 use std::time::Duration;
 
 /// MTP interface class code (Still Image).
@@ -224,9 +225,8 @@ impl NusbTransport {
     /// Convert a nusb TransferError to crate::Error.
     fn convert_transfer_error(err: TransferError) -> crate::Error {
         match err {
-            // nusb returns Cancelled when transfer_blocking times out (it cancels
-            // the transfer internally). Since we never explicitly cancel transfers,
-            // Cancelled always means the timeout expired. Map to Timeout so that
+            // send_bulk uses transfer_blocking, which cancels the transfer on
+            // timeout and returns Cancelled. Map to Timeout so that
             // Error::is_retryable() treats it correctly.
             TransferError::Cancelled => crate::Error::Timeout,
             TransferError::Disconnected => crate::Error::Disconnected,
@@ -241,43 +241,62 @@ impl NusbTransport {
 #[async_trait]
 impl Transport for NusbTransport {
     async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error> {
-        let completion = {
-            let mut ep = self.bulk_out.lock().expect("bulk_out mutex poisoned");
-            let buf: Buffer = data.to_vec().into();
-            ep.transfer_blocking(buf, self.timeout)
-        };
+        let mut ep = self.bulk_out.lock().await;
+        let buf: Buffer = data.to_vec().into();
+        let completion = ep.transfer_blocking(buf, self.timeout);
         completion.status.map_err(Self::convert_transfer_error)?;
         Ok(())
     }
 
     async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, crate::Error> {
-        let completion = {
-            let mut ep = self.bulk_in.lock().expect("bulk_in mutex poisoned");
+        let mut ep = self.bulk_in.lock().await;
 
-            // Align max_size up to max_packet_size for nusb 0.2's requirement
-            // that IN transfer sizes are multiples of max_packet_size.
+        // If there's no pending transfer from a previous timed-out call,
+        // submit a new one. Otherwise, the pending transfer already has our
+        // data in flight and we just need to wait for it.
+        if ep.pending() == 0 {
             let max_packet_size = ep.max_packet_size();
             let aligned_size = align_to_packet_size(max_size, max_packet_size);
+            ep.submit(Buffer::new(aligned_size));
+        }
 
-            ep.transfer_blocking(Buffer::new(aligned_size), self.timeout)
-        };
-        completion.status.map_err(Self::convert_transfer_error)?;
-        Ok(completion.buffer[..completion.actual_len].to_vec())
+        // Wait for the transfer to complete OR the timeout to expire.
+        // next_complete() is cancel-safe: dropping its future does NOT cancel
+        // the underlying USB transfer. On timeout we leave the transfer pending
+        // so a subsequent call picks up the in-flight data.
+        let completion = futures::future::select(
+            Box::pin(ep.next_complete()),
+            Box::pin(Delay::new(self.timeout)),
+        )
+        .await;
+
+        match completion {
+            futures::future::Either::Left((comp, _)) => {
+                comp.status.map_err(Self::convert_transfer_error)?;
+                Ok(comp.buffer[..comp.actual_len].to_vec())
+            }
+            futures::future::Either::Right((_, _)) => {
+                // Don't cancel the transfer — it stays pending in the endpoint.
+                // next_complete() is cancel-safe, so dropping its future is fine.
+                // On retry, the next call will find pending() > 0 and pick it up.
+                Err(crate::Error::Timeout)
+            }
+        }
     }
 
     async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error> {
-        let completion = {
-            let mut ep = self
-                .interrupt_in
-                .lock()
-                .expect("interrupt_in mutex poisoned");
+        let mut ep = self.interrupt_in.lock().await;
 
-            // Align to max_packet_size
+        // Submit a new transfer only if none is already pending.
+        if ep.pending() == 0 {
             let max_packet_size = ep.max_packet_size();
             let aligned_size = align_to_packet_size(Self::INTERRUPT_BUFFER_SIZE, max_packet_size);
+            ep.submit(Buffer::new(aligned_size));
+        }
 
-            ep.transfer_blocking(Buffer::new(aligned_size), self.timeout)
-        };
+        // Await indefinitely — callers handle cancellation via async
+        // cancellation (e.g. tokio::time::timeout or select!).
+        let completion = ep.next_complete().await;
         completion.status.map_err(Self::convert_transfer_error)?;
         Ok(completion.buffer[..completion.actual_len].to_vec())
     }
