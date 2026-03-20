@@ -32,6 +32,7 @@ Publishing is manual — there's no CI automation for it.
 
 ## Previous releases
 
+- **v0.4.0** — commit `4c6254e`, tag `v0.4.0`
 - **v0.3.0** — commit `626f609`, tag `v0.3.0`
 - **v0.2.0** — commit `db16156`, tag `v0.2.0`
 - **v0.1.0** — commit `96b6088`, tag `v0.1.0`
