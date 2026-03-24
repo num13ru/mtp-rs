@@ -158,15 +158,15 @@ impl MtpDevice {
 
     /// Receive the next event from the device.
     ///
-    /// This method waits for an event on the USB interrupt endpoint. It will block
-    /// (up to the bulk transfer timeout) until an event arrives. Callers should use
-    /// their own async cancellation (e.g., `tokio::select!` or `tokio::time::timeout`)
-    /// for event loop control.
+    /// This method awaits **indefinitely** on the USB interrupt endpoint until an
+    /// event arrives or the device disconnects. If you hold a shared lock on the
+    /// device while calling this, all other operations will be blocked until an event
+    /// comes in. Always wrap this in `tokio::time::timeout` (or equivalent) to avoid
+    /// starving other operations.
     ///
     /// # Returns
     ///
     /// - `Ok(event)` - An event was received from the device
-    /// - `Err(Error::Timeout)` - No event within the timeout period
     /// - `Err(Error::Disconnected)` - Device was disconnected
     /// - `Err(_)` - Other communication error
     ///

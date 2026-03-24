@@ -190,22 +190,26 @@ println ! ("{:.1}%", download.progress() * 100.0);
 
 ### Listen for events
 
+`next_event()` awaits indefinitely, so wrap it in a timeout to allow checking for shutdown, etc.:
+
 ```rust
+use tokio::time::{timeout, Duration};
+
 loop {
-match device.next_event().await {
-Ok(event) => match event {
-DeviceEvent::ObjectAdded { handle } => {
-println ! ("New file: {:?}", handle);
-}
-DeviceEvent::StoreRemoved { storage_id } => {
-println ! ("Storage unplugged: {:?}", storage_id);
-}
-_ => {}
-},
-Err(Error::Timeout) => continue,
-Err(Error::Disconnected) => break,
-Err(e) => eprintln ! ("Error: {}", e),
-}
+    match timeout(Duration::from_millis(200), device.next_event()).await {
+        Ok(Ok(event)) => match event {
+            DeviceEvent::ObjectAdded { handle } => {
+                println!("New file: {:?}", handle);
+            }
+            DeviceEvent::StoreRemoved { storage_id } => {
+                println!("Storage unplugged: {:?}", storage_id);
+            }
+            _ => {}
+        },
+        Ok(Err(Error::Disconnected)) => break,
+        Ok(Err(e)) => eprintln!("Error: {}", e),
+        Err(_) => continue, // Timeout — check for shutdown, etc.
+    }
 }
 ```
 

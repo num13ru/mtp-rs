@@ -362,9 +362,10 @@ impl PtpSession {
 
     /// Poll for a single event from the interrupt endpoint.
     ///
-    /// This method waits until an event is received from the USB interrupt endpoint.
-    /// Events are asynchronous notifications from the device about changes such as
-    /// objects being added/removed, storage changes, etc.
+    /// This method awaits **indefinitely** until an event is received from the USB
+    /// interrupt endpoint. Events are asynchronous notifications from the device
+    /// about changes such as objects being added/removed, storage changes, etc.
+    /// Callers should wrap this in an async timeout to avoid blocking forever.
     ///
     /// Note: This method does not require the operation lock since events are
     /// received on the interrupt endpoint, which is independent of bulk transfers.
@@ -372,7 +373,7 @@ impl PtpSession {
     /// # Returns
     ///
     /// - `Ok(Some(container))` - An event was received
-    /// - `Ok(None)` - Timeout (only if caller wraps with their own timeout)
+    /// - `Ok(None)` - No event (unreachable in practice; kept for API compatibility)
     /// - `Err(_)` - Communication error
     pub async fn poll_event(&self) -> Result<Option<EventContainer>, Error> {
         match self.transport.receive_interrupt().await {
