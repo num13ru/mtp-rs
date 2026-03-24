@@ -4,7 +4,7 @@ use super::Transport;
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use futures_timer::Delay;
-use nusb::descriptors::TransferType;
+use nusb::descriptors::{InterfaceDescriptor, TransferType};
 use nusb::transfer::{Buffer, Bulk, Direction, In, Interrupt, Out, TransferError};
 use nusb::MaybeFuture;
 use std::time::Duration;
@@ -84,28 +84,33 @@ impl NusbTransport {
 
     /// Check if a device info represents an MTP device.
     fn is_mtp_device(dev: &nusb::DeviceInfo) -> bool {
-        // Check device class/subclass/protocol at device level
+        // Check device class/subclass/protocol at device level.
         if Self::is_mtp_class(dev.class(), dev.subclass(), dev.protocol()) {
             return true;
         }
 
-        // Many Android devices are composite (class 0) with MTP as one interface.
-        // Check interface-level class info available from DeviceInfo without opening.
-        if dev.class() == 0 {
-            for intf in dev.interfaces() {
-                if Self::is_mtp_class(intf.class(), intf.subclass(), intf.protocol()) {
-                    return true;
-                }
-            }
+        // Many devices are composite (class 0) or vendor-specific (class 0xFF)
+        // with MTP on one interface. Only inspect these further.
+        if dev.class() != 0 && dev.class() != MTP_CLASS_VENDOR {
+            return false;
+        }
 
-            // Fall back to opening the device and inspecting configuration descriptors.
-            if let Ok(device) = dev.open().wait() {
-                if let Ok(config) = device.active_configuration() {
-                    for interface in config.interfaces() {
-                        if let Some(alt) = interface.alt_settings().next() {
-                            if Self::is_mtp_class(alt.class(), alt.subclass(), alt.protocol()) {
-                                return true;
-                            }
+        // Check interface-level class info available from DeviceInfo without opening.
+        for intf in dev.interfaces() {
+            if Self::is_mtp_class(intf.class(), intf.subclass(), intf.protocol()) {
+                return true;
+            }
+        }
+
+        // Fall back to opening the device and inspecting full configuration descriptors.
+        // This also catches vendor-specific interfaces (class 0xFF) that use non-standard
+        // subclass/protocol but have the MTP endpoint layout (e.g. Amazon Kindle).
+        if let Ok(device) = dev.open().wait() {
+            if let Ok(config) = device.active_configuration() {
+                for interface in config.interfaces() {
+                    if let Some(alt) = interface.alt_settings().next() {
+                        if Self::is_mtp_interface(&alt) {
+                            return true;
                         }
                     }
                 }
@@ -115,11 +120,43 @@ impl NusbTransport {
         false
     }
 
-    /// Check if class/subclass/protocol match MTP.
+    /// Check if class/subclass/protocol match standard MTP identifiers.
     fn is_mtp_class(class: u8, subclass: u8, protocol: u8) -> bool {
         (class == MTP_CLASS_IMAGE || class == MTP_CLASS_VENDOR)
             && subclass == MTP_SUBCLASS
             && protocol == MTP_PROTOCOL
+    }
+
+    /// Check if an interface descriptor looks like an MTP interface.
+    ///
+    /// Matches standard MTP class/subclass/protocol, and also vendor-specific
+    /// interfaces (class 0xFF) with non-standard subclass/protocol that have
+    /// the MTP endpoint layout (bulk IN + bulk OUT + interrupt IN). Some devices
+    /// like Amazon Kindle use vendor-specific descriptors while still speaking MTP.
+    fn is_mtp_interface(alt: &InterfaceDescriptor) -> bool {
+        if Self::is_mtp_class(alt.class(), alt.subclass(), alt.protocol()) {
+            return true;
+        }
+        // For vendor-specific class, subclass and protocol are vendor-defined,
+        // so we can't rely on them. Use endpoint layout as a heuristic instead.
+        alt.class() == MTP_CLASS_VENDOR && Self::has_mtp_endpoint_layout(alt)
+    }
+
+    /// Check if an interface has the MTP endpoint layout:
+    /// one bulk IN, one bulk OUT, and one interrupt IN endpoint.
+    fn has_mtp_endpoint_layout(alt: &InterfaceDescriptor) -> bool {
+        let mut bulk_in = false;
+        let mut bulk_out = false;
+        let mut interrupt_in = false;
+        for ep in alt.endpoints() {
+            match (ep.direction(), ep.transfer_type()) {
+                (Direction::In, TransferType::Bulk) => bulk_in = true,
+                (Direction::Out, TransferType::Bulk) => bulk_out = true,
+                (Direction::In, TransferType::Interrupt) => interrupt_in = true,
+                _ => {}
+            }
+        }
+        bulk_in && bulk_out && interrupt_in
     }
 
     /// Open a specific device and claim the MTP interface.
@@ -148,12 +185,8 @@ impl NusbTransport {
                 continue;
             };
 
-            // Check if this interface is MTP
-            if Self::is_mtp_class(
-                alt_setting.class(),
-                alt_setting.subclass(),
-                alt_setting.protocol(),
-            ) {
+            // Check if this interface is MTP (standard or vendor-specific with MTP endpoints)
+            if Self::is_mtp_interface(&alt_setting) {
                 mtp_interface_number = Some(interface.interface_number());
 
                 // Find endpoints
@@ -427,5 +460,8 @@ mod tests {
 
         // Wrong protocol
         assert!(!NusbTransport::is_mtp_class(0x06, 0x01, 0x00));
+
+        // Vendor-specific with non-standard subclass/protocol (e.g. Kindle ff/ff/00)
+        assert!(!NusbTransport::is_mtp_class(0xFF, 0xFF, 0x00));
     }
 }
