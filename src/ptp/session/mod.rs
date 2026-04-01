@@ -86,10 +86,10 @@ impl PtpSession {
     pub async fn open(transport: Arc<dyn Transport>, session_id: u32) -> Result<Self, Error> {
         let session = Self::new(transport, SessionId(session_id));
 
-        // Send OpenSession command
-        let response = session
-            .execute(OperationCode::OpenSession, &[session_id])
-            .await?;
+        // PTP spec: OpenSession is a session-less operation, so use tx_id=0.
+        // Some devices (e.g. Amazon Kindle) enforce this strictly and reject
+        // OpenSession with tx_id != 0 as InvalidParameter.
+        let response = Self::send_open_session(&session.transport, session_id).await?;
 
         if response.code == ResponseCode::Ok {
             return Ok(session);
@@ -103,9 +103,8 @@ impl PtpSession {
             // Create a new session instance with reset transaction ID counter
             let fresh_session = Self::new(Arc::clone(&session.transport), SessionId(session_id));
 
-            let retry_response = fresh_session
-                .execute(OperationCode::OpenSession, &[session_id])
-                .await?;
+            let retry_response =
+                Self::send_open_session(&fresh_session.transport, session_id).await?;
 
             if retry_response.code != ResponseCode::Ok {
                 return Err(Error::Protocol {
@@ -121,6 +120,22 @@ impl PtpSession {
             code: response.code,
             operation: OperationCode::OpenSession,
         })
+    }
+
+    /// Send OpenSession with transaction_id=0 (SESSION_LESS) per the PTP spec.
+    async fn send_open_session(
+        transport: &Arc<dyn Transport>,
+        session_id: u32,
+    ) -> Result<ResponseContainer, Error> {
+        let cmd = CommandContainer {
+            code: OperationCode::OpenSession,
+            transaction_id: TransactionId::SESSION_LESS.0,
+            params: vec![session_id],
+        };
+        transport.send_bulk(&cmd.to_bytes()).await?;
+
+        let response_bytes = transport.receive_bulk(512).await?;
+        ResponseContainer::from_bytes(&response_bytes)
     }
 
     /// Get the session ID.
