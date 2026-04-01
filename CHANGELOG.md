@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-01
+
+### Added
+
+- `virtual-device` feature for testing MTP client code without USB hardware
+  - `VirtualTransport` implements the `Transport` trait against local filesystem directories, speaking the full MTP/PTP binary protocol so `MtpDevice`, `Storage`, and `PtpSession` work unchanged
+  - `MtpDevice::builder().open_virtual(config)` creates a virtual device directly
+  - `register_virtual_device()` / `unregister_virtual_device()` integrate with `list_devices()`, `open_by_location()`, and `open_by_serial()`
+  - Supports 16 MTP operations: list/get/delete/move/copy/rename objects, upload files, create folders, storage info, device info, events
+  - Path traversal protection on all write operations
+  - Configurable `event_poll_interval` to avoid CPU spin in event loops
+  - Read-only storage support
+  - Zero changes to existing code paths when the feature is disabled
+
 ## [0.4.2] - 2026-04-01
 
 ### Fixed

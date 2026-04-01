@@ -19,7 +19,7 @@ src/
   ptp/         # Low-level protocol (PtpDevice, PtpSession)
     types/     # DeviceInfo, StorageInfo, ObjectInfo, AccessCapability
     codes.rs   # OperationCode, ResponseCode, EventCode
-  transport/   # USB abstraction (Transport trait, nusb impl, mock)
+  transport/   # USB abstraction (Transport trait, nusb impl, mock, virtual_device)
 examples/      # list_and_download, ptp_diagnose, fuji_capture, fuji_rw_check
 ```
 
@@ -32,10 +32,10 @@ ptp:: (PtpSession)            <-- Cameras, protocol work
   |
 transport:: (Transport trait)
   |
-nusb (USB)
+nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 ```
 
-**Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`
+**Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `MtpDeviceBuilder::open_virtual()` (feature-gated)
 
 **Key types:** `ObjectHandle`, `StorageId` (newtypes), `AccessCapability`, `OperationCode`
 
@@ -48,6 +48,7 @@ nusb (USB)
 ## Testing
 
 - **Unit**: `cargo test` (uses mock transport)
+- **Virtual device**: `cargo test --features virtual-device` (full protocol tests against local filesystem)
 - **Integration**: `cargo test --test integration -- --ignored --nocapture` (needs device)
 - **Property**: `cargo test --all-features` (proptest fuzzing)
 

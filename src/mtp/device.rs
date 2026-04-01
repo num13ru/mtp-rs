@@ -89,7 +89,8 @@ impl MtpDevice {
     /// List all available MTP devices without opening them.
     pub fn list_devices() -> Result<Vec<MtpDeviceInfo>, Error> {
         let devices = NusbTransport::list_mtp_devices()?;
-        Ok(devices
+        #[allow(unused_mut)]
+        let mut result: Vec<MtpDeviceInfo> = devices
             .into_iter()
             .map(|d| MtpDeviceInfo {
                 vendor_id: d.vendor_id,
@@ -99,7 +100,12 @@ impl MtpDevice {
                 serial_number: d.serial_number,
                 location_id: d.location_id,
             })
-            .collect())
+            .collect();
+
+        #[cfg(feature = "virtual-device")]
+        result.extend(crate::transport::virtual_device::registry::list_virtual_devices());
+
+        Ok(result)
     }
 
     /// Get device information.
@@ -343,7 +349,15 @@ impl MtpDeviceBuilder {
     /// Open a device at a specific USB location (port).
     ///
     /// Use `MtpDevice::list_devices()` to get available location IDs.
+    /// Also checks the virtual device registry when the `virtual-device` feature is enabled.
     pub async fn open_by_location(self, location_id: u64) -> Result<MtpDevice, Error> {
+        #[cfg(feature = "virtual-device")]
+        if let Some(config) =
+            crate::transport::virtual_device::registry::find_virtual_config_by_location(location_id)
+        {
+            return self.open_virtual(config).await;
+        }
+
         let devices = NusbTransport::list_mtp_devices()?;
         let device_info = devices
             .into_iter()
@@ -356,8 +370,16 @@ impl MtpDeviceBuilder {
     /// Open a device by its serial number.
     ///
     /// This identifies a specific physical device regardless of which USB port
-    /// it's connected to.
+    /// it's connected to. Also checks the virtual device registry when the
+    /// `virtual-device` feature is enabled.
     pub async fn open_by_serial(self, serial: &str) -> Result<MtpDevice, Error> {
+        #[cfg(feature = "virtual-device")]
+        if let Some(config) =
+            crate::transport::virtual_device::registry::find_virtual_config_by_serial(serial)
+        {
+            return self.open_virtual(config).await;
+        }
+
         let devices = NusbTransport::list_mtp_devices()?;
         let device_info = devices
             .into_iter()
@@ -371,6 +393,67 @@ impl MtpDeviceBuilder {
     async fn open_device(self, device: nusb::Device) -> Result<MtpDevice, Error> {
         // Open transport
         let transport = NusbTransport::open_with_timeout(device, self.timeout).await?;
+        let transport: Arc<dyn Transport> = Arc::new(transport);
+
+        // Open session (use session ID 1)
+        let session = Arc::new(PtpSession::open(transport.clone(), 1).await?);
+
+        // Get device info
+        let device_info = session.get_device_info().await?;
+
+        let inner = Arc::new(MtpDeviceInner {
+            session,
+            device_info,
+        });
+
+        Ok(MtpDevice { inner })
+    }
+
+    /// Open a virtual device backed by local filesystem directories.
+    ///
+    /// This creates a virtual MTP device that speaks the full binary protocol but
+    /// operates against local directories instead of USB. Use this for testing MTP
+    /// client code without real hardware.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::path::PathBuf;
+    /// use std::time::Duration;
+    /// use mtp_rs::MtpDevice;
+    /// use mtp_rs::transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// let device = MtpDevice::builder()
+    ///     .open_virtual(VirtualDeviceConfig {
+    ///         manufacturer: "Google".into(),
+    ///         model: "Virtual Pixel 9".into(),
+    ///         serial: "virtual-001".into(),
+    ///         storages: vec![VirtualStorageConfig {
+    ///             description: "Internal Storage".into(),
+    ///             capacity: 64 * 1024 * 1024 * 1024,
+    ///             backing_dir: PathBuf::from("/tmp/mtp-test"),
+    ///             read_only: false,
+    ///         }],
+    ///         supports_rename: true,
+    ///         event_poll_interval: Duration::from_millis(50),
+    ///     })
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "virtual-device")]
+    pub async fn open_virtual(
+        self,
+        config: crate::transport::virtual_device::config::VirtualDeviceConfig,
+    ) -> Result<MtpDevice, Error> {
+        if config.storages.is_empty() {
+            return Err(Error::invalid_data(
+                "VirtualDeviceConfig requires at least one storage",
+            ));
+        }
+
+        let transport = crate::transport::virtual_device::VirtualTransport::new(config);
         let transport: Arc<dyn Transport> = Arc::new(transport);
 
         // Open session (use session ID 1)
@@ -442,6 +525,31 @@ mod tests {
             ..with_serial
         };
         assert!(unknown.display().contains("Unknown"));
+    }
+
+    #[cfg(feature = "virtual-device")]
+    #[tokio::test]
+    async fn open_virtual_empty_storages_rejected() {
+        use crate::transport::virtual_device::config::VirtualDeviceConfig;
+
+        let config = VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Empty".into(),
+            serial: "empty-001".into(),
+            storages: vec![],
+            supports_rename: false,
+            event_poll_interval: Duration::ZERO,
+        };
+
+        let result = MtpDevice::builder().open_virtual(config).await;
+        match result {
+            Err(err) => assert!(
+                err.to_string().contains("at least one storage"),
+                "unexpected error: {}",
+                err
+            ),
+            Ok(_) => panic!("expected error for empty storages"),
+        }
     }
 
     #[tokio::test]

@@ -18,6 +18,7 @@ No `libmtp`, no `libusb`, no FFI, just async Rust built on [`nusb`](https://crat
 - No `pkg-config`, no `-sys` crates, no `build.rs` surprises
 - Works anywhere Rust compiles (including `musl` and cross-compilation targets)
 - Fully async and runtime-agnostic
+- [Virtual device mode](#virtual-device-testing-without-hardware) for testing without a USB device plugged in
 
 ## What it does
 
@@ -211,6 +212,57 @@ loop {
         Err(_) => continue, // Timeout — check for shutdown, etc.
     }
 }
+```
+
+## Virtual device (testing without hardware)
+
+The `virtual-device` feature lets you test MTP client code against a local filesystem directory instead of a real USB
+device. Enable it in your `Cargo.toml`:
+
+```toml
+[dev-dependencies]
+mtp-rs = { version = "0.4", features = ["virtual-device"] }
+```
+
+### Direct usage
+
+```rust
+use std::path::PathBuf;
+use std::time::Duration;
+use mtp_rs::{MtpDevice, VirtualDeviceConfig, VirtualStorageConfig};
+
+let device = MtpDevice::builder()
+    .open_virtual(VirtualDeviceConfig {
+        manufacturer: "Google".into(),
+        model: "Virtual Pixel 9".into(),
+        serial: "virtual-001".into(),
+        storages: vec![VirtualStorageConfig {
+            description: "Internal Storage".into(),
+            capacity: 64 * 1024 * 1024 * 1024,
+            backing_dir: PathBuf::from("/tmp/mtp-test"),
+            read_only: false,
+        }],
+        supports_rename: true,
+        event_poll_interval: Duration::from_millis(50),
+    })
+    .await?;
+```
+
+### Discovery registry
+
+You can also register virtual devices so they appear in `MtpDevice::list_devices()` and can be opened with
+`open_by_location()` or `open_by_serial()`:
+
+```rust
+use mtp_rs::{register_virtual_device, unregister_virtual_device};
+
+let info = register_virtual_device(&config);
+
+// Now discoverable
+let device = MtpDevice::builder().open_by_serial("virtual-001").await?;
+
+// Clean up when done
+unregister_virtual_device(info.location_id);
 ```
 
 ## API overview

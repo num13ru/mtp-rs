@@ -56,3 +56,9 @@ pub use mtp::{
     DeviceEvent, FileDownload, MtpDevice, MtpDeviceBuilder, NewObjectInfo, ObjectListing, Progress,
     Storage,
 };
+
+// Re-export virtual device types when the feature is enabled
+#[cfg(feature = "virtual-device")]
+pub use transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
+#[cfg(feature = "virtual-device")]
+pub use transport::virtual_device::registry::{register_virtual_device, unregister_virtual_device};
