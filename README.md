@@ -116,27 +116,27 @@ honestly, any) library.
 **Workarounds:**
 
 1. **Kill loop**: Run this in Terminal while using your app:
-  ```bash
+   ```bash
    while true; do pkill -9 ptpcamerad 2>/dev/null; sleep 1; done
-  ```
+   ```
 
 2. **Disable `ptpcamerad`**: Persistent, but may break Photos.app:
 
-  ```bash
+   ```bash
    sudo launchctl disable system/com.apple.ptpcamerad
-  ```
+   ```
 
 **Other tips for app developers:**
 
 - This library provides `Error::is_exclusive_access()`. Use this to detect this condition and guide users to apply
-one of the workarounds above.
+  one of the workarounds above.
 - Query IORegistry for `UsbExclusiveOwner` to show which process (pid, name) holds the device for even more helpful info
 - App Store sandboxed apps cannot kill processes. If your app is such, then provide the command for users to run
-manually.
-If your app isn't in the App Store, then you're in a better position and may be able to use the workarounds, BUT
-it's a bit murky territory with Apple.
+  manually.
+  If your app isn't in the App Store, then you're in a better position and may be able to use the workarounds, BUT
+  it's a bit murky territory with Apple.
 - See [Cmdr](https://github.com/vdavid/cmdr) and [Commander One](https://mac.eltima.com/file-manager.html) for UX
-inspiration on handling this gracefully.
+  inspiration on handling this gracefully.
 
 #### Windows
 
@@ -262,19 +262,19 @@ We use `nusb` for USB access, which is also runtime-agnostic.
 Android's MTP implementation has some quirks that this library handles automatically:
 
 - **Behavior:** Recursive listing broken
-  - **What happens:** `ObjectHandle::ALL` returns incomplete results (folders only, no files)
-  - **How we handle it:** Auto-detected; uses manual folder traversal instead. Although, note that it takes a lot more
-  time! Like, if the device supported this, it'd be pretty fast, while with the workaround, in the tests it took
-  9 minutes to list ~20k files in ~2k folders.
+    - **What happens:** `ObjectHandle::ALL` returns incomplete results (folders only, no files)
+    - **How we handle it:** Auto-detected; uses manual folder traversal instead. Although, note that it takes a lot more
+      time! Like, if the device supported this, it'd be pretty fast, while with the workaround, in the tests it took
+      9 minutes to list ~20k files in ~2k folders.
 - **Behavior:** Can't create in root
-  - **What happens:** Creating files/folders in storage root fails with `InvalidObjectHandle`
-  - **How we handle it:** Use a subfolder like `Download/` as the parent
+    - **What happens:** Creating files/folders in storage root fails with `InvalidObjectHandle`
+    - **How we handle it:** Use a subfolder like `Download/` as the parent
 - **Behavior:** Large responses span transfers
-  - **What happens:** Data >64KB comes in multiple USB transfers
-  - **How we handle it:** Automatically reassembled before parsing
+    - **What happens:** Data >64KB comes in multiple USB transfers
+    - **How we handle it:** Automatically reassembled before parsing
 - **Behavior:** Composite USB devices
-  - **What happens:** Most phones report as USB class 0 (composite)
-  - **How we handle it:** We inspect interfaces to find MTP
+    - **What happens:** Most phones report as USB class 0 (composite)
+    - **How we handle it:** We inspect interfaces to find MTP
 
 The library detects Android devices via the `"android.com"` vendor extension and applies appropriate handling
 automatically.
@@ -295,13 +295,11 @@ storage.upload(Some(download.handle), file_info, data).await?;
 
 "Full support" really means "Full support, except for general Android quirks listed above".
 
-
-| Device                                              | Android | Notes           |
-| --------------------------------------------------- | ------- | --------------- |
-| Google Pixel 9 Pro XL                               | 15      | Full support    |
-| Samsung Galaxy S23 Ultra (SM-S918B)                 | 14      | No root listing |
-| Amazon Kindle Paperwhite 12th Generation (2024)     | -       | Full support    |
-
+| Device                                          | Android | Notes           |
+|--------------------------------------------------|---------|-----------------|
+| Google Pixel 9 Pro XL                            | 15      | Full support    |
+| Samsung Galaxy S23 Ultra (SM-S918B)              | 14      | No root listing |
+| Amazon Kindle Paperwhite 12th Generation (2024)  | -       | Full support    |
 
 **Samsung quirk**: Samsung devices return `InvalidObjectHandle` when listing the root folder with handle 0.
 The library automatically detects this and falls back to recursive listing with filtering. This is transparent to users.
@@ -364,17 +362,17 @@ macOS, and Windows.
 ## Implementation notes
 
 - I used Opus 4.5 extensively for this implementation. I know it's controversial these days, but the bottom line to me
-is that the implementation WORKS, it has a bunch of integration tests which pass, and hey, I can use it to copy data
-to/from my phone and other phones and I can display async progress and I don't need to rely on C libraries. So no
-hate,
-please. If you dislike or distrust AI-gen code, use the alternatives listed above (if you can live with the libmtp
-dependency), handcraft your own Rust implementation, or fork this repo and add your human thing and use it.
-PRs are also welcome.
+  is that the implementation WORKS, it has a bunch of integration tests which pass, and hey, I can use it to copy data
+  to/from my phone and other phones and I can display async progress and I don't need to rely on C libraries. So no
+  hate,
+  please. If you dislike or distrust AI-gen code, use the alternatives listed above (if you can live with the libmtp
+  dependency), handcraft your own Rust implementation, or fork this repo and add your human thing and use it.
+  PRs are also welcome.
 - For the protocol spec, I tried to use
-usb.org's [Media Transfer Protocol v.1.1 Spec](https://www.usb.org/document-library/media-transfer-protocol-v11-spec-and-mtp-v11-adopters-agreement),
-but it was a pain to get AI agents to work from it, so I've converted it to Markdown. You can find it
+  usb.org's [Media Transfer Protocol v.1.1 Spec](https://www.usb.org/document-library/media-transfer-protocol-v11-spec-and-mtp-v11-adopters-agreement),
+  but it was a pain to get AI agents to work from it, so I've converted it to Markdown. You can find it
   here: https://github.com/vdavid/mtp-v1_1-spec-md
-I've also shared it back with the USB.org team, so they might link it on the official page.
+  I've also shared it back with the USB.org team, so they might link it on the official page.
 
 ## Contributing
 
