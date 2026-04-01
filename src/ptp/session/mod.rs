@@ -391,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn test_open_session() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1));
+        mock.queue_response(ok_response(0)); // OpenSession is session-less (tx_id=0)
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         assert_eq!(session.session_id(), SessionId(1));
@@ -401,16 +401,16 @@ mod tests {
     async fn test_open_session_already_open_recovers() {
         let (transport, mock) = mock_transport();
 
-        // First OpenSession returns SessionAlreadyOpen
+        // First OpenSession returns SessionAlreadyOpen (session-less, tx_id=0)
         mock.queue_response(response_with_params(
-            1,
+            0,
             ResponseCode::SessionAlreadyOpen,
             &[],
         ));
-        // CloseSession response (ignored, but we need to provide one)
-        mock.queue_response(ok_response(2));
-        // Second OpenSession (fresh session, tx_id starts at 1 again)
+        // CloseSession (tx_id=1, first counter value)
         mock.queue_response(ok_response(1));
+        // Second OpenSession on fresh session (session-less, tx_id=0)
+        mock.queue_response(ok_response(0));
 
         // Should succeed by closing and reopening
         let session = PtpSession::open(transport, 1).await.unwrap();
@@ -421,23 +421,22 @@ mod tests {
     async fn test_open_session_already_open_transaction_id_reset() {
         let (transport, mock) = mock_transport();
 
-        // First OpenSession returns SessionAlreadyOpen
+        // First OpenSession returns SessionAlreadyOpen (session-less, tx_id=0)
         mock.queue_response(response_with_params(
-            1,
+            0,
             ResponseCode::SessionAlreadyOpen,
             &[],
         ));
-        // CloseSession response
-        mock.queue_response(ok_response(2));
-        // Second OpenSession (fresh session, tx_id starts at 1 again)
+        // CloseSession uses tx_id=1 (first counter value, OpenSession didn't consume one)
         mock.queue_response(ok_response(1));
-        // Next operation should use tx_id = 2 (after the fresh OpenSession used 1)
-        mock.queue_response(ok_response(2));
+        // Second OpenSession on fresh session (session-less, tx_id=0)
+        mock.queue_response(ok_response(0));
+        // First operation on fresh session uses tx_id=1
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
 
-        // Perform an operation to verify transaction ID is properly reset
-        // The next operation should use tx_id = 2 (since the fresh OpenSession used 1)
+        // Verify the fresh session's counter starts at 1
         session.delete_object(ObjectHandle(1)).await.unwrap();
     }
 
@@ -445,16 +444,16 @@ mod tests {
     async fn test_open_session_already_open_close_error_ignored() {
         let (transport, mock) = mock_transport();
 
-        // First OpenSession returns SessionAlreadyOpen
+        // First OpenSession returns SessionAlreadyOpen (session-less, tx_id=0)
         mock.queue_response(response_with_params(
-            1,
+            0,
             ResponseCode::SessionAlreadyOpen,
             &[],
         ));
-        // CloseSession returns an error (should be ignored)
-        mock.queue_response(response_with_params(2, ResponseCode::GeneralError, &[]));
-        // Second OpenSession succeeds
-        mock.queue_response(ok_response(1));
+        // CloseSession returns an error (tx_id=1, should be ignored)
+        mock.queue_response(response_with_params(1, ResponseCode::GeneralError, &[]));
+        // Second OpenSession succeeds (session-less, tx_id=0)
+        mock.queue_response(ok_response(0));
 
         // Should succeed even if CloseSession fails
         let session = PtpSession::open(transport, 1).await.unwrap();
@@ -464,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn test_open_session_error() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(response_with_params(1, ResponseCode::GeneralError, &[]));
+        mock.queue_response(response_with_params(0, ResponseCode::GeneralError, &[]));
 
         let result = PtpSession::open(transport, 1).await;
         assert!(result.is_err());
@@ -473,13 +472,13 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_id_increment() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // First operation
-        mock.queue_response(ok_response(3)); // Second operation
+        mock.queue_response(ok_response(0)); // OpenSession (session-less, tx_id=0)
+        mock.queue_response(ok_response(1)); // First operation
+        mock.queue_response(ok_response(2)); // Second operation
 
         let session = PtpSession::open(transport, 1).await.unwrap();
 
-        // Execute two operations and verify transaction IDs increment
+        // First post-open operation uses tx_id=1, second uses tx_id=2
         session.delete_object(ObjectHandle(1)).await.unwrap();
         session.delete_object(ObjectHandle(2)).await.unwrap();
     }
@@ -487,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_id_mismatch() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession (session-less, tx_id=0)
         mock.queue_response(ok_response(999)); // Wrong transaction ID
 
         let session = PtpSession::open(transport, 1).await.unwrap();
@@ -499,8 +498,8 @@ mod tests {
     #[tokio::test]
     async fn test_close_session() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // CloseSession
+        mock.queue_response(ok_response(0)); // OpenSession (session-less, tx_id=0)
+        mock.queue_response(ok_response(1)); // CloseSession (tx_id=1)
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session.close().await.unwrap();
@@ -509,8 +508,8 @@ mod tests {
     #[tokio::test]
     async fn test_close_session_ignores_errors() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(response_with_params(2, ResponseCode::GeneralError, &[])); // CloseSession error
+        mock.queue_response(ok_response(0)); // OpenSession (session-less, tx_id=0)
+        mock.queue_response(response_with_params(1, ResponseCode::GeneralError, &[])); // CloseSession error (tx_id=1)
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         // Should succeed even if close fails
