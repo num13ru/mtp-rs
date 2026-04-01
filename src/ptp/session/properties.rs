@@ -182,16 +182,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_device_prop_desc() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Queue battery level prop desc
         let prop_desc_data = build_battery_prop_desc(75);
         mock.queue_response(data_container(
-            2,
+            1,
             OperationCode::GetDevicePropDesc,
             &prop_desc_data,
         ));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let desc = session
@@ -208,9 +208,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_device_prop_desc_not_supported() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
         mock.queue_response(response_with_params(
-            2,
+            1,
             ResponseCode::DevicePropNotSupported,
             &[],
         ));
@@ -232,16 +232,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_device_prop_value() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Queue battery level value (75%)
         let value_data = vec![75u8];
         mock.queue_response(data_container(
-            2,
+            1,
             OperationCode::GetDevicePropValue,
             &value_data,
         ));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let data = session
@@ -255,16 +255,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_device_prop_value_typed() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Queue ISO value (400 = 0x0190)
         let value_data = vec![0x90, 0x01]; // 400 in little-endian
         mock.queue_response(data_container(
-            2,
+            1,
             OperationCode::GetDevicePropValue,
             &value_data,
         ));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let value = session
@@ -281,8 +281,8 @@ mod tests {
     #[tokio::test]
     async fn test_set_device_prop_value() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // SetDevicePropValue
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // SetDevicePropValue
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let value = vec![0x90, 0x01]; // 400 in little-endian
@@ -295,8 +295,8 @@ mod tests {
     #[tokio::test]
     async fn test_set_device_prop_value_typed() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // SetDevicePropValue
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // SetDevicePropValue
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session
@@ -311,9 +311,9 @@ mod tests {
     #[tokio::test]
     async fn test_set_device_prop_value_invalid() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
         mock.queue_response(response_with_params(
-            2,
+            1,
             ResponseCode::InvalidDevicePropValue,
             &[],
         ));
@@ -335,8 +335,8 @@ mod tests {
     #[tokio::test]
     async fn test_reset_device_prop_value() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // ResetDevicePropValue
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // ResetDevicePropValue
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session

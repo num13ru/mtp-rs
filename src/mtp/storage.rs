@@ -640,12 +640,12 @@ mod tests {
     #[tokio::test]
     async fn stream_returns_objects_with_correct_counters() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
-        queue_handles(&mock, 2, &[10, 20, 30]);
-        queue_object_info(&mock, 3, "photo.jpg", 0);
-        queue_object_info(&mock, 4, "video.mp4", 0);
-        queue_object_info(&mock, 5, "notes.txt", 0);
+        queue_handles(&mock, 1, &[10, 20, 30]);
+        queue_object_info(&mock, 2, "photo.jpg", 0);
+        queue_object_info(&mock, 3, "video.mp4", 0);
+        queue_object_info(&mock, 4, "notes.txt", 0);
 
         let storage = mock_storage(transport, "").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
@@ -674,8 +674,8 @@ mod tests {
     #[tokio::test]
     async fn stream_empty_directory() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        queue_handles(&mock, 2, &[]);
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_handles(&mock, 1, &[]);
 
         let storage = mock_storage(transport, "").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
@@ -688,12 +688,12 @@ mod tests {
     async fn stream_filters_by_parent() {
         // Simulates Fuji quirk: device returns objects with wrong parent handles
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
-        queue_handles(&mock, 2, &[10, 20, 30]);
-        queue_object_info(&mock, 3, "root_file.jpg", 0); // parent=ROOT, included
-        queue_object_info(&mock, 4, "nested.jpg", 99); // parent=99, filtered out
-        queue_object_info(&mock, 5, "another_root.txt", 0); // parent=ROOT, included
+        queue_handles(&mock, 1, &[10, 20, 30]);
+        queue_object_info(&mock, 2, "root_file.jpg", 0); // parent=ROOT, included
+        queue_object_info(&mock, 3, "nested.jpg", 99); // parent=99, filtered out
+        queue_object_info(&mock, 4, "another_root.txt", 0); // parent=ROOT, included
 
         let storage = mock_storage(transport, "").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
@@ -715,12 +715,12 @@ mod tests {
     async fn stream_android_root_accepts_both_parents() {
         // Android quirk: root items may have parent 0 or 0xFFFFFFFF
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
-        queue_handles(&mock, 2, &[10, 20, 30]);
-        queue_object_info(&mock, 3, "dcim", 0); // parent=0, root
-        queue_object_info(&mock, 4, "download", 0xFFFFFFFF); // parent=ALL, also root on Android
-        queue_object_info(&mock, 5, "nested", 42); // not root
+        queue_handles(&mock, 1, &[10, 20, 30]);
+        queue_object_info(&mock, 2, "dcim", 0); // parent=0, root
+        queue_object_info(&mock, 3, "download", 0xFFFFFFFF); // parent=ALL, also root on Android
+        queue_object_info(&mock, 4, "nested", 42); // not root
 
         let storage = mock_storage(transport, "android.com").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
@@ -737,12 +737,12 @@ mod tests {
     #[tokio::test]
     async fn stream_subfolder_listing() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         let parent_handle = 42u32;
-        queue_handles(&mock, 2, &[100, 101]);
-        queue_object_info(&mock, 3, "IMG_001.jpg", parent_handle);
-        queue_object_info(&mock, 4, "IMG_002.jpg", parent_handle);
+        queue_handles(&mock, 1, &[100, 101]);
+        queue_object_info(&mock, 2, "IMG_001.jpg", parent_handle);
+        queue_object_info(&mock, 3, "IMG_002.jpg", parent_handle);
 
         let storage = mock_storage(transport, "").await;
         let mut listing = storage
@@ -761,12 +761,12 @@ mod tests {
     #[tokio::test]
     async fn stream_propagates_mid_listing_error() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
-        queue_handles(&mock, 2, &[10, 20]);
-        queue_object_info(&mock, 3, "good.jpg", 0);
+        queue_handles(&mock, 1, &[10, 20]);
+        queue_object_info(&mock, 2, "good.jpg", 0);
         // Handle 20: device returns error instead of object info
-        mock.queue_response(error_response(4, ResponseCode::InvalidObjectHandle));
+        mock.queue_response(error_response(3, ResponseCode::InvalidObjectHandle));
 
         let storage = mock_storage(transport, "").await;
         let mut listing = storage.list_objects_stream(None).await.unwrap();
@@ -785,10 +785,10 @@ mod tests {
         let (transport2, mock2) = mock_transport();
 
         for mock in [&mock1, &mock2] {
-            mock.queue_response(ok_response(1)); // OpenSession
-            queue_handles(mock, 2, &[10, 20]);
-            queue_object_info(mock, 3, "a.jpg", 0);
-            queue_object_info(mock, 4, "b.txt", 0);
+            mock.queue_response(ok_response(0)); // OpenSession
+            queue_handles(mock, 1, &[10, 20]);
+            queue_object_info(mock, 2, "a.jpg", 0);
+            queue_object_info(mock, 3, "b.txt", 0);
         }
 
         let storage1 = mock_storage(transport1, "").await;

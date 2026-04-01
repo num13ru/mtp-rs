@@ -412,16 +412,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_storage_ids() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // GetStorageIds data response
         let storage_ids_data = pack_u32_array(&[0x00010001, 0x00010002]);
         mock.queue_response(data_container(
-            2,
+            1,
             OperationCode::GetStorageIds,
             &storage_ids_data,
         ));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let ids = session.get_storage_ids().await.unwrap();
@@ -432,16 +432,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_object_handles() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // GetObjectHandles data response
         let handles_data = pack_u32_array(&[1, 2, 3]);
         mock.queue_response(data_container(
-            2,
+            1,
             OperationCode::GetObjectHandles,
             &handles_data,
         ));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let handles = session
@@ -458,12 +458,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_object() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // GetObject data response
         let object_data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
-        mock.queue_response(data_container(2, OperationCode::GetObject, &object_data));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(data_container(1, OperationCode::GetObject, &object_data));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let data = session.get_object(ObjectHandle(1)).await.unwrap();
@@ -474,8 +474,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_object() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // DeleteObject
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // DeleteObject
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session.delete_object(ObjectHandle(1)).await.unwrap();
@@ -484,8 +484,8 @@ mod tests {
     #[tokio::test]
     async fn test_copy_object() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(response_with_params(2, ResponseCode::Ok, &[100])); // CopyObject with new handle
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(response_with_params(1, ResponseCode::Ok, &[100])); // CopyObject with new handle
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let new_handle = session
@@ -503,7 +503,7 @@ mod tests {
         use crate::ptp::EventCode;
 
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Queue an ObjectAdded event (code 0x4002)
         mock.queue_interrupt(event_container(0x4002, [42, 0, 0]));
@@ -520,7 +520,7 @@ mod tests {
         use crate::ptp::EventCode;
 
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Queue a StoreRemoved event (code 0x4005)
         mock.queue_interrupt(event_container(0x4005, [0x00010001, 0, 0]));
@@ -537,7 +537,7 @@ mod tests {
         use crate::ptp::EventCode;
 
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Queue multiple events
         mock.queue_interrupt(event_container(0x4002, [1, 0, 0])); // ObjectAdded
@@ -564,16 +564,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_object_prop_value() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // GetObjectPropValue data response (property value is raw bytes)
         let prop_value = vec![0x05, 0x48, 0x00, 0x69, 0x00, 0x00, 0x00]; // Packed string "Hi"
         mock.queue_response(data_container(
-            2,
+            1,
             OperationCode::GetObjectPropValue,
             &prop_value,
         ));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(ok_response(1));
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let data = session
@@ -587,8 +587,8 @@ mod tests {
     #[tokio::test]
     async fn test_set_object_prop_value() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // SetObjectPropValue
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // SetObjectPropValue
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         let prop_value = pack_string("newfile.txt");
@@ -605,9 +605,9 @@ mod tests {
     #[tokio::test]
     async fn test_set_object_prop_value_not_supported() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
         mock.queue_response(response_with_params(
-            2,
+            1,
             ResponseCode::OperationNotSupported,
             &[],
         ));
@@ -634,8 +634,8 @@ mod tests {
     #[tokio::test]
     async fn test_rename_object() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // SetObjectPropValue (for rename)
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // SetObjectPropValue (for rename)
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session
@@ -647,9 +647,9 @@ mod tests {
     #[tokio::test]
     async fn test_rename_object_not_supported() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
         mock.queue_response(response_with_params(
-            2,
+            1,
             ResponseCode::OperationNotSupported,
             &[],
         ));
@@ -671,8 +671,8 @@ mod tests {
     #[tokio::test]
     async fn test_initiate_capture() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // InitiateCapture
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // InitiateCapture
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session
@@ -684,8 +684,8 @@ mod tests {
     #[tokio::test]
     async fn test_initiate_capture_with_format() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // InitiateCapture
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // InitiateCapture
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         session
@@ -697,9 +697,9 @@ mod tests {
     #[tokio::test]
     async fn test_initiate_capture_not_supported() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
         mock.queue_response(response_with_params(
-            2,
+            1,
             ResponseCode::OperationNotSupported,
             &[],
         ));

@@ -374,12 +374,12 @@ mod tests {
     #[tokio::test]
     async fn test_receive_stream_small_file() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // GetObject data response (small file fits in one container)
         let file_data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        mock.queue_response(data_container(2, OperationCode::GetObject, &file_data));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+        mock.queue_response(ok_response(1));
 
         let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
 
@@ -399,11 +399,11 @@ mod tests {
     #[tokio::test]
     async fn test_receive_stream_collect() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         let file_data = vec![1, 2, 3, 4, 5];
-        mock.queue_response(data_container(2, OperationCode::GetObject, &file_data));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+        mock.queue_response(ok_response(1));
 
         let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
 
@@ -416,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn test_receive_stream_error_response() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         // Return error response instead of data
         mock.queue_response(response_with_params(
@@ -441,8 +441,8 @@ mod tests {
         use futures::stream;
 
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // SendObject response
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // SendObject response
 
         let session = PtpSession::open(transport, 1).await.unwrap();
 
@@ -459,8 +459,8 @@ mod tests {
         use futures::stream;
 
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
-        mock.queue_response(ok_response(2)); // SendObject response
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // SendObject response
 
         let session = PtpSession::open(transport, 1).await.unwrap();
 
@@ -479,11 +479,11 @@ mod tests {
     #[tokio::test]
     async fn test_receive_stream_to_stream_conversion() {
         let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(1)); // OpenSession
+        mock.queue_response(ok_response(0)); // OpenSession
 
         let file_data = vec![1, 2, 3, 4, 5];
-        mock.queue_response(data_container(2, OperationCode::GetObject, &file_data));
-        mock.queue_response(ok_response(2));
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+        mock.queue_response(ok_response(1));
 
         let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
 
