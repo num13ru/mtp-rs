@@ -240,7 +240,7 @@ fn handle_get_object(state: &mut VirtualDeviceState, op_code: u16, tx_id: u32, p
         }
     };
 
-    match std::fs::read(&path) {
+    match std::fs::read(path) {
         Ok(data) => {
             state
                 .response_queue
@@ -279,7 +279,7 @@ fn handle_get_partial_object(
         }
     };
 
-    match std::fs::File::open(&path) {
+    match std::fs::File::open(path) {
         Ok(mut file) => {
             if offset > 0 && file.seek(SeekFrom::Start(offset)).is_err() {
                 state
@@ -689,7 +689,7 @@ fn handle_move_object(state: &mut VirtualDeviceState, tx_id: u32, params: &[u32]
         }
     };
 
-    let new_rel = dest_parent_rel.join(&filename);
+    let new_rel = dest_parent_rel.join(filename);
     let dest_path = dest_storage_state.config.backing_dir.join(&new_rel);
 
     if validate_path_within(&dest_storage_state.config.backing_dir, &dest_path).is_err() {
@@ -793,7 +793,7 @@ fn handle_copy_object(state: &mut VirtualDeviceState, tx_id: u32, params: &[u32]
         }
     };
 
-    let new_rel = dest_parent_rel.join(&filename);
+    let new_rel = dest_parent_rel.join(filename);
     let dest_path = dest_storage_state.config.backing_dir.join(&new_rel);
 
     if validate_path_within(&dest_storage_state.config.backing_dir, &dest_path).is_err() {
@@ -875,7 +875,7 @@ fn handle_get_object_prop_value(
         ObjectPropertyCode::ParentObject => crate::ptp::pack_u32(obj.parent.0).to_vec(),
         ObjectPropertyCode::ObjectSize => {
             let path = state.resolve_path(handle).unwrap();
-            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             crate::ptp::pack_u64(size).to_vec()
         }
         _ => {

@@ -192,7 +192,7 @@ pub(super) fn build_object_info(
     let storage = state.find_storage(obj.storage_id)?;
     let full_path = storage.config.backing_dir.join(&obj.rel_path);
 
-    let metadata = std::fs::metadata(&full_path).ok()?;
+    let metadata = std::fs::metadata(full_path).ok()?;
     let filename = obj
         .rel_path
         .file_name()
