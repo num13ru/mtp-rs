@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-04-01
+
+### Fixed
+
+- Send `OpenSession` with `transaction_id=0` (session-less) per PTP spec — fixes Kindle and other strict PTP devices rejecting the session ([#2](https://github.com/vdavid/mtp-rs/pull/2), thanks [@num13ru](https://github.com/num13ru))
+- Fix stale `next_event()` docs after timeout removal
+- Fix README indentation broken by PR #2
+
 ## [0.4.1] - 2026-03-24
 
 ### Fixed
