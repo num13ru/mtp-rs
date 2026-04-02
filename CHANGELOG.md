@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-02
+
+### Added
+
+- Filesystem watcher for virtual devices: when `watch_backing_dirs` is `true`, the virtual device detects files created or removed directly in backing directories (bypassing MTP) and emits `ObjectAdded`/`ObjectRemoved` events, matching real device behavior
+- `VirtualDeviceConfig::watch_backing_dirs` field to opt in/out of filesystem watching
+- `notify` v8 dependency (optional, gated behind `virtual-device` feature)
+
+### Changed
+
+- **Breaking:** MSRV raised from 1.79 to 1.85
+- Upgraded `notify` from v7 to v8 (drops unmaintained `instant` transitive dep)
+- Upgraded `thiserror` from v1 to v2 (faster proc-macro compilation, no API changes)
+- Unpinned `proptest` dev-dependency (was pinned to `=1.5.0` for MSRV 1.79)
+
 ## [0.5.1] - 2026-04-01
 
 ### Fixed

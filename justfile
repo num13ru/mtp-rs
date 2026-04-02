@@ -10,7 +10,7 @@
 #     test        - Run tests
 #     test-all    - Run tests with all features
 #     doc         - Build documentation
-#     msrv        - Check MSRV (1.79) compatibility
+#     msrv        - Check MSRV (1.85) compatibility
 #     audit       - Security audit (requires cargo-audit)
 #     deny        - License/dependency check (requires cargo-deny)
 #     udeps       - Find unused dependencies (requires nightly + cargo-udeps)
@@ -24,7 +24,7 @@
 #     clean       - Remove build artifacts
 #     install-tools - Install required development tools
 #
-# MSRV: 1.79
+# MSRV: 1.85
 
 set shell := ["bash", "-uc"]
 
@@ -71,14 +71,14 @@ doc:
     @cargo doc --no-deps --quiet
     @echo "[+] Docs built"
 
-# Check MSRV compatibility (requires rustup with 1.79 toolchain)
+# Check MSRV compatibility (requires rustup with 1.85 toolchain)
 msrv:
-    @echo "[*] Checking MSRV (1.79) compatibility..."
-    @if ! rustup run 1.79.0 rustc --version &> /dev/null; then \
-        echo "[!] Rust 1.79 not found. Install with: rustup toolchain install 1.79.0"; \
+    @echo "[*] Checking MSRV (1.85) compatibility..."
+    @if ! rustup run 1.85.0 rustc --version &> /dev/null; then \
+        echo "[!] Rust 1.85 not found. Install with: rustup toolchain install 1.85.0"; \
         exit 1; \
     fi
-    @RUSTFLAGS="-D warnings" cargo +1.79.0 check --all-features --quiet
+    @RUSTFLAGS="-D warnings" cargo +1.85.0 check --all-features --quiet
     @echo "[+] MSRV check passed"
 
 # Run security audit (requires cargo-audit)

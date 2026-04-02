@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/mtp-rs)](https://docs.rs/mtp-rs)
 [![CI](https://github.com/vdavid/mtp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/vdavid/mtp-rs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/mtp-rs)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.79-blue)](https://blog.rust-lang.org/2024/06/13/Rust-1.79.0.html)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 
 A pure-Rust, async MTP/PTP library.
 No C dependencies, consistently faster than libmtp (up to 4x for large transfers), and way more predictable.
