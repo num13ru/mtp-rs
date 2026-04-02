@@ -39,6 +39,9 @@ async-trait = "0.1"
 # Byte handling
 bytes = "1.5"
 
+# Filesystem watching for virtual device
+notify = { version = "7", optional = true }
+
 # For thiserror derive
 thiserror = "1.0"
 
@@ -54,4 +57,4 @@ tempfile = "3"
 
 [features]
 default = []
-virtual-device = []
+virtual-device = ["notify"]

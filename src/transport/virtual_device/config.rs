@@ -27,6 +27,7 @@ use std::time::Duration;
 ///     }],
 ///     supports_rename: true,
 ///     event_poll_interval: Duration::from_millis(50),
+///     watch_backing_dirs: true,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -46,6 +47,12 @@ pub struct VirtualDeviceConfig {
     /// Default: 50ms for production use. Use `Duration::ZERO` in tests
     /// to avoid slowing down the test suite.
     pub event_poll_interval: Duration,
+    /// Watch backing directories for out-of-band changes and emit MTP events.
+    /// When `true`, a background filesystem watcher detects files created or
+    /// removed directly in the backing directories (bypassing MTP) and queues
+    /// `ObjectAdded`/`ObjectRemoved` events. Set to `false` for tests that
+    /// don't need this (faster startup, no background threads).
+    pub watch_backing_dirs: bool,
 }
 
 /// Configuration for a single storage within a virtual device.

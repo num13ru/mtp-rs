@@ -437,6 +437,7 @@ impl MtpDeviceBuilder {
     ///         }],
     ///         supports_rename: true,
     ///         event_poll_interval: Duration::from_millis(50),
+    ///         watch_backing_dirs: true,
     ///     })
     ///     .await?;
     /// # Ok(())
@@ -539,6 +540,7 @@ mod tests {
             storages: vec![],
             supports_rename: false,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         };
 
         let result = MtpDevice::builder().open_virtual(config).await;

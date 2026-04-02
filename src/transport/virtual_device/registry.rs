@@ -112,6 +112,7 @@ mod tests {
             }],
             supports_rename: true,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         };
         (config, dir)
     }
@@ -212,6 +213,7 @@ mod tests {
             }],
             supports_rename: true,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         };
         let info = register_virtual_device(&config);
 
@@ -240,6 +242,7 @@ mod tests {
             }],
             supports_rename: true,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         };
         let info = register_virtual_device(&config);
 

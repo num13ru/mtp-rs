@@ -68,10 +68,18 @@ impl VirtualDeviceState {
             .storages
             .iter()
             .enumerate()
-            .map(|(i, sc)| VirtualStorageState {
-                config: sc.clone(),
-                // Storage IDs conventionally start at 0x00010001
-                storage_id: StorageId(0x0001_0001 + i as u32),
+            .map(|(i, sc)| {
+                // Canonicalize backing dirs so that all paths (from handlers, watcher,
+                // dedup tracker) use the same form. On macOS, /var → /private/var.
+                let mut resolved_config = sc.clone();
+                if let Ok(canonical) = sc.backing_dir.canonicalize() {
+                    resolved_config.backing_dir = canonical;
+                }
+                VirtualStorageState {
+                    config: resolved_config,
+                    // Storage IDs conventionally start at 0x00010001
+                    storage_id: StorageId(0x0001_0001 + i as u32),
+                }
             })
             .collect();
 

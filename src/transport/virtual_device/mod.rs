@@ -29,6 +29,7 @@
 //!         }],
 //!         supports_rename: true,
 //!         event_poll_interval: Duration::from_millis(50),
+//!         watch_backing_dirs: true,
 //!     })
 //!     .await?;
 //!
@@ -47,13 +48,14 @@ pub mod config;
 mod handlers;
 pub mod registry;
 mod state;
+mod watcher;
 
 use crate::ptp::{unpack_u16, unpack_u32};
 use crate::transport::Transport;
 use async_trait::async_trait;
 use config::VirtualDeviceConfig;
 use state::{PendingCommand, VirtualDeviceState};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// A transport that speaks MTP/PTP binary protocol against a local filesystem.
@@ -64,22 +66,38 @@ use std::time::Duration;
 /// The virtual device processes each operation (list files, read, write, delete, etc.)
 /// against the configured backing directories and queues binary response containers
 /// for the next `receive_bulk` call.
+///
+/// A background filesystem watcher detects out-of-band changes to the backing
+/// directories and queues corresponding MTP events. The watcher is stopped
+/// automatically when the transport is dropped.
 pub struct VirtualTransport {
-    state: Mutex<VirtualDeviceState>,
+    state: Arc<Mutex<VirtualDeviceState>>,
     /// How long `receive_interrupt` waits when no events are pending.
     event_poll_interval: Duration,
+    /// Filesystem watcher. Stops watching when dropped.
+    _watcher: Option<notify::RecommendedWatcher>,
 }
 
 impl VirtualTransport {
     /// Create a new virtual transport from a device configuration.
     ///
     /// The backing directories in each storage config should already exist.
+    /// When `config.watch_backing_dirs` is `true`, starts a background
+    /// filesystem watcher for detecting out-of-band changes.
     #[must_use]
     pub fn new(config: VirtualDeviceConfig) -> Self {
         let event_poll_interval = config.event_poll_interval;
+        let watch = config.watch_backing_dirs;
+        let state = Arc::new(Mutex::new(VirtualDeviceState::new(config)));
+        let watcher = if watch {
+            watcher::start_fs_watcher(&state)
+        } else {
+            None
+        };
         Self {
-            state: Mutex::new(VirtualDeviceState::new(config)),
+            state,
             event_poll_interval,
+            _watcher: watcher,
         }
     }
 }
@@ -204,6 +222,7 @@ mod tests {
             }],
             supports_rename: true,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         }
     }
 
@@ -220,6 +239,7 @@ mod tests {
             }],
             supports_rename: true,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         }
     }
 
@@ -240,6 +260,7 @@ mod tests {
                 .collect(),
             supports_rename: true,
             event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
         }
     }
 
@@ -652,6 +673,177 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("target/moveme.txt")).unwrap(),
             "move me"
+        );
+    }
+
+    /// Helper: poll for an event, retrying on Timeout up to the deadline.
+    async fn poll_event_with_retry(
+        device: &MtpDevice,
+        timeout_duration: std::time::Duration,
+    ) -> Option<crate::mtp::DeviceEvent> {
+        let deadline = tokio::time::Instant::now() + timeout_duration;
+        loop {
+            match device.next_event().await {
+                Ok(event) => return Some(event),
+                Err(crate::Error::Timeout) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fs_watcher_detects_file_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        // Canonicalize the backing dir to avoid macOS /var vs /private/var mismatches
+        let backing_dir = dir.path().canonicalize().unwrap();
+        let config = VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Virtual Phone".into(),
+            serial: "test-fswatch".into(),
+            storages: vec![VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024 * 1024 * 1024,
+                backing_dir: backing_dir.clone(),
+                read_only: false,
+            }],
+            supports_rename: true,
+            event_poll_interval: Duration::from_millis(50),
+            watch_backing_dirs: true,
+        };
+
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+
+        // Write a file directly to the backing dir (bypassing MTP)
+        std::fs::write(backing_dir.join("external.txt"), "hello from outside").unwrap();
+
+        // Poll for events — the watcher should detect the file creation.
+        let event = poll_event_with_retry(&device, Duration::from_secs(5)).await;
+        assert!(
+            event.is_some(),
+            "expected event from fs watcher, got nothing"
+        );
+        let event = event.unwrap();
+        assert!(
+            matches!(event, crate::mtp::DeviceEvent::ObjectAdded { .. }),
+            "expected ObjectAdded, got {:?}",
+            event
+        );
+    }
+
+    #[tokio::test]
+    async fn fs_watcher_detects_file_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let backing_dir = dir.path().canonicalize().unwrap();
+
+        let config = VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Virtual Phone".into(),
+            serial: "test-fswatch-rm".into(),
+            storages: vec![VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024 * 1024 * 1024,
+                backing_dir: backing_dir.clone(),
+                read_only: false,
+            }],
+            supports_rename: true,
+            event_poll_interval: Duration::from_millis(50),
+            watch_backing_dirs: true,
+        };
+
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+
+        // Create the file AFTER the watcher is running, so we get a clean event sequence
+        std::fs::write(backing_dir.join("will_be_removed.txt"), "bye").unwrap();
+
+        // Drain events until no more arrive (consume the ObjectAdded from creation)
+        while poll_event_with_retry(&device, Duration::from_millis(500))
+            .await
+            .is_some()
+        {}
+
+        // Now remove the file directly (bypassing MTP)
+        std::fs::remove_file(backing_dir.join("will_be_removed.txt")).unwrap();
+
+        // Collect all events and look for ObjectRemoved
+        let mut events = Vec::new();
+        while let Some(event) = poll_event_with_retry(&device, Duration::from_secs(5)).await {
+            events.push(event);
+            // Stop after we find what we need or have collected enough
+            if events.len() >= 10 {
+                break;
+            }
+            if events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. }))
+            {
+                break;
+            }
+        }
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. })),
+            "expected ObjectRemoved among events, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn fs_watcher_dedup_suppresses_mtp_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let backing_dir = dir.path().canonicalize().unwrap();
+        let config = VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Virtual Phone".into(),
+            serial: "test-fswatch-dedup".into(),
+            storages: vec![VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024 * 1024 * 1024,
+                backing_dir: backing_dir.clone(),
+                read_only: false,
+            }],
+            supports_rename: true,
+            event_poll_interval: Duration::from_millis(50),
+            watch_backing_dirs: true,
+        };
+
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        // Upload via MTP — should produce exactly the MTP-generated events
+        let info = crate::mtp::NewObjectInfo::file("dedup_test.txt", 5);
+        storages[0]
+            .upload(None, info, bytes_stream(b"hello"))
+            .await
+            .unwrap();
+
+        // Drain all events with a generous window for the watcher to fire.
+        // MTP upload produces 2 events (ObjectAdded + StorageInfoChanged).
+        // The watcher sees the file creation but finds the handle already exists
+        // in state.objects (inserted by the MTP handler under the mutex), so it
+        // skips the event — no duplicates.
+        let mut event_count = 0;
+        while poll_event_with_retry(&device, Duration::from_millis(500))
+            .await
+            .is_some()
+        {
+            event_count += 1;
+            if event_count > 10 {
+                break;
+            }
+        }
+
+        // We expect exactly 2 events from the MTP upload (ObjectAdded + StorageInfoChanged).
+        // The fs watcher should NOT produce additional duplicate events.
+        assert_eq!(
+            event_count, 2,
+            "expected exactly 2 MTP events, got {} (dedup may have failed)",
+            event_count
         );
     }
 }

@@ -244,9 +244,14 @@ let device = MtpDevice::builder()
         }],
         supports_rename: true,
         event_poll_interval: Duration::from_millis(50),
+        watch_backing_dirs: true,
     })
     .await?;
 ```
+
+When `watch_backing_dirs` is `true`, the virtual device watches its backing directories for external changes (files
+created or removed outside of MTP) and emits `ObjectAdded`/`ObjectRemoved` events, just like a real device would.
+Set it to `false` in tests that don't need this for faster startup.
 
 ### Discovery registry
 
