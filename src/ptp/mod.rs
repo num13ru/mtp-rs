@@ -25,13 +25,12 @@
 //!
 //! ## Example
 //!
-//! ```rust,ignore
-//! use mtp_rs::ptp::{PtpDevice, PtpSession};
-//! use mtp_rs::transport::NusbTransport;
+//! ```rust,no_run
+//! use mtp_rs::ptp::PtpDevice;
 //!
+//! # async fn example() -> Result<(), mtp_rs::Error> {
 //! // Open device and start a session
-//! let transport = NusbTransport::open_first().await?;
-//! let device = PtpDevice::new(transport);
+//! let device = PtpDevice::open_first().await?;
 //! let session = device.open_session().await?;
 //!
 //! // Get device info
@@ -40,6 +39,8 @@
 //!
 //! // List storage IDs
 //! let storage_ids = session.get_storage_ids().await?;
+//! # Ok(())
+//! # }
 //! ```
 
 mod codes;

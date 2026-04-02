@@ -11,7 +11,7 @@
 //!
 //! ## Quick start
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use mtp_rs::mtp::MtpDevice;
 //!
 //! # async fn example() -> Result<(), mtp_rs::Error> {

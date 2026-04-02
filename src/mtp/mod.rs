@@ -18,15 +18,18 @@
 //!
 //! ## Quick example
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use mtp_rs::mtp::MtpDevice;
 //!
+//! # async fn example() -> Result<(), mtp_rs::Error> {
 //! let device = MtpDevice::open_first().await?;
 //! for storage in device.storages().await? {
 //!     for obj in storage.list_objects(None).await? {
 //!         println!("{}", obj.filename);
 //!     }
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 mod device;

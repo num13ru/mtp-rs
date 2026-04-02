@@ -36,7 +36,7 @@ impl MtpDeviceInner {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use mtp_rs::mtp::MtpDevice;
 ///
 /// # async fn example() -> Result<(), mtp_rs::Error> {
@@ -178,9 +178,13 @@ impl MtpDevice {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::{MtpDevice, DeviceEvent};
+    /// use mtp_rs::Error;
     /// use tokio::time::{timeout, Duration};
     ///
+    /// # async fn example() -> Result<(), Error> {
+    /// # let device = MtpDevice::open_first().await?;
     /// loop {
     ///     match timeout(Duration::from_millis(200), device.next_event()).await {
     ///         Ok(Ok(event)) => {
@@ -202,6 +206,8 @@ impl MtpDevice {
     ///         Err(_elapsed) => continue,  // Timeout, check for shutdown etc.
     ///     }
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn next_event(&self) -> Result<DeviceEvent, Error> {
         match self.inner.session.poll_event().await? {
@@ -239,7 +245,9 @@ impl MtpDevice {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use mtp_rs::mtp::MtpDevice;
+///
 /// let devices = MtpDevice::list_devices()?;
 /// for dev in &devices {
 ///     println!("{} {} (serial: {:?})",
@@ -250,6 +258,7 @@ impl MtpDevice {
 ///
 /// // Save location_id to remember "the device on this port"
 /// // Save serial_number to remember "this specific phone"
+/// # Ok::<(), mtp_rs::Error>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct MtpDeviceInfo {

@@ -25,7 +25,13 @@ use super::device::MtpDeviceInner;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use mtp_rs::mtp::MtpDevice;
+///
+/// # async fn example() -> Result<(), mtp_rs::Error> {
+/// # let device = MtpDevice::open_first().await?;
+/// # let storages = device.storages().await?;
+/// # let storage = &storages[0];
 /// let mut listing = storage.list_objects_stream(None).await?;
 /// println!("Loading {} files...", listing.total());
 ///
@@ -33,6 +39,8 @@ use super::device::MtpDeviceInner;
 ///     let info = result?;
 ///     println!("[{}/{}] {}", listing.fetched(), listing.total(), info.filename);
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct ObjectListing {
     inner: Arc<MtpDeviceInner>,
@@ -169,7 +177,13 @@ impl Storage {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// # let device = MtpDevice::open_first().await?;
+    /// # let storages = device.storages().await?;
+    /// # let storage = &storages[0];
     /// let mut listing = storage.list_objects_stream(None).await?;
     /// println!("Found {} items", listing.total());
     ///
@@ -177,6 +191,8 @@ impl Storage {
     ///     let info = result?;
     ///     println!("[{}/{}] {}", listing.fetched(), listing.total(), info.filename);
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn list_objects_stream(
         &self,
@@ -368,7 +384,16 @@ impl Storage {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    /// use mtp_rs::ObjectHandle;
+    /// use tokio::io::AsyncWriteExt;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let device = MtpDevice::open_first().await?;
+    /// # let storages = device.storages().await?;
+    /// # let storage = &storages[0];
+    /// # let handle = ObjectHandle(1);
     /// let mut download = storage.download_stream(handle).await?;
     /// println!("Downloading {} bytes...", download.size());
     ///
@@ -378,6 +403,8 @@ impl Storage {
     ///     file.write_all(&bytes).await?;
     ///     println!("Progress: {:.1}%", download.progress() * 100.0);
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn download_stream(&self, handle: ObjectHandle) -> Result<FileDownload, Error> {
         let info = self.get_object_info(handle).await?;

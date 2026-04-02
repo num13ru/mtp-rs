@@ -47,15 +47,27 @@ impl Progress {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use mtp_rs::mtp::MtpDevice;
+/// use mtp_rs::ObjectHandle;
+/// use tokio::io::AsyncWriteExt;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # let device = MtpDevice::open_first().await?;
+/// # let storages = device.storages().await?;
+/// # let storage = &storages[0];
+/// # let handle = ObjectHandle(1);
 /// let mut download = storage.download_stream(handle).await?;
 /// println!("Downloading {} bytes...", download.size());
 ///
+/// # let mut file = tokio::fs::File::create("output.bin").await?;
 /// while let Some(chunk) = download.next_chunk().await {
 ///     let bytes = chunk?;
 ///     file.write_all(&bytes).await?;
 ///     println!("Progress: {:.1}%", download.progress() * 100.0);
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct FileDownload {
     size: u64,
@@ -116,11 +128,23 @@ impl FileDownload {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    /// use mtp_rs::ObjectHandle;
+    /// use std::ops::ControlFlow;
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// # let device = MtpDevice::open_first().await?;
+    /// # let storages = device.storages().await?;
+    /// # let storage = &storages[0];
+    /// # let handle = ObjectHandle(1);
+    /// let download = storage.download_stream(handle).await?;
     /// let data = download.collect_with_progress(|progress| {
-    ///     println!("{:.1}%", progress.percent().unwrap_or(0.0));
+    ///     println!("{:.1}%", progress.percent());
     ///     ControlFlow::Continue(())
     /// }).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn collect_with_progress<F>(mut self, mut on_progress: F) -> Result<Vec<u8>, Error>
     where

@@ -322,7 +322,13 @@ impl PtpSession {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use mtp_rs::ptp::{PtpDevice, EventCode};
+    /// use mtp_rs::{StorageId, ObjectFormatCode};
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// # let device = PtpDevice::open_first().await?;
+    /// # let session = device.open_session().await?;
     /// // Trigger capture
     /// session.initiate_capture(StorageId(0), ObjectFormatCode::Undefined).await?;
     ///
@@ -339,6 +345,8 @@ impl PtpSession {
     ///         _ => continue,
     ///     }
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn initiate_capture(
         &self,

@@ -30,9 +30,16 @@ impl PtpSession {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use mtp_rs::ptp::{PtpDevice, DevicePropertyCode};
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// # let device = PtpDevice::open_first().await?;
+    /// # let session = device.open_session().await?;
     /// let desc = session.get_device_prop_desc(DevicePropertyCode::BatteryLevel).await?;
     /// println!("Battery level: {:?}", desc.current_value);
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn get_device_prop_desc(
         &self,

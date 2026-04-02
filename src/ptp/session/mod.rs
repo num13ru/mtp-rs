@@ -32,11 +32,12 @@ pub(crate) const HEADER_SIZE: usize = 12;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use mtp_rs::ptp::PtpSession;
+/// ```rust,no_run
+/// use mtp_rs::ptp::PtpDevice;
 ///
-/// // Open a session with session ID 1
-/// let session = PtpSession::open(transport, 1).await?;
+/// # async fn example() -> Result<(), mtp_rs::Error> {
+/// let device = PtpDevice::open_first().await?;
+/// let session = device.open_session().await?;
 ///
 /// // Get device info
 /// let device_info = session.get_device_info().await?;
@@ -46,6 +47,8 @@ pub(crate) const HEADER_SIZE: usize = 12;
 ///
 /// // Close the session when done
 /// session.close().await?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct PtpSession {
     /// The transport layer for USB communication.
