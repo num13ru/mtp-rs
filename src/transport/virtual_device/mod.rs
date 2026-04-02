@@ -823,27 +823,30 @@ mod tests {
             .unwrap();
 
         // Drain all events with a generous window for the watcher to fire.
-        // MTP upload produces 2 events (ObjectAdded + StorageInfoChanged).
+        // MTP upload produces 1 ObjectAdded + 1 StorageInfoChanged.
         // The watcher sees the file creation but finds the handle already exists
         // in state.objects (inserted by the MTP handler under the mutex), so it
-        // skips the event — no duplicates.
-        let mut event_count = 0;
-        while poll_event_with_retry(&device, Duration::from_millis(500))
-            .await
-            .is_some()
-        {
-            event_count += 1;
-            if event_count > 10 {
+        // skips the event — no duplicate ObjectAdded.
+        // We count ObjectAdded specifically because some platforms (Linux inotify)
+        // may generate additional filesystem events (StorageInfoChanged etc.).
+        let mut object_added_count = 0;
+        let mut total_events = 0;
+        while let Some(event) = poll_event_with_retry(&device, Duration::from_millis(500)).await {
+            if matches!(event, crate::mtp::DeviceEvent::ObjectAdded { .. }) {
+                object_added_count += 1;
+            }
+            total_events += 1;
+            if total_events > 10 {
                 break;
             }
         }
 
-        // We expect exactly 2 events from the MTP upload (ObjectAdded + StorageInfoChanged).
-        // The fs watcher should NOT produce additional duplicate events.
+        // Exactly 1 ObjectAdded from the MTP handler. If the watcher's dedup
+        // failed, we'd see 2.
         assert_eq!(
-            event_count, 2,
-            "expected exactly 2 MTP events, got {} (dedup may have failed)",
-            event_count
+            object_added_count, 1,
+            "expected exactly 1 ObjectAdded event, got {} (dedup may have failed)",
+            object_added_count
         );
     }
 }
