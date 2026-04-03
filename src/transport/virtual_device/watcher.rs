@@ -82,7 +82,7 @@ fn handle_notify_event(
     storage_map: &StorageMap,
     event: notify::Event,
 ) {
-    // Only handle create and remove events.
+    // Only handle create, remove, and rename events.
     let is_create = matches!(
         event.kind,
         EventKind::Create(_)
@@ -97,14 +97,33 @@ fn handle_notify_event(
                 notify::event::RenameMode::From
             ))
     );
+    // macOS FSEvents can't distinguish rename source from target, so it reports
+    // RenameMode::Any. We determine the direction by checking if the path exists.
+    let is_rename_any = matches!(
+        event.kind,
+        EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::Any
+        ))
+    );
 
-    if !is_create && !is_remove {
+    if !is_create && !is_remove && !is_rename_any {
         return;
     }
 
     for path in &event.paths {
         // Canonicalize for reliable comparison (ignore errors for removed paths).
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        // For RenameMode::Any, determine direction from whether the path exists.
+        let (is_create, _is_remove) = if is_rename_any {
+            if path.exists() {
+                (true, false)
+            } else {
+                (false, true)
+            }
+        } else {
+            (is_create, is_remove)
+        };
 
         // Find which storage this path belongs to.
         let (storage_id, backing_dir) = match find_storage_for_path(&canonical, storage_map) {

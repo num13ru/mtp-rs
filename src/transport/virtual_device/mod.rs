@@ -734,6 +734,145 @@ mod tests {
         );
     }
 
+    /// Helper: create a virtual device with a pre-existing subdirectory and
+    /// return (device, backing_dir, tempdir-guard).
+    async fn virtual_device_with_subdirectory(
+        serial: &str,
+    ) -> (MtpDevice, std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let backing_dir = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(backing_dir.join("Music")).unwrap();
+
+        let config = VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Virtual Phone".into(),
+            serial: serial.into(),
+            storages: vec![VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024 * 1024 * 1024,
+                backing_dir: backing_dir.clone(),
+                read_only: false,
+            }],
+            supports_rename: true,
+            event_poll_interval: Duration::from_millis(50),
+            watch_backing_dirs: true,
+        };
+
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+
+        // Drain any startup events (macOS FSEvents may report the watched dir).
+        while poll_event_with_retry(&device, Duration::from_millis(500))
+            .await
+            .is_some()
+        {}
+
+        (device, backing_dir, dir)
+    }
+
+    #[tokio::test]
+    async fn fs_watcher_detects_file_creation_in_subdirectory() {
+        let (device, backing_dir, _dir) =
+            virtual_device_with_subdirectory("test-fswatch-subdir-create").await;
+
+        std::fs::write(backing_dir.join("Music/song.mp3"), "fake mp3 data").unwrap();
+
+        let event = poll_event_with_retry(&device, Duration::from_secs(5)).await;
+        assert!(
+            event.is_some(),
+            "expected event from fs watcher for file in subdirectory, got nothing"
+        );
+        assert!(
+            matches!(
+                event.unwrap(),
+                crate::mtp::DeviceEvent::ObjectAdded { .. }
+            ),
+            "expected ObjectAdded"
+        );
+    }
+
+    #[tokio::test]
+    async fn fs_watcher_detects_file_rename_in_subdirectory() {
+        let (device, backing_dir, _dir) =
+            virtual_device_with_subdirectory("test-fswatch-subdir-rename").await;
+
+        // Create a file and drain its events.
+        std::fs::write(backing_dir.join("Music/song.mp3"), "fake mp3 data").unwrap();
+        while poll_event_with_retry(&device, Duration::from_secs(5))
+            .await
+            .is_some()
+        {}
+
+        // Rename the file within the subdirectory.
+        std::fs::rename(
+            backing_dir.join("Music/song.mp3"),
+            backing_dir.join("Music/track.mp3"),
+        )
+        .unwrap();
+
+        // A rename should produce an ObjectRemoved (old name) and ObjectAdded (new name).
+        let mut events = Vec::new();
+        while let Some(event) = poll_event_with_retry(&device, Duration::from_secs(5)).await {
+            events.push(event);
+            let has_removed = events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. }));
+            let has_added = events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectAdded { .. }));
+            if has_removed && has_added {
+                break;
+            }
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. })),
+            "expected ObjectRemoved for rename source, got {:?}",
+            events
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectAdded { .. })),
+            "expected ObjectAdded for rename target, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn fs_watcher_detects_file_removal_in_subdirectory() {
+        let (device, backing_dir, _dir) =
+            virtual_device_with_subdirectory("test-fswatch-subdir-remove").await;
+
+        // Create a file and drain its events.
+        std::fs::write(backing_dir.join("Music/song.mp3"), "fake mp3 data").unwrap();
+        while poll_event_with_retry(&device, Duration::from_secs(5))
+            .await
+            .is_some()
+        {}
+
+        // Delete the file.
+        std::fs::remove_file(backing_dir.join("Music/song.mp3")).unwrap();
+
+        let mut events = Vec::new();
+        while let Some(event) = poll_event_with_retry(&device, Duration::from_secs(5)).await {
+            events.push(event);
+            if events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. }))
+            {
+                break;
+            }
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. })),
+            "expected ObjectRemoved for file in subdirectory, got {:?}",
+            events
+        );
+    }
+
     #[tokio::test]
     async fn fs_watcher_detects_file_removal() {
         let dir = tempfile::tempdir().unwrap();
