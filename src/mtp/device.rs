@@ -56,6 +56,7 @@ impl MtpDeviceInner {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct MtpDevice {
     inner: Arc<MtpDeviceInner>,
 }
@@ -165,10 +166,20 @@ impl MtpDevice {
     /// Receive the next event from the device.
     ///
     /// This method awaits **indefinitely** on the USB interrupt endpoint until an
-    /// event arrives or the device disconnects. If you hold a shared lock on the
-    /// device while calling this, all other operations will be blocked until an event
-    /// comes in. Always wrap this in `tokio::time::timeout` (or equivalent) to avoid
-    /// starving other operations.
+    /// event arrives or the device disconnects. Always wrap this in
+    /// `tokio::time::timeout` (or equivalent) so you can check for shutdown.
+    ///
+    /// # Concurrency
+    ///
+    /// Event reading uses the USB interrupt endpoint, which is independent from the
+    /// bulk endpoints used by file operations (`list_objects`, `get_object`, etc.).
+    /// It is safe to call `next_event()` concurrently with other `MtpDevice` methods.
+    ///
+    /// If you wrap `MtpDevice` in a shared lock (for example, `Arc<Mutex<MtpDevice>>`),
+    /// do **not** hold that lock while awaiting `next_event()` — it will block all file
+    /// operations for the duration of the wait. Instead, clone the `MtpDevice` (it is
+    /// cheaply cloneable via `Arc` internally) and call `next_event()` on the clone
+    /// without holding the lock.
     ///
     /// # Returns
     ///
