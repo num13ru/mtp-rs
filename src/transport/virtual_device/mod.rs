@@ -76,9 +76,6 @@ pub struct VirtualTransport {
     event_poll_interval: Duration,
     /// Filesystem watcher. Stops watching when dropped.
     _watcher: Option<notify::RecommendedWatcher>,
-    /// Pending filesystem events buffered by the watcher callback.
-    /// Processed in `receive_interrupt` under the state mutex for reliable dedup.
-    pending_fs_events: Option<Arc<Mutex<Vec<watcher::PendingFsEvent>>>>,
 }
 
 impl VirtualTransport {
@@ -92,19 +89,15 @@ impl VirtualTransport {
         let event_poll_interval = config.event_poll_interval;
         let watch = config.watch_backing_dirs;
         let state = Arc::new(Mutex::new(VirtualDeviceState::new(config)));
-        let (watcher, pending) = if watch {
-            match watcher::start_fs_watcher(&state) {
-                Some((w, p)) => (Some(w), Some(p)),
-                None => (None, None),
-            }
+        let watcher = if watch {
+            watcher::start_fs_watcher(&state)
         } else {
-            (None, None)
+            None
         };
         Self {
             state,
             event_poll_interval,
             _watcher: watcher,
-            pending_fs_events: pending,
         }
     }
 }
@@ -196,14 +189,9 @@ impl Transport for VirtualTransport {
     }
 
     async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error> {
-        // Process any pending filesystem events, then check the event queue.
-        // Both happen under the state mutex, on the caller's thread, so
-        // dedup against MTP-initiated changes is deterministic.
+        // Check for events (drop lock before any await)
         {
             let mut state = self.state.lock().unwrap();
-            if let Some(pending) = &self.pending_fs_events {
-                watcher::process_pending_fs_events(&mut state, pending);
-            }
             if let Some(event) = state.event_queue.pop_front() {
                 return Ok(event);
             }
@@ -854,7 +842,7 @@ mod tests {
         }
 
         // Exactly 1 ObjectAdded from the MTP handler. The watcher's dedup
-        // (with a short delay before checking state) suppresses duplicates.
+        // suppresses duplicates.
         assert_eq!(
             object_added_count, 1,
             "expected exactly 1 ObjectAdded event, got {} (dedup may have failed)",
