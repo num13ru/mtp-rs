@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix flaky `fs_watcher_dedup` test on Linux: assert on `ObjectAdded` count instead of total event count, since inotify may generate additional filesystem events
+- Fix flaky `fs_watcher_dedup` test on macOS: assert on `ObjectAdded` count instead of total event count, since extra `StorageInfoChanged` events may be generated
 
 ## [0.6.0] - 2026-04-02
 
