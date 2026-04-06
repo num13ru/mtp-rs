@@ -782,10 +782,7 @@ mod tests {
             "expected event from fs watcher for file in subdirectory, got nothing"
         );
         assert!(
-            matches!(
-                event.unwrap(),
-                crate::mtp::DeviceEvent::ObjectAdded { .. }
-            ),
+            matches!(event.unwrap(), crate::mtp::DeviceEvent::ObjectAdded { .. }),
             "expected ObjectAdded"
         );
     }
