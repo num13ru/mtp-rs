@@ -31,6 +31,7 @@ env:
 permissions:
   checks: write
   contents: read
+  issues: write
 
 jobs:
   # =============================================================================
@@ -53,6 +54,9 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # derivative is unmaintained but only used transitively by libmtp-rs
+          # in the benchmarks workspace member — not a security issue
+          ignore: RUSTSEC-2024-0388
 
   # =============================================================================
   # License Check Job
