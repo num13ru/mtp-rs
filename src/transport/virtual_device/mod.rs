@@ -1037,7 +1037,7 @@ mod tests {
         let _sub_items = storages[0].list_objects(Some(photos.handle)).await.unwrap();
 
         // Drain any events from listing.
-        while let Ok(_) = device.next_event().await {}
+        while device.next_event().await.is_ok() {}
 
         // --- Externally modify the backing dir (bypassing MTP) ---
         // Delete existing.txt
