@@ -61,4 +61,8 @@ pub use mtp::{
 #[cfg(feature = "virtual-device")]
 pub use transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
 #[cfg(feature = "virtual-device")]
-pub use transport::virtual_device::registry::{register_virtual_device, unregister_virtual_device};
+pub use transport::virtual_device::registry::{
+    register_virtual_device, rescan_virtual_device, unregister_virtual_device,
+};
+#[cfg(feature = "virtual-device")]
+pub use transport::virtual_device::RescanSummary;

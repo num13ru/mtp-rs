@@ -54,6 +54,7 @@ use crate::ptp::{unpack_u16, unpack_u32};
 use crate::transport::Transport;
 use async_trait::async_trait;
 use config::VirtualDeviceConfig;
+pub use state::RescanSummary;
 use state::{PendingCommand, VirtualDeviceState};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -74,6 +75,8 @@ pub struct VirtualTransport {
     state: Arc<Mutex<VirtualDeviceState>>,
     /// How long `receive_interrupt` waits when no events are pending.
     event_poll_interval: Duration,
+    /// Serial number, used to unregister from the active-states registry on drop.
+    serial: String,
     /// Filesystem watcher. Stops watching when dropped.
     _watcher: Option<notify::RecommendedWatcher>,
 }
@@ -88,7 +91,12 @@ impl VirtualTransport {
     pub fn new(config: VirtualDeviceConfig) -> Self {
         let event_poll_interval = config.event_poll_interval;
         let watch = config.watch_backing_dirs;
+        let serial = config.serial.clone();
         let state = Arc::new(Mutex::new(VirtualDeviceState::new(config)));
+
+        // Register the state so `rescan_virtual_device()` can find it.
+        registry::register_active_state(serial.clone(), Arc::clone(&state));
+
         let watcher = if watch {
             watcher::start_fs_watcher(&state)
         } else {
@@ -97,8 +105,15 @@ impl VirtualTransport {
         Self {
             state,
             event_poll_interval,
+            serial,
             _watcher: watcher,
         }
+    }
+}
+
+impl Drop for VirtualTransport {
+    fn drop(&mut self) {
+        registry::unregister_active_state(&self.serial);
     }
 }
 
@@ -984,5 +999,136 @@ mod tests {
             "expected exactly 1 ObjectAdded event, got {} (dedup may have failed)",
             object_added_count
         );
+    }
+
+    fn test_config_with_serial(dir: &std::path::Path, serial: &str) -> VirtualDeviceConfig {
+        VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Virtual Phone".into(),
+            serial: serial.into(),
+            storages: vec![VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024 * 1024 * 1024,
+                backing_dir: dir.to_path_buf(),
+                read_only: false,
+            }],
+            supports_rename: true,
+            event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn rescan_detects_external_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create initial files before opening the device.
+        std::fs::write(dir.path().join("existing.txt"), "hello").unwrap();
+        std::fs::create_dir(dir.path().join("Photos")).unwrap();
+        std::fs::write(dir.path().join("Photos/pic.jpg"), "jpeg data").unwrap();
+
+        let config = test_config_with_serial(dir.path(), "rescan-test-001");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        // List all objects to populate the in-memory tree.
+        let root_items = storages[0].list_objects(None).await.unwrap();
+        assert_eq!(root_items.len(), 2); // existing.txt + Photos
+        let photos = root_items.iter().find(|i| i.filename == "Photos").unwrap();
+        let _sub_items = storages[0].list_objects(Some(photos.handle)).await.unwrap();
+
+        // Drain any events from listing.
+        while let Ok(_) = device.next_event().await {}
+
+        // --- Externally modify the backing dir (bypassing MTP) ---
+        // Delete existing.txt
+        std::fs::remove_file(dir.path().join("existing.txt")).unwrap();
+        // Create a new file
+        std::fs::write(dir.path().join("new_file.txt"), "I'm new").unwrap();
+        // Delete the file inside Photos
+        std::fs::remove_file(dir.path().join("Photos/pic.jpg")).unwrap();
+
+        // Rescan via the public API.
+        let summary = crate::rescan_virtual_device("rescan-test-001").unwrap();
+        assert_eq!(
+            summary.removed, 2,
+            "should remove existing.txt and Photos/pic.jpg"
+        );
+        assert_eq!(summary.added, 1, "should add new_file.txt");
+
+        // Verify the object tree now matches the filesystem.
+        let root_items = storages[0].list_objects(None).await.unwrap();
+        let names: Vec<&str> = root_items.iter().map(|i| i.filename.as_str()).collect();
+        assert!(
+            names.contains(&"new_file.txt"),
+            "new_file.txt should appear: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Photos"),
+            "Photos dir still exists: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"existing.txt"),
+            "existing.txt should be gone: {:?}",
+            names
+        );
+
+        // Verify Photos subdirectory is now empty.
+        let photos = root_items.iter().find(|i| i.filename == "Photos").unwrap();
+        let sub_items = storages[0].list_objects(Some(photos.handle)).await.unwrap();
+        assert!(
+            sub_items.is_empty(),
+            "Photos should be empty after pic.jpg was removed"
+        );
+
+        // Verify events were queued (ObjectRemoved, ObjectAdded, StorageInfoChanged).
+        let mut event_types = Vec::new();
+        loop {
+            match device.next_event().await {
+                Ok(e) => event_types.push(e),
+                Err(crate::Error::Timeout) => break,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            event_types
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectAdded { .. })),
+            "expected ObjectAdded event from rescan"
+        );
+        assert!(
+            event_types
+                .iter()
+                .any(|e| matches!(e, crate::mtp::DeviceEvent::ObjectRemoved { .. })),
+            "expected ObjectRemoved event from rescan"
+        );
+    }
+
+    #[test]
+    fn rescan_nonexistent_serial_returns_none() {
+        assert!(
+            crate::transport::virtual_device::registry::rescan_virtual_device("no-such-device")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn rescan_no_changes_returns_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("stable.txt"), "unchanged").unwrap();
+
+        let config = test_config_with_serial(dir.path(), "rescan-test-002");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        // Populate the object tree.
+        let _ = storages[0].list_objects(None).await.unwrap();
+
+        let summary = crate::rescan_virtual_device("rescan-test-002").unwrap();
+        assert_eq!(summary.added, 0);
+        assert_eq!(summary.removed, 0);
+
+        drop(device);
     }
 }

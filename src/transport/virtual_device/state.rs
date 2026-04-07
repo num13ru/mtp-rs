@@ -1,8 +1,9 @@
 //! Internal state for the virtual MTP device.
 
+use super::builders::build_event;
 use super::config::{VirtualDeviceConfig, VirtualStorageConfig};
-use crate::ptp::{ObjectHandle, StorageId};
-use std::collections::{HashMap, VecDeque};
+use crate::ptp::{EventCode, ObjectHandle, StorageId};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 /// Per-storage state.
@@ -220,4 +221,142 @@ impl VirtualDeviceState {
             .map(|s| s.config.read_only)
             .unwrap_or(false)
     }
+
+    /// Force a full rescan of all backing directories, syncing the in-memory
+    /// object tree with the actual filesystem state.
+    ///
+    /// This diffs the current `objects` map against the filesystem:
+    /// - **Stale entries** (objects whose `rel_path` no longer exists on disk) are removed.
+    /// - **New entries** (files on disk not tracked in `objects`) are added.
+    ///
+    /// Appropriate `ObjectAdded`, `ObjectRemoved`, and `StorageInfoChanged`
+    /// events are queued for each change so MTP clients can pick them up
+    /// via `receive_interrupt()`.
+    ///
+    /// Use this when you've manipulated the backing directories directly
+    /// (for example, resetting test fixtures) and need the virtual device to
+    /// reflect the changes immediately, without waiting for the filesystem
+    /// watcher's latency.
+    pub fn rescan_backing_dirs(&mut self) -> RescanSummary {
+        let mut added = 0u32;
+        let mut removed = 0u32;
+        let mut changed_storages = HashSet::new();
+
+        // Phase 1: Remove stale entries (objects whose files no longer exist on disk).
+        let stale_handles: Vec<(u32, StorageId)> = self
+            .objects
+            .iter()
+            .filter_map(|(&handle, obj)| {
+                let storage = self
+                    .storages
+                    .iter()
+                    .find(|s| s.storage_id == obj.storage_id)?;
+                let full_path = storage.config.backing_dir.join(&obj.rel_path);
+                if !full_path.exists() {
+                    Some((handle, obj.storage_id))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, storage_id) in stale_handles {
+            self.objects.remove(&handle);
+            self.event_queue
+                .push_back(build_event(EventCode::ObjectRemoved, &[handle]));
+            changed_storages.insert(storage_id);
+            removed += 1;
+        }
+
+        // Phase 2: Add new entries by scanning all storages recursively.
+        // Collect storage info upfront to avoid borrow conflicts.
+        let storage_info: Vec<(StorageId, PathBuf)> = self
+            .storages
+            .iter()
+            .map(|s| (s.storage_id, s.config.backing_dir.clone()))
+            .collect();
+
+        for (storage_id, backing_dir) in &storage_info {
+            let storage_added =
+                self.rescan_dir(*storage_id, backing_dir, backing_dir, ObjectHandle::ROOT);
+            added += storage_added;
+            if storage_added > 0 {
+                changed_storages.insert(*storage_id);
+            }
+        }
+
+        // Phase 3: Queue StorageInfoChanged for each affected storage.
+        for storage_id in &changed_storages {
+            self.event_queue
+                .push_back(build_event(EventCode::StorageInfoChanged, &[storage_id.0]));
+        }
+
+        RescanSummary { added, removed }
+    }
+
+    /// Recursively scan a directory and add any entries not already tracked.
+    /// Returns the number of newly added objects.
+    fn rescan_dir(
+        &mut self,
+        storage_id: StorageId,
+        backing_dir: &std::path::Path,
+        dir_path: &std::path::Path,
+        parent: ObjectHandle,
+    ) -> u32 {
+        let entries = match std::fs::read_dir(dir_path) {
+            Ok(e) => e,
+            Err(_) => return 0,
+        };
+
+        let mut added = 0u32;
+
+        for entry in entries.flatten() {
+            let full_path = entry.path();
+            let rel_path = match full_path.strip_prefix(backing_dir) {
+                Ok(r) => r.to_path_buf(),
+                Err(_) => continue,
+            };
+
+            // Check if already tracked.
+            let existing = self
+                .objects
+                .iter()
+                .find(|(_, obj)| obj.storage_id == storage_id && obj.rel_path == rel_path)
+                .map(|(&h, _)| ObjectHandle(h));
+
+            let handle = if let Some(h) = existing {
+                h
+            } else {
+                let h = self.alloc_handle();
+                self.objects.insert(
+                    h.0,
+                    VirtualObject {
+                        rel_path: rel_path.clone(),
+                        storage_id,
+                        parent,
+                    },
+                );
+                self.event_queue
+                    .push_back(build_event(EventCode::ObjectAdded, &[h.0]));
+                added += 1;
+                h
+            };
+
+            // Recurse into directories.
+            if full_path.is_dir() {
+                added += self.rescan_dir(storage_id, backing_dir, &full_path, handle);
+            }
+        }
+
+        added
+    }
+}
+
+/// Summary of changes made by a rescan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RescanSummary {
+    /// Number of new objects added to the object tree.
+    pub added: u32,
+    /// Number of stale objects removed from the object tree.
+    pub removed: u32,
 }

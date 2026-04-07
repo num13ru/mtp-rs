@@ -4,8 +4,9 @@
 //! can be opened via `open_by_location()` or `open_by_serial()`.
 
 use super::config::VirtualDeviceConfig;
+use super::state::{RescanSummary, VirtualDeviceState};
 use crate::mtp::MtpDeviceInfo;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Base for synthetic location IDs (high range, won't collide with real USB).
 const VIRTUAL_LOCATION_BASE: u64 = 0xFFFF_0000_0000_0000;
@@ -90,6 +91,74 @@ pub(crate) fn find_virtual_config_by_serial(serial: &str) -> Option<VirtualDevic
         .iter()
         .find(|r| r.info.serial_number.as_deref() == Some(serial))
         .map(|r| r.config.clone())
+}
+
+// --- Active device state registry ---
+//
+// When a VirtualTransport is created, it registers its shared state here so
+// that `rescan_virtual_device()` can look it up by serial number. Entries are
+// removed when the transport is dropped.
+
+/// An entry in the active-states registry: (serial, shared state).
+type ActiveEntry = (String, Arc<Mutex<VirtualDeviceState>>);
+
+/// Access the global active-states registry.
+fn active_states() -> &'static Mutex<Vec<ActiveEntry>> {
+    static ACTIVE: OnceLock<Mutex<Vec<ActiveEntry>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register an active virtual device's state (called by `VirtualTransport::new`).
+pub(super) fn register_active_state(serial: String, state: Arc<Mutex<VirtualDeviceState>>) {
+    let mut active = active_states().lock().unwrap();
+    active.push((serial, state));
+}
+
+/// Unregister an active virtual device's state (called when `VirtualTransport` is dropped).
+pub(super) fn unregister_active_state(serial: &str) {
+    let mut active = active_states().lock().unwrap();
+    if let Some(pos) = active.iter().position(|(s, _)| s == serial) {
+        active.remove(pos);
+    }
+}
+
+/// Force a rescan of a virtual device's backing directories, identified by
+/// serial number.
+///
+/// This diffs the in-memory object tree against the actual filesystem and
+/// queues `ObjectAdded`/`ObjectRemoved`/`StorageInfoChanged` events for any
+/// differences found.
+///
+/// Returns `Some(summary)` with the number of added/removed objects, or
+/// `None` if no active virtual device with that serial exists.
+///
+/// # When to use
+///
+/// Call this after manipulating test fixture files directly on disk (outside
+/// of MTP) when you need the virtual device to reflect those changes
+/// immediately. This avoids waiting for the filesystem watcher's latency
+/// (200-500ms on macOS) and handles rapid delete+recreate sequences that
+/// the watcher can miss.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mtp_rs::rescan_virtual_device;
+///
+/// // After manipulating files in the backing directory...
+/// if let Some(summary) = rescan_virtual_device("my-device-serial") {
+///     println!("Rescan: {} added, {} removed", summary.added, summary.removed);
+/// }
+/// ```
+pub fn rescan_virtual_device(serial: &str) -> Option<RescanSummary> {
+    let active = active_states().lock().unwrap();
+    let state_arc = active
+        .iter()
+        .find(|(s, _)| s == serial)
+        .map(|(_, state)| Arc::clone(state))?;
+    drop(active); // Release the registry lock before acquiring the state lock.
+    let mut state = state_arc.lock().unwrap();
+    Some(state.rescan_backing_dirs())
 }
 
 #[cfg(test)]
