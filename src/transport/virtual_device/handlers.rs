@@ -724,10 +724,24 @@ fn handle_move_object(state: &mut VirtualDeviceState, tx_id: u32, params: &[u32]
     }
 
     // Update object's storage and path
+    let src_storage = obj.storage_id;
     if let Some(obj) = state.objects.get_mut(&handle.0) {
         obj.rel_path = new_rel;
         obj.storage_id = dest_storage;
         obj.parent = dest_parent;
+    }
+
+    state
+        .event_queue
+        .push_back(build_event(EventCode::ObjectInfoChanged, &[handle.0]));
+    state
+        .event_queue
+        .push_back(build_event(EventCode::StorageInfoChanged, &[src_storage.0]));
+    if dest_storage != src_storage {
+        state.event_queue.push_back(build_event(
+            EventCode::StorageInfoChanged,
+            &[dest_storage.0],
+        ));
     }
 
     state

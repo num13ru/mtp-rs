@@ -689,6 +689,25 @@ mod tests {
             std::fs::read_to_string(dir.path().join("target/moveme.txt")).unwrap(),
             "move me"
         );
+
+        // Should emit ObjectInfoChanged + StorageInfoChanged events
+        use tokio::time::{timeout, Duration};
+        let event = timeout(Duration::from_millis(100), device.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            event,
+            crate::mtp::DeviceEvent::ObjectInfoChanged { .. }
+        ));
+        let event = timeout(Duration::from_millis(100), device.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            event,
+            crate::mtp::DeviceEvent::StorageInfoChanged { .. }
+        ));
     }
 
     /// Helper: poll for an event, retrying on Timeout up to the deadline.
