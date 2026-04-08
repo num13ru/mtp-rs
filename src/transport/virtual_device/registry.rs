@@ -122,6 +122,57 @@ pub(super) fn unregister_active_state(serial: &str) {
     }
 }
 
+/// RAII guard that resumes the filesystem watcher when dropped.
+///
+/// Created by [`pause_watcher`]. While this guard is alive, all filesystem
+/// events for the device are silently dropped.
+pub struct WatcherGuard {
+    state: Arc<Mutex<VirtualDeviceState>>,
+}
+
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.watcher_paused = false;
+        }
+    }
+}
+
+/// Pause the filesystem watcher for a virtual device, returning a guard that
+/// resumes it on drop.
+///
+/// While paused, filesystem events are silently dropped. This prevents stale
+/// OS-level events from corrupting the object tree when files in the backing
+/// directory are deleted and recreated externally (outside of MTP). Without
+/// pausing, delayed deletion events can arrive after a rescan has already
+/// re-added the objects, incorrectly removing them.
+///
+/// Returns `None` if no active virtual device with that serial exists.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mtp_rs::{pause_watcher, rescan_virtual_device};
+///
+/// {
+///     let _guard = pause_watcher("my-device-serial").unwrap();
+///
+///     // ... delete and recreate files in the backing directory ...
+///
+///     rescan_virtual_device("my-device-serial");
+/// } // watcher resumes here when `_guard` is dropped
+/// ```
+pub fn pause_watcher(serial: &str) -> Option<WatcherGuard> {
+    let active = active_states().lock().unwrap();
+    let state_arc = active
+        .iter()
+        .find(|(s, _)| s == serial)
+        .map(|(_, state)| Arc::clone(state))?;
+    drop(active);
+    state_arc.lock().unwrap().watcher_paused = true;
+    Some(WatcherGuard { state: state_arc })
+}
+
 /// Force a rescan of a virtual device's backing directories, identified by
 /// serial number.
 ///
@@ -134,11 +185,11 @@ pub(super) fn unregister_active_state(serial: &str) {
 ///
 /// # When to use
 ///
-/// Call this after manipulating test fixture files directly on disk (outside
-/// of MTP) when you need the virtual device to reflect those changes
-/// immediately. This avoids waiting for the filesystem watcher's latency
-/// (200-500ms on macOS) and handles rapid delete+recreate sequences that
-/// the watcher can miss.
+/// Call this after manipulating files in the backing directory directly on
+/// disk (outside of MTP) when you need the virtual device to reflect those
+/// changes immediately. This avoids waiting for the filesystem watcher's
+/// latency (200–500ms on macOS). For delete+recreate sequences, pair with
+/// [`pause_watcher`] to prevent stale events from corrupting state.
 ///
 /// # Example
 ///

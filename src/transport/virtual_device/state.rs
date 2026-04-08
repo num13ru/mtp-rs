@@ -60,6 +60,10 @@ pub(super) struct VirtualDeviceState {
     pub pending_command: Option<PendingCommand>,
     pub event_queue: VecDeque<Vec<u8>>,
     pub response_queue: VecDeque<Vec<u8>>,
+    /// When true, the filesystem watcher silently drops all events. Managed
+    /// by [`WatcherGuard`](super::registry::WatcherGuard) via
+    /// [`pause_watcher`](super::registry::pause_watcher).
+    pub(super) watcher_paused: bool,
 }
 
 impl VirtualDeviceState {
@@ -94,6 +98,7 @@ impl VirtualDeviceState {
             pending_command: None,
             event_queue: VecDeque::new(),
             response_queue: VecDeque::new(),
+            watcher_paused: false,
         }
     }
 

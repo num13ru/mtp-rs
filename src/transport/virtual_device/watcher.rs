@@ -17,6 +17,15 @@
 //!   finds no handle for the path → nothing to emit.
 //!
 //! No TTL, no extra tracking structure — the state itself is the dedup mechanism.
+//!
+//! ## Pause/resume
+//!
+//! The watcher can be paused via [`pause_watcher`](super::registry::pause_watcher),
+//! which returns a [`WatcherGuard`](super::registry::WatcherGuard) that resumes
+//! on drop. While paused, all filesystem events are silently dropped. This is
+//! needed when external code deletes and recreates files in the backing directory:
+//! without pausing, the watcher may process stale deletion events after a rescan
+//! has already added the new objects, incorrectly removing them.
 
 use super::builders::build_event;
 use super::state::VirtualDeviceState;
@@ -144,6 +153,10 @@ fn handle_notify_event(
         }
 
         let mut state = state.lock().unwrap();
+
+        if state.watcher_paused {
+            continue;
+        }
 
         if is_create {
             // Check if a handle already exists for this path. If so, the MTP handler

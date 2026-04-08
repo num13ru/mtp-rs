@@ -19,7 +19,7 @@ MtpDevice (unchanged)
 - `state.rs` — `VirtualDeviceState`, `VirtualObject`, `PendingCommand`, handle management
 - `builders.rs` — binary payload builders (DeviceInfo, StorageInfo, ObjectInfo, containers)
 - `handlers.rs` — protocol operation handlers dispatched by opcode
-- `registry.rs` — global virtual device registry for discovery integration (`list_devices`, `open_by_location`, `open_by_serial`) + active-state registry for `rescan_virtual_device()`
+- `registry.rs` — global virtual device registry for discovery integration (`list_devices`, `open_by_location`, `open_by_serial`) + active-state registry for `rescan_virtual_device()` and `pause_watcher()`/`WatcherGuard`
 - `watcher.rs` — filesystem watcher for detecting out-of-band changes to backing directories
 - `mod.rs` — `VirtualTransport` struct + `Transport` impl + tests
 
@@ -35,6 +35,7 @@ MtpDevice (unchanged)
 - **Dedup for watcher events**: Uses state-based dedup rather than TTL tracking. MTP handlers modify the filesystem while holding the `state` mutex and insert/remove handles before releasing the lock. The watcher callback also acquires `state` before processing events. For creates, the watcher skips events when a handle already exists for the path. For removes, the watcher skips when no handle is found (already removed by the MTP handler). No extra tracking structure or timing assumptions needed. Events for the backing directory itself (empty relative path) are skipped — macOS FSEvents reports the watched directory as "created" on startup.
 - **Canonical backing dirs**: `VirtualDeviceState::new()` canonicalizes all backing dirs at startup. This ensures consistent path comparison between handlers and the watcher callback (important on macOS where `/var` → `/private/var`).
 - **Rescan via active-state registry**: `VirtualTransport::new()` registers its `Arc<Mutex<VirtualDeviceState>>` in a second global registry keyed by serial number. `rescan_virtual_device(serial)` looks up the state and calls `rescan_backing_dirs()`, which diffs the in-memory object tree against the filesystem, removing stale entries and adding new ones. The transport unregisters on drop. This avoids the fs watcher's latency (200-500ms on macOS FSEvents) and handles rapid delete+recreate sequences that the watcher can miss.
+- **Watcher pause/resume**: `pause_watcher(serial)` returns a `WatcherGuard` (RAII) that sets `watcher_paused = true` on the device state. While paused, the watcher callback drops all events. The guard resumes on drop (poison-safe via `lock().ok()`). This prevents a race condition where external code deletes and recreates files in the backing directory: without pausing, the OS can deliver stale deletion events after a rescan has already re-added the objects.
 
 ## Gotchas
 
