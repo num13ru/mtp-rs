@@ -10,13 +10,13 @@ mod streaming;
 pub use streaming::{receive_stream_to_stream, ReceiveStream};
 
 use crate::ptp::{
-    container_type, unpack_u32, CommandContainer, ContainerType, DataContainer, OperationCode,
-    ResponseCode, ResponseContainer, SessionId, TransactionId,
+    container_type, pack_u16, pack_u32, unpack_u32, CommandContainer, ContainerType, DataContainer,
+    OperationCode, ResponseCode, ResponseContainer, SessionId, TransactionId,
 };
 use crate::transport::Transport;
 use crate::Error;
 use futures::lock::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// Container header size in bytes.
@@ -60,6 +60,10 @@ pub struct PtpSession {
     /// Mutex to serialize operations (MTP only allows one operation at a time).
     /// Wrapped in Arc so it can be shared with ReceiveStream.
     pub(crate) operation_lock: Arc<Mutex<()>>,
+    /// Whether to send data container headers separately from payloads.
+    /// Some devices require the 12-byte PTP header and data payload to arrive
+    /// as separate USB bulk transfers.
+    split_header_data: AtomicBool,
 }
 
 impl PtpSession {
@@ -70,7 +74,24 @@ impl PtpSession {
             session_id,
             transaction_id: AtomicU32::new(TransactionId::FIRST.0),
             operation_lock: Arc::new(Mutex::new(())),
+            split_header_data: AtomicBool::new(false),
         }
+    }
+
+    /// Enable or disable split header/data mode for sending data containers.
+    ///
+    /// When enabled, the 12-byte PTP container header and payload are sent as
+    /// separate USB bulk transfers in [`execute_with_send`](Self::execute_with_send).
+    /// Required by some devices that don't handle a combined header+data
+    /// bulk transfer.
+    pub fn set_split_header_data(&self, split: bool) {
+        self.split_header_data.store(split, Ordering::Relaxed);
+    }
+
+    /// Whether split header/data mode is currently enabled.
+    #[must_use]
+    pub fn is_split_header_data(&self) -> bool {
+        self.split_header_data.load(Ordering::Relaxed)
     }
 
     /// Open a new session with the device.
@@ -177,8 +198,12 @@ impl PtpSession {
     // Core operation execution
     // =========================================================================
 
-    /// Execute an operation without data phase.
-    pub(crate) async fn execute(
+    /// Execute a PTP operation without a data phase.
+    ///
+    /// Exposed for vendor-specific or otherwise non-standard PTP operations
+    /// that aren't covered by the high-level API. Access via
+    /// [`MtpDevice::session()`](crate::mtp::MtpDevice::session).
+    pub async fn execute(
         &self,
         operation: OperationCode,
         params: &[u32],
@@ -210,8 +235,32 @@ impl PtpSession {
         Ok(response)
     }
 
-    /// Execute operation with data receive phase.
-    pub(crate) async fn execute_with_receive(
+    /// Execute a PTP operation with a data receive phase.
+    ///
+    /// Returns the response container along with the received data payload.
+    /// Useful for vendor-specific operations that return data.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    /// use mtp_rs::ptp::{OperationCode, ResponseCode};
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// let device = MtpDevice::open_first().await?;
+    ///
+    /// // Execute a vendor-specific operation (0x9501)
+    /// let (response, data) = device.session()
+    ///     .execute_with_receive(OperationCode::Unknown(0x9501), &[])
+    ///     .await?;
+    ///
+    /// if response.code == ResponseCode::Ok {
+    ///     println!("received {} bytes", data.len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_with_receive(
         &self,
         operation: OperationCode,
         params: &[u32],
@@ -281,8 +330,15 @@ impl PtpSession {
         }
     }
 
-    /// Execute operation with data send phase.
-    pub(crate) async fn execute_with_send(
+    /// Execute a PTP operation with a data send phase.
+    ///
+    /// Sends the provided payload to the device as part of the operation.
+    /// Useful for vendor-specific operations that require sending data.
+    ///
+    /// When [`is_split_header_data`](Self::is_split_header_data) is enabled, the
+    /// 12-byte PTP container header and the payload are sent as separate USB
+    /// bulk transfers.
+    pub async fn execute_with_send(
         &self,
         operation: OperationCode,
         params: &[u32],
@@ -300,13 +356,28 @@ impl PtpSession {
         };
         self.transport.send_bulk(&cmd.to_bytes()).await?;
 
-        // Send data
-        let data_container = DataContainer {
-            code: operation,
-            transaction_id: tx_id,
-            payload: data.to_vec(),
-        };
-        self.transport.send_bulk(&data_container.to_bytes()).await?;
+        // Send data container
+        if self.split_header_data.load(Ordering::Relaxed) {
+            // Split mode: send the 12-byte header and the payload as two
+            // separate USB bulk transfers. Required by some devices.
+            let total_len = (HEADER_SIZE + data.len()) as u32;
+            let mut header = Vec::with_capacity(HEADER_SIZE);
+            header.extend_from_slice(&pack_u32(total_len));
+            header.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
+            header.extend_from_slice(&pack_u16(operation.into()));
+            header.extend_from_slice(&pack_u32(tx_id));
+            self.transport.send_bulk(&header).await?;
+            if !data.is_empty() {
+                self.transport.send_bulk(data).await?;
+            }
+        } else {
+            let data_container = DataContainer {
+                code: operation,
+                transaction_id: tx_id,
+                payload: data.to_vec(),
+            };
+            self.transport.send_bulk(&data_container.to_bytes()).await?;
+        }
 
         // Receive response
         let response_bytes = self.transport.receive_bulk(512).await?;
@@ -496,6 +567,215 @@ mod tests {
         let result = session.delete_object(ObjectHandle(1)).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_combined_default() {
+        // By default, command + combined data container = 2 bulk sends.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // operation response
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        assert!(!session.is_split_header_data());
+
+        let payload = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        session
+            .execute_with_send(OperationCode::SendObject, &[], &payload)
+            .await
+            .unwrap();
+
+        // 1 send for OpenSession command + 2 here = 3 total.
+        let sends = mock.get_sends();
+        assert_eq!(sends.len(), 3);
+
+        // Third send is the combined data container: 12-byte header + 4-byte payload.
+        let data = &sends[2];
+        assert_eq!(data.len(), HEADER_SIZE + payload.len());
+        assert_eq!(unpack_u32(&data[0..4]).unwrap() as usize, data.len());
+        assert_eq!(&data[HEADER_SIZE..], payload.as_slice());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_split_header_data() {
+        // With split mode enabled, header and payload are sent as 2 separate transfers.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // operation response
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        session.set_split_header_data(true);
+        assert!(session.is_split_header_data());
+
+        let payload = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        session
+            .execute_with_send(OperationCode::SendObject, &[], &payload)
+            .await
+            .unwrap();
+
+        // OpenSession (1) + command (1) + header (1) + payload (1) = 4 sends.
+        let sends = mock.get_sends();
+        assert_eq!(sends.len(), 4);
+
+        // Third send is the bare 12-byte header reporting the full container length.
+        let header = &sends[2];
+        assert_eq!(header.len(), HEADER_SIZE);
+        assert_eq!(
+            unpack_u32(&header[0..4]).unwrap() as usize,
+            HEADER_SIZE + payload.len()
+        );
+
+        // Fourth send is the raw payload, no extra framing.
+        assert_eq!(sends[3], payload);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_split_empty_payload() {
+        // With split mode and an empty payload, only the header is sent (no second transfer).
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0));
+        mock.queue_response(ok_response(1));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        session.set_split_header_data(true);
+
+        session
+            .execute_with_send(OperationCode::SendObject, &[], &[])
+            .await
+            .unwrap();
+
+        // OpenSession + command + header only = 3.
+        let sends = mock.get_sends();
+        assert_eq!(sends.len(), 3);
+        assert_eq!(sends[2].len(), HEADER_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_stream_combined_default() {
+        // By default, command + combined data container = 2 bulk sends, regardless
+        // of how many chunks the input stream is split into.
+        use bytes::Bytes;
+        use futures::stream;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // operation response
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        assert!(!session.is_split_header_data());
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(&[0xAA, 0xBB])),
+            Ok(Bytes::from_static(&[0xCC, 0xDD])),
+        ];
+        let total_size = 4u64;
+
+        session
+            .execute_with_send_stream(
+                OperationCode::SendObject,
+                &[],
+                total_size,
+                stream::iter(chunks),
+            )
+            .await
+            .unwrap();
+
+        // OpenSession (1) + command (1) + combined data container (1) = 3 sends.
+        let sends = mock.get_sends();
+        assert_eq!(sends.len(), 3);
+
+        // Third send is the combined data container.
+        let data = &sends[2];
+        assert_eq!(data.len(), HEADER_SIZE + total_size as usize);
+        assert_eq!(unpack_u32(&data[0..4]).unwrap() as usize, data.len());
+        assert_eq!(&data[HEADER_SIZE..], &[0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_stream_split_header_data() {
+        // With split mode enabled, the header is sent first as its own bulk
+        // transfer and then each non-empty chunk is sent as its own transfer.
+        use bytes::Bytes;
+        use futures::stream;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // operation response
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        session.set_split_header_data(true);
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(&[0xAA, 0xBB])),
+            Ok(Bytes::from_static(&[0xCC, 0xDD])),
+        ];
+        let total_size = 4u64;
+
+        session
+            .execute_with_send_stream(
+                OperationCode::SendObject,
+                &[],
+                total_size,
+                stream::iter(chunks),
+            )
+            .await
+            .unwrap();
+
+        // OpenSession (1) + command (1) + header (1) + chunk1 (1) + chunk2 (1) = 5.
+        let sends = mock.get_sends();
+        assert_eq!(sends.len(), 5);
+
+        // Third send is the bare 12-byte header reporting the full container length.
+        let header = &sends[2];
+        assert_eq!(header.len(), HEADER_SIZE);
+        assert_eq!(
+            unpack_u32(&header[0..4]).unwrap() as usize,
+            HEADER_SIZE + total_size as usize
+        );
+
+        // Fourth and fifth sends are the raw chunks, no extra framing.
+        assert_eq!(sends[3], &[0xAA, 0xBB]);
+        assert_eq!(sends[4], &[0xCC, 0xDD]);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_stream_split_skips_empty_chunks() {
+        // Empty chunks in split mode must not be sent as zero-length bulk
+        // transfers (which some devices treat as end-of-transfer markers).
+        use bytes::Bytes;
+        use futures::stream;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0));
+        mock.queue_response(ok_response(1));
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+        session.set_split_header_data(true);
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(&[0xAA])),
+            Ok(Bytes::new()), // empty — should be skipped
+            Ok(Bytes::from_static(&[0xBB])),
+        ];
+        let total_size = 2u64;
+
+        session
+            .execute_with_send_stream(
+                OperationCode::SendObject,
+                &[],
+                total_size,
+                stream::iter(chunks),
+            )
+            .await
+            .unwrap();
+
+        // OpenSession + command + header + chunk1 + chunk3 = 5 (the empty
+        // chunk in the middle must not produce a send).
+        let sends = mock.get_sends();
+        assert_eq!(sends.len(), 5);
+        assert_eq!(sends[2].len(), HEADER_SIZE);
+        assert_eq!(sends[3], &[0xAA]);
+        assert_eq!(sends[4], &[0xBB]);
     }
 
     #[tokio::test]

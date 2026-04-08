@@ -62,10 +62,21 @@ impl NusbTransport {
 
     /// List all available MTP devices with location IDs.
     pub fn list_mtp_devices() -> Result<Vec<UsbDeviceInfo>, crate::Error> {
+        Self::list_mtp_devices_with_known(&[])
+    }
+
+    /// List all available MTP devices, including additional devices identified
+    /// by the given VID/PID pairs.
+    ///
+    /// Devices matching the provided VID/PID pairs are included in the results
+    /// even if their USB descriptors don't match standard MTP class codes.
+    pub fn list_mtp_devices_with_known(
+        known: &[(u16, u16)],
+    ) -> Result<Vec<UsbDeviceInfo>, crate::Error> {
         let devices = nusb::list_devices()
             .wait()
             .map_err(crate::Error::Usb)?
-            .filter(Self::is_mtp_device)
+            .filter(|dev| Self::is_mtp_device(dev, known))
             .map(|dev| {
                 let location_id = location_id_from_topology(&dev);
                 UsbDeviceInfo {
@@ -83,7 +94,20 @@ impl NusbTransport {
     }
 
     /// Check if a device info represents an MTP device.
-    fn is_mtp_device(dev: &nusb::DeviceInfo) -> bool {
+    ///
+    /// A device is considered MTP if it matches standard MTP class codes, has
+    /// an interface with the MTP endpoint layout, or matches one of the
+    /// caller-provided VID/PID pairs (used for devices with non-standard USB
+    /// descriptors that still speak MTP).
+    fn is_mtp_device(dev: &nusb::DeviceInfo, known: &[(u16, u16)]) -> bool {
+        // Fast path: caller-supplied known devices that may use non-standard descriptors.
+        if known
+            .iter()
+            .any(|&(v, p)| v == dev.vendor_id() && p == dev.product_id())
+        {
+            return true;
+        }
+
         // Check device class/subclass/protocol at device level.
         if Self::is_mtp_class(dev.class(), dev.subclass(), dev.protocol()) {
             return true;
@@ -159,12 +183,32 @@ impl NusbTransport {
         bulk_in && bulk_out && interrupt_in
     }
 
+    /// Whether a `claim_interface` failure looks like the OS hasn't published
+    /// the interface yet (rather than a permanent error).
+    ///
+    /// On macOS, vendor-class or class-0 devices that IOKit doesn't
+    /// auto-configure end up with no `IOUSBHostInterface` services published,
+    /// even when the device's configuration descriptor reports otherwise.
+    /// The resulting `claim_interface` error is `NotFound` — there's nothing
+    /// for nusb to claim — and the fix is to issue `SetConfiguration(1)`,
+    /// which makes IOKit publish the interface objects.
+    fn is_interface_unpublished(e: &nusb::Error) -> bool {
+        matches!(e.kind(), nusb::ErrorKind::NotFound)
+    }
+
     /// Open a specific device and claim the MTP interface.
     pub async fn open(device: nusb::Device) -> Result<Self, crate::Error> {
         Self::open_with_timeout(device, Self::DEFAULT_TIMEOUT).await
     }
 
     /// Open with custom bulk transfer timeout.
+    ///
+    /// The interface scan first looks for a strict MTP-class interface; if none
+    /// is found, it falls back to any interface with the MTP endpoint layout
+    /// (bulk IN + bulk OUT + interrupt IN). This relaxed fallback supports
+    /// legacy devices that report a non-standard interface class — the caller
+    /// has already hand-picked the device, so the scan can be permissive at
+    /// this point.
     pub async fn open_with_timeout(
         device: nusb::Device,
         timeout: Duration,
@@ -179,34 +223,45 @@ impl NusbTransport {
         let mut bulk_out_addr = None;
         let mut interrupt_in_addr = None;
 
-        for interface in config.interfaces() {
-            // Get the first alternate setting for this interface
-            let Some(alt_setting) = interface.alt_settings().next() else {
-                continue;
-            };
-
-            // Check if this interface is MTP (standard or vendor-specific with MTP endpoints)
-            if Self::is_mtp_interface(&alt_setting) {
-                mtp_interface_number = Some(interface.interface_number());
-
-                // Find endpoints
-                for endpoint in alt_setting.endpoints() {
-                    match (endpoint.direction(), endpoint.transfer_type()) {
-                        (Direction::Out, TransferType::Bulk) => {
-                            bulk_out_addr = Some(endpoint.address());
+        // Two-pass scan: prefer a strictly-matching MTP interface, but fall
+        // back to any interface with the MTP endpoint layout. The caller has
+        // already hand-picked the device, so a permissive fallback is safe and
+        // supports legacy devices that report a non-standard interface class.
+        let pick = |strict: bool| {
+            for interface in config.interfaces() {
+                let Some(alt_setting) = interface.alt_settings().next() else {
+                    continue;
+                };
+                let matches = if strict {
+                    Self::is_mtp_interface(&alt_setting)
+                } else {
+                    Self::has_mtp_endpoint_layout(&alt_setting)
+                };
+                if matches {
+                    let mut bin = None;
+                    let mut bout = None;
+                    let mut iin = None;
+                    for endpoint in alt_setting.endpoints() {
+                        match (endpoint.direction(), endpoint.transfer_type()) {
+                            (Direction::Out, TransferType::Bulk) => bout = Some(endpoint.address()),
+                            (Direction::In, TransferType::Bulk) => bin = Some(endpoint.address()),
+                            (Direction::In, TransferType::Interrupt) => {
+                                iin = Some(endpoint.address())
+                            }
+                            _ => {}
                         }
-                        (Direction::In, TransferType::Bulk) => {
-                            bulk_in_addr = Some(endpoint.address());
-                        }
-                        (Direction::In, TransferType::Interrupt) => {
-                            interrupt_in_addr = Some(endpoint.address());
-                        }
-                        _ => {}
                     }
+                    return Some((interface.interface_number(), bin, bout, iin));
                 }
-
-                break;
             }
+            None
+        };
+
+        if let Some((n, bin, bout, iin)) = pick(true).or_else(|| pick(false)) {
+            mtp_interface_number = Some(n);
+            bulk_in_addr = bin;
+            bulk_out_addr = bout;
+            interrupt_in_addr = iin;
         }
 
         let interface_number = mtp_interface_number
@@ -220,10 +275,25 @@ impl NusbTransport {
             .ok_or_else(|| crate::Error::invalid_data("No interrupt IN endpoint found"))?;
 
         // Claim the interface
-        let interface = device
-            .claim_interface(interface_number)
-            .wait()
-            .map_err(crate::Error::Usb)?;
+        //
+        // macOS: IOKit doesn't publish interface services for vendor-class /
+        // class-0 devices with no matching driver. Force-set configuration 1
+        // so IOKit publishes them, then retry.
+        let interface = match device.claim_interface(interface_number).wait() {
+            Ok(iface) => iface,
+            #[cfg(target_os = "macos")]
+            Err(e) if Self::is_interface_unpublished(&e) => {
+                device
+                    .set_configuration(1)
+                    .wait()
+                    .map_err(crate::Error::Usb)?;
+                device
+                    .claim_interface(interface_number)
+                    .wait()
+                    .map_err(crate::Error::Usb)?
+            }
+            Err(e) => return Err(crate::Error::Usb(e)),
+        };
 
         // Open endpoints
         let bulk_in = interface
