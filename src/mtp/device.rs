@@ -89,7 +89,33 @@ impl MtpDevice {
 
     /// List all available MTP devices without opening them.
     pub fn list_devices() -> Result<Vec<MtpDeviceInfo>, Error> {
-        let devices = NusbTransport::list_mtp_devices()?;
+        Self::list_devices_with_known(&[])
+    }
+
+    /// List all available MTP devices, including additional devices identified
+    /// by the given VID/PID pairs.
+    ///
+    /// Devices matching the provided VID/PID pairs are included in the results
+    /// even if their USB descriptors don't match standard MTP class codes. This
+    /// is useful for legacy or otherwise unusual devices with non-standard USB
+    /// descriptors that still speak MTP.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    ///
+    /// let devices = MtpDevice::list_devices_with_known(&[
+    ///     (0x045E, 0x0710), // custom VID/PID
+    /// ])?;
+    /// for d in &devices {
+    ///     println!("{:04x}:{:04x} {}", d.vendor_id, d.product_id,
+    ///              d.product.as_deref().unwrap_or("unknown"));
+    /// }
+    /// # Ok::<(), mtp_rs::Error>(())
+    /// ```
+    pub fn list_devices_with_known(known: &[(u16, u16)]) -> Result<Vec<MtpDeviceInfo>, Error> {
+        let devices = NusbTransport::list_mtp_devices_with_known(known)?;
         #[allow(unused_mut)]
         let mut result: Vec<MtpDeviceInfo> = devices
             .into_iter()
@@ -113,6 +139,19 @@ impl MtpDevice {
     #[must_use]
     pub fn device_info(&self) -> &DeviceInfo {
         &self.inner.device_info
+    }
+
+    /// Get a reference to the underlying [`PtpSession`].
+    ///
+    /// Provides direct access to low-level PTP operations
+    /// ([`execute`](PtpSession::execute),
+    /// [`execute_with_send`](PtpSession::execute_with_send),
+    /// [`execute_with_receive`](PtpSession::execute_with_receive))
+    /// and per-device knobs like
+    /// [`set_split_header_data`](PtpSession::set_split_header_data).
+    #[must_use]
+    pub fn session(&self) -> &PtpSession {
+        &self.inner.session
     }
 
     /// Check if the device supports renaming objects.
@@ -338,6 +377,7 @@ impl MtpDeviceInfo {
 /// Builder for MtpDevice configuration.
 pub struct MtpDeviceBuilder {
     timeout: Duration,
+    known_devices: Vec<(u16, u16)>,
 }
 
 impl MtpDeviceBuilder {
@@ -345,6 +385,7 @@ impl MtpDeviceBuilder {
     pub fn new() -> Self {
         Self {
             timeout: NusbTransport::DEFAULT_TIMEOUT,
+            known_devices: Vec::new(),
         }
     }
 
@@ -358,12 +399,53 @@ impl MtpDeviceBuilder {
         self
     }
 
+    /// Include additional devices identified by VID/PID pairs in the open-time
+    /// device scan.
+    ///
+    /// By default, the `open_first` / `open_by_serial` / `open_by_location`
+    /// convenience methods only consider devices whose USB descriptors match
+    /// standard MTP class codes. Pass extra VID/PID pairs here to also accept
+    /// legacy or otherwise unusual devices that speak MTP despite reporting
+    /// non-standard descriptors.
+    ///
+    /// This is the open-side counterpart to [`MtpDevice::list_devices_with_known`]:
+    /// pair them with the same list to enumerate and open the same set of devices.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// let known = &[(0x045E, 0x0710)];
+    ///
+    /// // Enumerate with the extra VID/PID...
+    /// let devices = MtpDevice::list_devices_with_known(known)?;
+    /// let info = devices.into_iter().next().ok_or(mtp_rs::Error::NoDevice)?;
+    ///
+    /// // ...and open with the same list so the builder can find the device.
+    /// let device = MtpDevice::builder()
+    ///     .known_devices(known)
+    ///     .open_by_location(info.location_id)
+    ///     .await?;
+    ///
+    /// // Apply any per-device knobs after opening.
+    /// device.session().set_split_header_data(true);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn known_devices(mut self, known: &[(u16, u16)]) -> Self {
+        self.known_devices = known.to_vec();
+        self
+    }
+
     /// Open the first available device.
     pub async fn open_first(self) -> Result<MtpDevice, Error> {
-        let devices = NusbTransport::list_mtp_devices()?;
+        let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
         let device_info = devices.into_iter().next().ok_or(Error::NoDevice)?;
         let device = device_info.open().map_err(Error::Usb)?;
-        self.open_device(device).await
+        self.open_nusb_device(device).await
     }
 
     /// Open a device at a specific USB location (port).
@@ -378,13 +460,13 @@ impl MtpDeviceBuilder {
             return self.open_virtual(config).await;
         }
 
-        let devices = NusbTransport::list_mtp_devices()?;
+        let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
         let device_info = devices
             .into_iter()
             .find(|d| d.location_id == location_id)
             .ok_or(Error::NoDevice)?;
         let device = device_info.open().map_err(Error::Usb)?;
-        self.open_device(device).await
+        self.open_nusb_device(device).await
     }
 
     /// Open a device by its serial number.
@@ -400,18 +482,50 @@ impl MtpDeviceBuilder {
             return self.open_virtual(config).await;
         }
 
-        let devices = NusbTransport::list_mtp_devices()?;
+        let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
         let device_info = devices
             .into_iter()
             .find(|d| d.serial_number.as_deref() == Some(serial))
             .ok_or(Error::NoDevice)?;
         let device = device_info.open().map_err(Error::Usb)?;
-        self.open_device(device).await
+        self.open_nusb_device(device).await
     }
 
-    /// Internal: open an already-discovered device.
-    async fn open_device(self, device: nusb::Device) -> Result<MtpDevice, Error> {
-        // Open transport
+    /// Open an already-acquired [`nusb::Device`] as an MTP device.
+    ///
+    /// This is an escape hatch for consumers who already hold an `nusb::Device`
+    /// (e.g. from a custom enumeration or hotplug watcher). For most callers,
+    /// prefer [`known_devices`](Self::known_devices) combined with
+    /// `open_by_serial` / `open_by_location`.
+    ///
+    /// The interface scan is permissive: strict MTP-class match first, then
+    /// fallback to any interface with the MTP endpoint layout. Per-device knobs
+    /// like [`PtpSession::set_split_header_data`] can be applied after opening
+    /// via [`MtpDevice::session()`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::MtpDevice;
+    /// use nusb::MaybeFuture;
+    ///
+    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// let nusb_device = nusb::list_devices()
+    ///     .wait()?
+    ///     .find(|d: &nusb::DeviceInfo| {
+    ///         d.vendor_id() == 0x045E && d.product_id() == 0x0710
+    ///     })
+    ///     .ok_or(mtp_rs::Error::NoDevice)?
+    ///     .open()
+    ///     .wait()?;
+    ///
+    /// let device = MtpDevice::builder()
+    ///     .open_nusb_device(nusb_device)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn open_nusb_device(self, device: nusb::Device) -> Result<MtpDevice, Error> {
         let transport = NusbTransport::open_with_timeout(device, self.timeout).await?;
         let transport: Arc<dyn Transport> = Arc::new(transport);
 

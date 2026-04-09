@@ -88,6 +88,11 @@ impl PtpSession {
     ///
     /// The `total_size` must match the actual total bytes in the stream.
     /// MTP requires knowing the size before transfer begins.
+    ///
+    /// When [`is_split_header_data`](Self::is_split_header_data) is enabled, the
+    /// 12-byte PTP container header and the streamed payload are sent as
+    /// separate USB bulk transfers, mirroring the behavior of
+    /// [`execute_with_send`](Self::execute_with_send).
     pub async fn execute_with_send_stream<S>(
         &self,
         operation: OperationCode,
@@ -99,6 +104,7 @@ impl PtpSession {
         S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
     {
         use futures::StreamExt;
+        use std::sync::atomic::Ordering;
 
         let _guard = self.operation_lock.lock().await;
         let tx_id = self.next_transaction_id();
@@ -111,29 +117,42 @@ impl PtpSession {
         };
         self.transport.send_bulk(&cmd.to_bytes()).await?;
 
-        // Build complete data container (header + all payload)
-        // MTP devices expect the entire data container in a single USB transfer
         let container_length = HEADER_SIZE as u64 + total_size;
-        let mut buffer = Vec::with_capacity(container_length as usize);
 
-        // Add header
+        // Build the 12-byte data container header.
+        let mut header = Vec::with_capacity(HEADER_SIZE);
         if container_length <= u32::MAX as u64 {
-            buffer.extend_from_slice(&pack_u32(container_length as u32));
+            header.extend_from_slice(&pack_u32(container_length as u32));
         } else {
-            buffer.extend_from_slice(&pack_u32(0xFFFFFFFF));
+            header.extend_from_slice(&pack_u32(0xFFFFFFFF));
         }
-        buffer.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
-        buffer.extend_from_slice(&pack_u16(operation.into()));
-        buffer.extend_from_slice(&pack_u32(tx_id));
+        header.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
+        header.extend_from_slice(&pack_u16(operation.into()));
+        header.extend_from_slice(&pack_u32(tx_id));
 
-        // Collect all chunks into buffer
-        while let Some(chunk_result) = data.next().await {
-            let chunk = chunk_result.map_err(Error::Io)?;
-            buffer.extend_from_slice(&chunk);
+        if self.split_header_data.load(Ordering::Relaxed) {
+            // Split mode: send the header as its own bulk transfer, then send
+            // each streamed chunk as its own bulk transfer. Required by some
+            // devices that don't handle a combined header+data bulk transfer.
+            self.transport.send_bulk(&header).await?;
+            while let Some(chunk_result) = data.next().await {
+                let chunk = chunk_result.map_err(Error::Io)?;
+                if !chunk.is_empty() {
+                    self.transport.send_bulk(&chunk).await?;
+                }
+            }
+        } else {
+            // Combined mode: collect header + all chunks into one buffer and
+            // send as a single USB transfer. This is the default and what most
+            // devices expect.
+            let mut buffer = Vec::with_capacity(container_length as usize);
+            buffer.extend_from_slice(&header);
+            while let Some(chunk_result) = data.next().await {
+                let chunk = chunk_result.map_err(Error::Io)?;
+                buffer.extend_from_slice(&chunk);
+            }
+            self.transport.send_bulk(&buffer).await?;
         }
-
-        // Send entire data container as one USB transfer
-        self.transport.send_bulk(&buffer).await?;
 
         // Receive response
         let response_bytes = self.transport.receive_bulk(512).await?;
