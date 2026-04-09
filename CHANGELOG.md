@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-04-09
+
+### Added
+
+- **Public low-level PTP execution primitives:** `PtpSession::execute()`, `execute_with_receive()`, and `execute_with_send()` are now public, enabling vendor-specific and non-standard MTP operations without forking the crate
+- **`MtpDevice::session()`** accessor to reach the underlying `PtpSession` from the high-level API
+- **Split header/data send mode:** `PtpSession::set_split_header_data()` / `is_split_header_data()` for devices that require the 12-byte PTP container header and payload as separate USB bulk transfers (also supported in streaming sends)
+- **Custom VID/PID device discovery:** `MtpDevice::list_devices_with_known()` and `MtpDeviceBuilder::known_devices()` to include devices with non-standard USB descriptors in enumeration and open
+- **`MtpDeviceBuilder::open_nusb_device()`** escape hatch for consumers doing their own USB enumeration or hotplug watching
+- **Permissive interface scan on open:** two-pass scan (strict MTP class first, then endpoint-layout fallback) for devices with non-standard interface descriptors
+- **macOS `SetConfiguration(1)` retry:** automatically recovers when IOKit doesn't publish interface services for vendor-class devices
+
+### Fixed
+
+- Gate macOS-only `is_interface_unpublished` helper with `#[cfg(target_os = "macos")]` to fix dead-code warning on non-macOS builds
+
+Thanks to [@kelchm](https://github.com/kelchm) for contributing the low-level primitives ([#4](https://github.com/vdavid/mtp-rs/pull/4)).
+
 ## [0.9.1] - 2026-04-08
 
 ### Fixed
