@@ -192,6 +192,7 @@ impl NusbTransport {
     /// The resulting `claim_interface` error is `NotFound` — there's nothing
     /// for nusb to claim — and the fix is to issue `SetConfiguration(1)`,
     /// which makes IOKit publish the interface objects.
+    #[cfg(target_os = "macos")]
     fn is_interface_unpublished(e: &nusb::Error) -> bool {
         matches!(e.kind(), nusb::ErrorKind::NotFound)
     }
