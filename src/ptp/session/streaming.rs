@@ -375,7 +375,7 @@ impl ReceiveStream {
     ///
     /// The `idle_timeout` controls how long to wait during pipe drain before
     /// assuming the pipe is clear. 300ms is the recommended default; see
-    /// [`DEFAULT_CANCEL_TIMEOUT`](crate::mtp::stream::DEFAULT_CANCEL_TIMEOUT).
+    /// [`DEFAULT_CANCEL_TIMEOUT`](crate::mtp::DEFAULT_CANCEL_TIMEOUT).
     ///
     /// If the stream is already complete, this is a no-op.
     pub async fn cancel(&mut self, idle_timeout: Duration) -> Result<(), Error> {

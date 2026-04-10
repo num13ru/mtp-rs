@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-04-10
+
+### Added
+
+- **Safe mid-stream download cancellation:** `FileDownload::cancel(idle_timeout)` and `ReceiveStream::cancel(idle_timeout)` safely abort in-progress downloads using the USB Still Image Class cancel mechanism, leaving the session healthy for subsequent operations
+- **`Transport::cancel_transfer()`** trait method with implementations for `NusbTransport`, `MockTransport`, and `VirtualTransport`
+- **`DEFAULT_CANCEL_TIMEOUT`** (300ms) constant for the recommended cancel drain timeout
+- **`EventCode::CancelTransaction`** variant (0x4001) in the event code enum
+- **`EventContainer::to_bytes()`** serialization method (completes the `from_bytes`/`to_bytes` pair)
+- `#[must_use]` on `ReceiveStream` and `FileDownload` — compiler warns if dropped without consuming or cancelling
+- `debug_assert` in `ReceiveStream::Drop` catches accidental mid-stream drops during development
+
+### Fixed
+
+- `collect_with_progress` now properly cancels the USB transfer when the progress callback returns `ControlFlow::Break`, instead of just dropping the stream (which corrupted the session)
+
+### Changed
+
+- **Breaking:** `Transport` trait now requires `cancel_transfer()` — custom implementations must add this method
+- `NusbTransport` now stores the USB `Interface` and interface number (needed for SIC cancel control transfers)
+
 ## [0.10.0] - 2026-04-09
 
 ### Added
