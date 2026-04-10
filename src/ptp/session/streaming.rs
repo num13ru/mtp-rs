@@ -14,6 +14,7 @@ use bytes::Bytes;
 use futures::lock::OwnedMutexGuard;
 use futures::Stream;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::{PtpSession, HEADER_SIZE};
 
@@ -29,8 +30,9 @@ impl PtpSession {
     ///
     /// # Important
     ///
-    /// The caller must consume the entire stream before calling any other
-    /// session methods. The MTP session is locked while the stream is active.
+    /// The caller must either consume the entire stream or call
+    /// [`cancel()`](ReceiveStream::cancel) before dropping it. The MTP
+    /// session is locked while the stream is active.
     ///
     /// # Arguments
     ///
@@ -175,8 +177,9 @@ impl PtpSession {
     ///
     /// # Important
     ///
-    /// The caller must consume the entire stream before calling any other
-    /// session methods. The MTP session is locked while the stream is active.
+    /// The caller must either consume the entire stream or call
+    /// [`cancel()`](ReceiveStream::cancel) before dropping it. The MTP
+    /// session is locked while the stream is active.
     pub async fn get_object_stream(
         self: &Arc<Self>,
         handle: ObjectHandle,
@@ -212,8 +215,12 @@ impl PtpSession {
 ///
 /// # Important
 ///
-/// The MTP session is locked while this stream exists. You must consume
-/// the entire stream (or drop it) before calling other session methods.
+/// The MTP session is locked while this stream exists. You must either
+/// consume the entire stream or call [`cancel()`](Self::cancel) before
+/// dropping it. Dropping mid-stream without cancelling corrupts the USB
+/// session (a `debug_assert` catches this in debug builds).
+#[must_use = "dropping a ReceiveStream mid-transfer corrupts the USB session; \
+               consume it fully or call cancel()"]
 pub struct ReceiveStream {
     /// The transport layer for USB communication.
     transport: Arc<dyn Transport>,
@@ -360,6 +367,27 @@ impl ReceiveStream {
         }
     }
 
+    /// Cancel the in-progress download.
+    ///
+    /// Uses the USB Still Image Class cancel mechanism: sends a CLASS_CANCEL
+    /// control request to the device, then drains any remaining data from
+    /// the USB pipes. The session stays healthy for subsequent operations.
+    ///
+    /// The `idle_timeout` controls how long to wait during pipe drain before
+    /// assuming the pipe is clear. 300ms is the recommended default; see
+    /// [`DEFAULT_CANCEL_TIMEOUT`](crate::mtp::stream::DEFAULT_CANCEL_TIMEOUT).
+    ///
+    /// If the stream is already complete, this is a no-op.
+    pub async fn cancel(&mut self, idle_timeout: Duration) -> Result<(), Error> {
+        if self.done {
+            return Ok(());
+        }
+        self.done = true;
+        self.transport
+            .cancel_transfer(self.transaction_id, idle_timeout)
+            .await
+    }
+
     /// Collect all remaining data into a `Vec<u8>`.
     ///
     /// This consumes the stream and buffers all data in memory.
@@ -370,6 +398,17 @@ impl ReceiveStream {
             data.extend_from_slice(&chunk);
         }
         Ok(data)
+    }
+}
+
+impl Drop for ReceiveStream {
+    fn drop(&mut self) {
+        debug_assert!(
+            self.done,
+            "ReceiveStream dropped without consuming all data or calling cancel(). \
+             This corrupts the USB session. Call cancel() before dropping, \
+             or consume the stream to completion."
+        );
     }
 }
 
@@ -520,5 +559,101 @@ mod tests {
         }
 
         assert_eq!(collected, file_data);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_already_done() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+
+        let file_data = vec![1, 2, 3];
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+        mock.queue_response(ok_response(1));
+
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        // Consume the entire stream
+        while let Some(result) = stream.next_chunk().await {
+            result.unwrap();
+        }
+
+        // Cancel on a completed stream is a no-op
+        stream.cancel(Duration::from_secs(2)).await.unwrap();
+
+        // cancel_transfer should NOT have been called (stream was already done)
+        assert!(mock.get_cancel_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_calls_transport_cancel_transfer() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+
+        let file_data = vec![1, 2, 3, 4, 5];
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        // Read one chunk
+        stream.next_chunk().await.unwrap().unwrap();
+
+        // Cancel mid-stream — should delegate to transport.cancel_transfer()
+        stream.cancel(Duration::from_secs(2)).await.unwrap();
+
+        // Verify cancel_transfer was called with the correct transaction ID
+        let cancel_calls = mock.get_cancel_calls();
+        assert_eq!(cancel_calls, vec![1]); // tx_id=1 (first operation after OpenSession)
+    }
+
+    #[tokio::test]
+    async fn test_cancel_propagates_transport_error() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+
+        let file_data = vec![1, 2, 3];
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+
+        // Queue a cancel failure
+        mock.queue_cancel_result(Err(crate::Error::Disconnected));
+
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        // Read one chunk
+        stream.next_chunk().await.unwrap().unwrap();
+
+        // Cancel should propagate the transport error
+        let result = stream.cancel(Duration::from_secs(2)).await;
+        assert!(result.is_err());
+
+        // Stream should be marked done even on error
+        assert!(stream.done);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_marks_stream_done() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+
+        let file_data = vec![1, 2, 3];
+        mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
+
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        // Read one chunk
+        stream.next_chunk().await.unwrap().unwrap();
+
+        // Cancel
+        stream.cancel(Duration::from_secs(2)).await.unwrap();
+
+        // Stream should be done — next_chunk returns None
+        assert!(stream.next_chunk().await.is_none());
+
+        // Second cancel is a no-op (no additional cancel_transfer call)
+        stream.cancel(Duration::from_secs(2)).await.unwrap();
+        assert_eq!(mock.get_cancel_calls().len(), 1);
     }
 }

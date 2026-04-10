@@ -356,6 +356,147 @@ mod readonly {
     #[tokio::test]
     #[ignore]
     #[serial]
+    async fn test_cancel_download_then_reuse_session() {
+        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let storages = try_device!(device.storages().await, "get storages");
+        let storage = &storages[0];
+
+        tlog!("Searching for file (100KB-10MB) to cancel...");
+        let Some((handle, file_size, file_name)) =
+            find_suitable_file(storage, 100_000, 10_000_000).await
+        else {
+            tlog!("No suitable file found, skipping");
+            return;
+        };
+        tlog!("Starting download of {} ({} bytes)", file_name, file_size);
+
+        let mut download = try_device!(storage.download_stream(handle).await, "start download");
+
+        // Read just one chunk, then cancel
+        let chunk = download.next_chunk().await.expect("expected a chunk");
+        let bytes = chunk.expect("chunk error");
+        tlog!(
+            "Read {} bytes ({:.1}%), now cancelling...",
+            bytes.len(),
+            download.progress() * 100.0
+        );
+
+        download
+            .cancel(std::time::Duration::from_millis(300))
+            .await
+            .expect("cancel failed");
+        tlog!("Cancel succeeded");
+
+        // Drop the download to release the session operation lock
+        drop(download);
+
+        // Prove the session is still healthy by doing another operation
+        let objects = try_device!(storage.list_objects(None).await, "list root after cancel");
+        tlog!(
+            "Session healthy: listed {} root objects after cancel",
+            objects.len()
+        );
+        assert!(!objects.is_empty());
+
+        // Do a second download to prove streaming still works
+        let mut download2 = try_device!(storage.download_stream(handle).await, "second download");
+        let mut total = 0u64;
+        while let Some(result) = download2.next_chunk().await {
+            total += result.expect("download2 error").len() as u64;
+        }
+        assert_eq!(total, file_size);
+        tlog!(
+            "Second full download succeeded ({} bytes). Cancel test PASSED",
+            total
+        );
+    }
+
+    /// Test whether software reconnect recovers after dropping a stream mid-transfer.
+    /// This intentionally corrupts the session by dropping without cancel/drain,
+    /// then tries to close + reopen the device to see if it recovers.
+    ///
+    /// Must be run with `--release` to avoid the debug_assert panic in
+    /// ReceiveStream::Drop (which is the exact scenario we're testing).
+    /// ```sh
+    /// cargo test --release --test integration test_drop_mid_stream -- --ignored --nocapture --test-threads=1
+    /// ```
+    #[tokio::test]
+    #[ignore]
+    #[serial]
+    async fn test_drop_mid_stream_then_software_reconnect() {
+        // This test intentionally drops mid-stream, which fires the debug_assert
+        // in ReceiveStream::Drop. Skip in debug builds to avoid panicking.
+        if cfg!(debug_assertions) {
+            tlog!("SKIPPING: requires --release (debug_assert would panic)");
+            return;
+        }
+
+        // Phase 1: Open device, start download, drop everything mid-stream.
+        {
+            let device = try_device!(MtpDevice::open_first().await, "open device");
+            let storages = try_device!(device.storages().await, "get storages");
+            let storage = &storages[0];
+
+            tlog!("Searching for file (100KB-10MB)...");
+            let Some((handle, _file_size, file_name)) =
+                find_suitable_file(storage, 100_000, 10_000_000).await
+            else {
+                tlog!("No suitable file found, skipping");
+                return;
+            };
+            tlog!("Starting download of {} ({} bytes)", file_name, _file_size);
+
+            let mut download = try_device!(storage.download_stream(handle).await, "start download");
+
+            // Read one chunk
+            let chunk = download.next_chunk().await.expect("expected a chunk");
+            let bytes = chunk.expect("chunk error");
+            tlog!(
+                "Read {} bytes ({:.1}%), now dropping without cancel...",
+                bytes.len(),
+                download.progress() * 100.0
+            );
+
+            // download drops here — in release mode the debug_assert is a no-op,
+            // so Drop just releases the session lock and USB interface normally.
+            // The USB pipe is left with stale data (intentionally).
+        }
+        tlog!("Dropped mid-stream (no cancel, no drain)");
+
+        // Phase 2: Try software reconnect
+        tlog!("Attempting software reconnect...");
+        match MtpDevice::open_first().await {
+            Ok(device2) => {
+                tlog!("Reconnected: {}", device2.device_info().model);
+                match device2.storages().await {
+                    Ok(storages2) => {
+                        let storage2 = &storages2[0];
+                        match storage2.list_objects(None).await {
+                            Ok(objects) => {
+                                tlog!(
+                                    "Software reconnect WORKS: listed {} root objects",
+                                    objects.len()
+                                );
+                            }
+                            Err(e) => {
+                                tlog!("Software reconnect FAILED at list: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tlog!("Software reconnect FAILED at storages: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                tlog!("Software reconnect FAILED at open: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    #[serial]
     async fn test_streaming_download() {
         let device = try_device!(MtpDevice::open_first().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");

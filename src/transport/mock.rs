@@ -4,6 +4,7 @@ use super::Transport;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 /// Mock transport for testing MTP protocol logic without USB.
 ///
@@ -22,6 +23,8 @@ pub struct MockTransport {
     queued_responses: Mutex<VecDeque<Vec<u8>>>,
     queued_interrupts: Mutex<VecDeque<Vec<u8>>>,
     actual_sends: Mutex<Vec<Vec<u8>>>,
+    cancel_calls: Mutex<Vec<u32>>,
+    cancel_results: Mutex<VecDeque<Result<(), crate::Error>>>,
 }
 
 impl MockTransport {
@@ -33,6 +36,8 @@ impl MockTransport {
             queued_responses: Mutex::new(VecDeque::new()),
             queued_interrupts: Mutex::new(VecDeque::new()),
             actual_sends: Mutex::new(Vec::new()),
+            cancel_calls: Mutex::new(Vec::new()),
+            cancel_results: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -57,6 +62,7 @@ impl MockTransport {
         let expected = self.expected_sends.lock();
         let responses = self.queued_responses.lock();
         let interrupts = self.queued_interrupts.lock();
+        let cancel_results = self.cancel_results.lock();
 
         let mut errors = Vec::new();
 
@@ -81,6 +87,13 @@ impl MockTransport {
             ));
         }
 
+        if !cancel_results.is_empty() {
+            errors.push(format!(
+                "{} queued cancel result(s) were not consumed",
+                cancel_results.len()
+            ));
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -93,12 +106,24 @@ impl MockTransport {
         self.actual_sends.lock().clone()
     }
 
+    /// Queue a result for the next `cancel_transfer` call.
+    pub fn queue_cancel_result(&self, result: Result<(), crate::Error>) {
+        self.cancel_results.lock().push_back(result);
+    }
+
+    /// Get all transaction IDs passed to `cancel_transfer`.
+    pub fn get_cancel_calls(&self) -> Vec<u32> {
+        self.cancel_calls.lock().clone()
+    }
+
     /// Clear all expectations and queued responses.
     pub fn reset(&self) {
         self.expected_sends.lock().clear();
         self.queued_responses.lock().clear();
         self.queued_interrupts.lock().clear();
         self.actual_sends.lock().clear();
+        self.cancel_calls.lock().clear();
+        self.cancel_results.lock().clear();
     }
 }
 
@@ -142,6 +167,15 @@ impl Transport for MockTransport {
             .lock()
             .pop_front()
             .ok_or(crate::Error::NoDevice)
+    }
+
+    async fn cancel_transfer(
+        &self,
+        transaction_id: u32,
+        _idle_timeout: Duration,
+    ) -> Result<(), crate::Error> {
+        self.cancel_calls.lock().push(transaction_id);
+        self.cancel_results.lock().pop_front().unwrap_or(Ok(()))
     }
 }
 

@@ -57,7 +57,25 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 - **Pure Rust**: No C/FFI, no `-sys` crates
 - **Runtime-agnostic**: `futures` traits only, no tokio/async-std dependency
 - **Stream-based**: Downloads return `Stream<Item = Chunk>` for memory efficiency
+- **Safe cancellation**: Mid-stream downloads can be cancelled via USB SIC class cancel
 - **Type-safe handles**: Newtypes prevent ID mixups
+
+## Transfer cancellation
+
+Mid-stream download cancellation uses the USB Still Image Class (SIC) cancel
+mechanism: a CLASS_CANCEL control request (bRequest=0x64) followed by draining
+the bulk IN and interrupt pipes. This approach was validated against libmtp's
+`ptp_read_cancel_func` (Florent Viard, 2017). Key implementation notes:
+
+- The drain must start **immediately** after CLASS_CANCEL — any delay (like
+  polling GET_DEVICE_STATUS, which Android doesn't support) allows the device
+  to enter an unrecoverable state.
+- The drain uses maxpacket-sized reads with a 300ms idle timeout (matching
+  libmtp and Windows behavior).
+- The interrupt pipe must also be drained — some devices (GoPro) freeze if
+  the CancelTransaction event is left unread.
+- See `NusbTransport::cancel_transfer()` for the full implementation with
+  detailed comments.
 
 ## Things to avoid
 

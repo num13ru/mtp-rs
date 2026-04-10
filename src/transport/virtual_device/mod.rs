@@ -215,6 +215,18 @@ impl Transport for VirtualTransport {
         futures_timer::Delay::new(self.event_poll_interval).await;
         Err(crate::Error::Timeout)
     }
+
+    async fn cancel_transfer(
+        &self,
+        _transaction_id: u32,
+        _idle_timeout: std::time::Duration,
+    ) -> Result<(), crate::Error> {
+        // Virtual device has no USB pipe to drain — just clear any pending state.
+        let mut state = self.state.lock().unwrap();
+        state.pending_command = None;
+        state.response_queue.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]

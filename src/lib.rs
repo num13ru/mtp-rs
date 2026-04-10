@@ -54,7 +54,7 @@ pub use ptp::{
 // Re-export high-level MTP types
 pub use mtp::{
     DeviceEvent, FileDownload, MtpDevice, MtpDeviceBuilder, NewObjectInfo, ObjectListing, Progress,
-    Storage,
+    Storage, DEFAULT_CANCEL_TIMEOUT,
 };
 
 // Re-export virtual device types when the feature is enabled

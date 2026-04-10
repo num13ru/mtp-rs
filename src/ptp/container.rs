@@ -270,6 +270,22 @@ pub struct EventContainer {
 }
 
 impl EventContainer {
+    /// Serialize the event container to bytes.
+    ///
+    /// Produces a 24-byte container: 12-byte header + 3 u32 parameters.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        const EVENT_SIZE: usize = HEADER_SIZE + 12; // 3 params
+        let mut buf = Vec::with_capacity(EVENT_SIZE);
+        buf.extend_from_slice(&pack_u32(EVENT_SIZE as u32));
+        buf.extend_from_slice(&pack_u16(ContainerType::Event.to_code()));
+        buf.extend_from_slice(&pack_u16(self.code.into()));
+        buf.extend_from_slice(&pack_u32(self.transaction_id));
+        for &param in &self.params {
+            buf.extend_from_slice(&pack_u32(param));
+        }
+        buf
+    }
+
     /// Parse an event container from bytes.
     ///
     /// Events can have 0-3 parameters, so valid sizes are 12-24 bytes
@@ -498,6 +514,19 @@ mod tests {
     }
 
     // --- EventContainer tests ---
+
+    #[test]
+    fn event_container_to_bytes_roundtrip() {
+        let original = EventContainer {
+            code: EventCode::CancelTransaction,
+            transaction_id: 42,
+            params: [42, 0, 0],
+        };
+        let bytes = original.to_bytes();
+        assert_eq!(bytes.len(), 24);
+        let parsed = EventContainer::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed, original);
+    }
 
     #[test]
     fn event_container_variable_params() {

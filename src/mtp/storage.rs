@@ -379,8 +379,9 @@ impl Storage {
     ///
     /// # Important
     ///
-    /// The MTP session is locked while the download is active. You must consume
-    /// the entire download (or drop it) before calling other storage methods.
+    /// The MTP session is locked while the download is active. You must either
+    /// consume the entire download or call [`FileDownload::cancel()`] before
+    /// dropping it.
     ///
     /// # Example
     ///

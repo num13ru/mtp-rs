@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use futures::lock::Mutex;
 use futures_timer::Delay;
 use nusb::descriptors::{InterfaceDescriptor, TransferType};
-use nusb::transfer::{Buffer, Bulk, Direction, In, Interrupt, Out, TransferError};
+use nusb::transfer::{
+    Buffer, Bulk, ControlOut, ControlType, Direction, In, Interrupt, Out, Recipient, TransferError,
+};
 use nusb::MaybeFuture;
 use std::time::Duration;
 
@@ -17,6 +19,12 @@ const MTP_CLASS_VENDOR: u8 = 0xFF;
 const MTP_SUBCLASS: u8 = 0x01;
 /// MTP protocol code (PTP).
 const MTP_PROTOCOL: u8 = 0x01;
+
+// USB Still Image Class (SIC) cancel constants.
+/// SIC Cancel Request bRequest code.
+const SIC_CANCEL_REQUEST: u8 = 0x64;
+/// CancelTransaction event code for the cancel payload.
+const SIC_CANCEL_EVENT_CODE: u16 = 0x4001;
 
 /// USB device information with topology-based location ID.
 #[derive(Debug, Clone)]
@@ -46,6 +54,8 @@ impl UsbDeviceInfo {
 
 /// USB transport implementation using nusb.
 pub struct NusbTransport {
+    interface: nusb::Interface,
+    interface_number: u8,
     bulk_in: Mutex<nusb::Endpoint<Bulk, In>>,
     bulk_out: Mutex<nusb::Endpoint<Bulk, Out>>,
     interrupt_in: Mutex<nusb::Endpoint<Interrupt, In>>,
@@ -308,6 +318,8 @@ impl NusbTransport {
             .map_err(crate::Error::Usb)?;
 
         Ok(Self {
+            interface,
+            interface_number,
             bulk_in: Mutex::new(bulk_in),
             bulk_out: Mutex::new(bulk_out),
             interrupt_in: Mutex::new(interrupt_in),
@@ -403,6 +415,168 @@ impl Transport for NusbTransport {
         let completion = ep.next_complete().await;
         completion.status.map_err(Self::convert_transfer_error)?;
         Ok(completion.buffer[..completion.actual_len].to_vec())
+    }
+
+    /// USB Still Image Class cancel implementation.
+    ///
+    /// Getting mid-transfer cancellation right on MTP/PTP devices is notoriously
+    /// tricky. Different devices react differently to cancel signals, and getting
+    /// the timing wrong can leave the device unresponsive until physical replug.
+    ///
+    /// This implementation follows the approach proven by libmtp's
+    /// `ptp_read_cancel_func` (contributed by Florent Viard in 2017, PR #2),
+    /// which was developed through extensive real-device testing after discovering
+    /// that naive approaches caused Nexus 6P to fail all subsequent operations
+    /// and GoPro Hero 5 to freeze completely.
+    ///
+    /// The key insight: after sending the CLASS_CANCEL control request, the drain
+    /// must start *immediately*. The device stops sending new data quickly, but
+    /// data already in the USB pipeline must be read and discarded before the
+    /// pipe goes idle. Inserting any delay (like polling GET_DEVICE_STATUS, which
+    /// Android doesn't support anyway) causes the drain to find an empty pipe
+    /// while the device's MTP state machine remains stuck.
+    ///
+    /// The sequence is:
+    /// 1. Send CLASS_CANCEL control request (bRequest=0x64, 300ms timeout)
+    /// 2. Drain bulk IN pipe (read + discard until idle_timeout, maxpacket chunks)
+    /// 3. Drain interrupt pipe (consume CancelTransaction event if present)
+    ///
+    /// References:
+    /// - libmtp PR #2: <https://github.com/libmtp/libmtp/pull/2>
+    /// - USB Still Image Capture Device Definition, Section 5
+    async fn cancel_transfer(
+        &self,
+        transaction_id: u32,
+        idle_timeout: Duration,
+    ) -> Result<(), crate::Error> {
+        // Step 1: Send CLASS_CANCEL control request (bRequest=0x64).
+        //
+        // 300ms timeout matches libmtp and Windows behavior. This is a
+        // class-specific control transfer on endpoint 0, independent of
+        // the bulk pipes. The 6-byte payload contains the CancelTransaction
+        // event code (0x4001) and the transaction ID to cancel.
+        let mut payload = [0u8; 6];
+        payload[0..2].copy_from_slice(&SIC_CANCEL_EVENT_CODE.to_le_bytes());
+        payload[2..6].copy_from_slice(&transaction_id.to_le_bytes());
+
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Class,
+                    recipient: Recipient::Interface,
+                    request: SIC_CANCEL_REQUEST,
+                    value: 0,
+                    index: self.interface_number as u16,
+                    data: &payload,
+                },
+                Duration::from_millis(300),
+            )
+            .await
+            .map_err(Self::convert_transfer_error)?;
+
+        // Step 2: Drain bulk IN pipe.
+        //
+        // Read and discard data in maxpacket-sized chunks until idle_timeout
+        // fires (no more data arriving). The device may still be sending data
+        // that was already in the USB pipeline when CLASS_CANCEL arrived. The
+        // drain also catches the Response container (Transaction_Cancelled or
+        // Ok) that the device sends to end the transaction.
+        //
+        // IMPORTANT: This must happen immediately after the control request.
+        // Any delay (like polling GET_DEVICE_STATUS) allows the device to
+        // give up waiting for us to read, leaving its MTP state machine stuck.
+        {
+            let mut ep = self.bulk_in.lock().await;
+            let max_packet_size = ep.max_packet_size();
+            loop {
+                if ep.pending() == 0 {
+                    let aligned_size = align_to_packet_size(max_packet_size, max_packet_size);
+                    ep.submit(Buffer::new(aligned_size));
+                }
+
+                let drain_result = {
+                    let complete_fut = ep.next_complete();
+                    let timeout_fut = Delay::new(idle_timeout);
+                    futures::pin_mut!(complete_fut, timeout_fut);
+
+                    match futures::future::select(complete_fut, timeout_fut).await {
+                        futures::future::Either::Left((completion, _)) => {
+                            match completion.status {
+                                Ok(()) => {
+                                    // Check for Response container (type code 3 at bytes [4..6]).
+                                    if completion.actual_len >= 6 {
+                                        let type_code = u16::from_le_bytes([
+                                            completion.buffer[4],
+                                            completion.buffer[5],
+                                        ]);
+                                        if type_code == 3 {
+                                            Ok(true) // Response received, done
+                                        } else {
+                                            Ok(false) // Data, keep draining
+                                        }
+                                    } else {
+                                        Ok(false) // keep draining
+                                    }
+                                }
+                                Err(TransferError::Cancelled) => Ok(true),
+                                Err(TransferError::Disconnected) => Err(crate::Error::Disconnected),
+                                Err(_) => Ok(true),
+                            }
+                        }
+                        futures::future::Either::Right((_, _)) => {
+                            // Idle timeout — no more data arriving, pipe is clear.
+                            Ok(true)
+                        }
+                    }
+                };
+
+                match drain_result {
+                    Ok(true) => {
+                        ep.cancel_all();
+                        while ep.pending() > 0 {
+                            let _ = ep.next_complete().await;
+                        }
+                        break;
+                    }
+                    Ok(false) => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        // Step 3: Drain interrupt pipe.
+        //
+        // Consume the CancelTransaction event if the device sent one. This is
+        // critical for some devices — GoPro Hero 5 stops responding entirely
+        // if this event is left unread on the interrupt pipe.
+        {
+            let mut ep = self.interrupt_in.lock().await;
+            if ep.pending() == 0 {
+                let max_packet_size = ep.max_packet_size();
+                let aligned_size =
+                    align_to_packet_size(Self::INTERRUPT_BUFFER_SIZE, max_packet_size);
+                ep.submit(Buffer::new(aligned_size));
+            }
+
+            let timed_out = {
+                let complete_fut = ep.next_complete();
+                let timeout_fut = Delay::new(idle_timeout);
+                futures::pin_mut!(complete_fut, timeout_fut);
+
+                matches!(
+                    futures::future::select(complete_fut, timeout_fut).await,
+                    futures::future::Either::Right(_)
+                )
+            };
+
+            if timed_out {
+                ep.cancel_all();
+                while ep.pending() > 0 {
+                    let _ = ep.next_complete().await;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

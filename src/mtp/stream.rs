@@ -34,6 +34,13 @@ impl Progress {
     }
 }
 
+/// Default idle timeout for cancel drain operations.
+///
+/// After sending the cancel control request, this is how long we wait
+/// for additional data on each pipe before assuming it's clear. Matches
+/// the 300ms timeout used by libmtp, which mirrors Windows behavior.
+pub const DEFAULT_CANCEL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// A file download in progress with true USB streaming.
 ///
 /// This struct wraps the low-level `ReceiveStream` and provides convenient
@@ -42,8 +49,10 @@ impl Progress {
 ///
 /// # Important
 ///
-/// The MTP session is locked while this download is active. You must consume
-/// the entire download (or drop it) before calling other storage methods.
+/// The MTP session is locked while this download is active. You must either
+/// consume the entire download or call [`cancel()`](Self::cancel) before
+/// dropping it. Dropping mid-download without cancelling corrupts the USB
+/// session.
 ///
 /// # Example
 ///
@@ -69,6 +78,8 @@ impl Progress {
 /// # Ok(())
 /// # }
 /// ```
+#[must_use = "dropping a FileDownload mid-transfer corrupts the USB session; \
+               consume it fully or call cancel()"]
 pub struct FileDownload {
     size: u64,
     bytes_received: u64,
@@ -105,6 +116,20 @@ impl FileDownload {
         } else {
             self.bytes_received as f64 / self.size as f64
         }
+    }
+
+    /// Cancel the in-progress download.
+    ///
+    /// Uses the USB Still Image Class cancel mechanism to stop the transfer
+    /// and drain remaining data, leaving the session clean for the next
+    /// operation.
+    ///
+    /// The `idle_timeout` controls how long to wait during pipe drain before
+    /// assuming the pipe is clear. 1–2 seconds is typically sufficient.
+    ///
+    /// If the download is already complete, this is a no-op.
+    pub async fn cancel(&mut self, idle_timeout: std::time::Duration) -> Result<(), Error> {
+        self.stream.cancel(idle_timeout).await
     }
 
     /// Get the next chunk of data from USB.
@@ -162,6 +187,7 @@ impl FileDownload {
             };
 
             if let ControlFlow::Break(()) = on_progress(progress) {
+                self.stream.cancel(DEFAULT_CANCEL_TIMEOUT).await?;
                 return Err(Error::Cancelled);
             }
         }
@@ -180,6 +206,7 @@ impl FileDownload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::ControlFlow;
 
     #[test]
     fn progress_calculations() {
@@ -214,5 +241,60 @@ mod tests {
         };
         let frac = large.fraction();
         assert!(frac > 0.49 && frac < 0.51);
+    }
+
+    #[tokio::test]
+    async fn test_collect_with_progress_cancel_cleans_up() {
+        use crate::ptp::{
+            pack_u16, pack_u32, ContainerType, ObjectHandle, OperationCode, PtpSession,
+            ResponseCode,
+        };
+        use crate::transport::mock::MockTransport;
+        use std::sync::Arc;
+
+        // Helper to build a response container
+        fn response(tx_id: u32, code: ResponseCode) -> Vec<u8> {
+            let mut buf = Vec::with_capacity(12);
+            buf.extend_from_slice(&pack_u32(12));
+            buf.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
+            buf.extend_from_slice(&pack_u16(code.into()));
+            buf.extend_from_slice(&pack_u32(tx_id));
+            buf
+        }
+
+        // Helper to build a data container
+        fn data(tx_id: u32, code: OperationCode, payload: &[u8]) -> Vec<u8> {
+            let len = 12 + payload.len();
+            let mut buf = Vec::with_capacity(len);
+            buf.extend_from_slice(&pack_u32(len as u32));
+            buf.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
+            buf.extend_from_slice(&pack_u16(code.into()));
+            buf.extend_from_slice(&pack_u32(tx_id));
+            buf.extend_from_slice(payload);
+            buf
+        }
+
+        let mock = Arc::new(MockTransport::new());
+        let transport: Arc<dyn crate::transport::Transport> = Arc::clone(&mock) as _;
+        mock.queue_response(response(0, ResponseCode::Ok)); // OpenSession
+
+        let file_data = vec![1u8; 1000];
+        let file_size = file_data.len() as u64;
+        mock.queue_response(data(1, OperationCode::GetObject, &file_data));
+
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+        let download = FileDownload::new(file_size, stream);
+
+        // Break after first chunk
+        let result = download
+            .collect_with_progress(|_progress| ControlFlow::Break(()))
+            .await;
+
+        assert!(matches!(result, Err(Error::Cancelled)));
+
+        // Verify cancel_transfer was called with the correct transaction ID
+        let cancel_calls = mock.get_cancel_calls();
+        assert_eq!(cancel_calls, vec![1]);
     }
 }

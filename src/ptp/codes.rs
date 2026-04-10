@@ -130,6 +130,8 @@ pub enum ResponseCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum EventCode {
+    /// Cancel an in-progress transaction.
+    CancelTransaction = 0x4001,
     /// A new object was added.
     ObjectAdded = 0x4002,
     /// An object was removed.
