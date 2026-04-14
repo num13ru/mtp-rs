@@ -455,7 +455,7 @@ impl Storage {
         &self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
-        mut data: S,
+        data: S,
         mut on_progress: F,
     ) -> Result<ObjectHandle, Error>
     where
@@ -465,33 +465,43 @@ impl Storage {
         use futures::StreamExt;
 
         let total_size = info.size;
-        let mut buffer = Vec::with_capacity(total_size as usize);
-        let mut bytes_received = 0u64;
-
-        while let Some(chunk) = data.next().await {
-            let chunk = chunk.map_err(Error::Io)?;
-            bytes_received += chunk.len() as u64;
-            buffer.extend_from_slice(&chunk);
-
-            let progress = Progress {
-                bytes_transferred: bytes_received,
-                total_bytes: Some(total_size),
-            };
-
-            if let ControlFlow::Break(()) = on_progress(progress) {
-                return Err(Error::Cancelled);
-            }
-        }
-
         let object_info = info.to_object_info();
         let parent_handle = parent.unwrap_or(ObjectHandle::ROOT);
+
         let (_, _, handle) = self
             .inner
             .session
             .send_object_info(self.id, parent_handle, &object_info)
             .await?;
 
-        self.inner.session.send_object(&buffer).await?;
+        // Wrap the stream to report progress and support cancellation.
+        let mut bytes_sent = 0u64;
+        let progress_stream = data.map(move |chunk_result| {
+            let chunk = chunk_result?;
+            bytes_sent += chunk.len() as u64;
+            let progress = Progress {
+                bytes_transferred: bytes_sent,
+                total_bytes: Some(total_size),
+            };
+            if let ControlFlow::Break(()) = on_progress(progress) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "cancelled",
+                ));
+            }
+            Ok(chunk)
+        });
+
+        self.inner
+            .session
+            .send_object_stream(total_size, progress_stream)
+            .await
+            .map_err(|e| match &e {
+                Error::Io(io_err) if io_err.kind() == std::io::ErrorKind::Interrupted => {
+                    Error::Cancelled
+                }
+                _ => e,
+            })?;
 
         Ok(handle)
     }
