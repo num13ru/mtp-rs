@@ -1,6 +1,6 @@
 //! USB transport implementation using nusb.
 
-use super::Transport;
+use super::{BulkStream, Transport};
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use futures_timer::Delay;
@@ -361,6 +361,71 @@ impl Transport for NusbTransport {
         let buf: Buffer = data.to_vec().into();
         let completion = ep.transfer_blocking(buf, self.timeout);
         completion.status.map_err(Self::convert_transfer_error)?;
+        Ok(())
+    }
+
+    async fn send_bulk_streaming(&self, chunks: BulkStream<'_>) -> Result<(), crate::Error> {
+        use futures::StreamExt;
+
+        let mut ep = self.bulk_out.lock().await;
+        let max_packet_size = ep.max_packet_size();
+        let transfer_size: usize = 256 * 1024; // 256KB per USB transfer
+                                               // Round up to max_packet_size boundary.
+        let transfer_size = (transfer_size.div_ceil(max_packet_size)).max(1) * max_packet_size;
+
+        let mut current_buf = ep.allocate(transfer_size);
+        let mut total_sent = 0usize;
+        let mut stream = chunks;
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(crate::Error::Io)?;
+            let mut remaining = chunk.as_ref();
+
+            while !remaining.is_empty() {
+                let space = current_buf.remaining_capacity();
+                let to_copy = remaining.len().min(space);
+                current_buf.extend_from_slice(&remaining[..to_copy]);
+                remaining = &remaining[to_copy..];
+
+                if current_buf.remaining_capacity() == 0 {
+                    ep.submit(current_buf);
+                    let completion = ep
+                        .wait_next_complete(self.timeout)
+                        .ok_or(crate::Error::Timeout)?;
+                    completion.status.map_err(Self::convert_transfer_error)?;
+                    total_sent += transfer_size;
+                    current_buf = ep.allocate(transfer_size);
+                }
+            }
+        }
+
+        // Send remaining data.
+        let final_len = current_buf.len();
+        if final_len > 0 {
+            ep.submit(current_buf);
+            let completion = ep
+                .wait_next_complete(self.timeout)
+                .ok_or(crate::Error::Timeout)?;
+            completion.status.map_err(Self::convert_transfer_error)?;
+
+            // If the final transfer was a multiple of max_packet_size, send ZLP
+            // so the device sees a short packet delimiter.
+            if final_len % max_packet_size == 0 {
+                ep.submit(Buffer::new(0));
+                let completion = ep
+                    .wait_next_complete(self.timeout)
+                    .ok_or(crate::Error::Timeout)?;
+                completion.status.map_err(Self::convert_transfer_error)?;
+            }
+        } else if total_sent > 0 && total_sent % max_packet_size == 0 {
+            // All data fit in full transfers. Send ZLP to terminate.
+            ep.submit(Buffer::new(0));
+            let completion = ep
+                .wait_next_complete(self.timeout)
+                .ok_or(crate::Error::Timeout)?;
+            completion.status.map_err(Self::convert_transfer_error)?;
+        }
+
         Ok(())
     }
 

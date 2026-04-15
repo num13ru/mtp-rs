@@ -695,7 +695,7 @@ mod destructive {
         };
 
         let chunk_size = 64 * 1024;
-        let num_chunks = 10;
+        let num_chunks = 48; // 3 MB -- exercises multi-batch streaming
         let total_size = chunk_size * num_chunks;
 
         tlog!("Uploading {} bytes in {} chunks", total_size, num_chunks);

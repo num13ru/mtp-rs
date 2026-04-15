@@ -441,7 +441,7 @@ impl Storage {
         data: S,
     ) -> Result<ObjectHandle, Error>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
     {
         self.upload_with_progress(parent, info, data, |_| ControlFlow::Continue(()))
             .await
@@ -459,8 +459,8 @@ impl Storage {
         mut on_progress: F,
     ) -> Result<ObjectHandle, Error>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
-        F: FnMut(Progress) -> ControlFlow<()>,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
+        F: FnMut(Progress) -> ControlFlow<()> + Send,
     {
         use futures::StreamExt;
 

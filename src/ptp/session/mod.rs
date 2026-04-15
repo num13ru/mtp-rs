@@ -652,8 +652,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_send_stream_combined_default() {
-        // By default, command + combined data container = 2 bulk sends, regardless
-        // of how many chunks the input stream is split into.
+        // Combined mode batches header + data into 1 MB USB transfers.
+        // A small payload fits entirely in one batch.
         use bytes::Bytes;
         use futures::stream;
 
@@ -680,15 +680,66 @@ mod tests {
             .await
             .unwrap();
 
-        // OpenSession (1) + command (1) + combined data container (1) = 3 sends.
+        // OpenSession (1) + command (1) + one batch with header+all data (1) = 3 sends.
         let sends = mock.get_sends();
         assert_eq!(sends.len(), 3);
 
-        // Third send is the combined data container.
         let data = &sends[2];
         assert_eq!(data.len(), HEADER_SIZE + total_size as usize);
         assert_eq!(unpack_u32(&data[0..4]).unwrap() as usize, data.len());
         assert_eq!(&data[HEADER_SIZE..], &[0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_send_stream_combined_large_multichunk() {
+        // Verify combined mode works with a large payload (3 MB across 48
+        // chunks of 64KB each). The mock transport uses the default
+        // send_bulk_streaming which buffers everything into one send_bulk
+        // call, so we get a single data send. Real USB transports stream
+        // in 256KB transfers.
+        use bytes::Bytes;
+        use futures::stream;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // operation response
+
+        let session = PtpSession::open(transport, 1).await.unwrap();
+
+        let chunk_size = 64 * 1024;
+        let num_chunks = 48; // 3 MB total
+        let total_size = (chunk_size * num_chunks) as u64;
+        let chunks: Vec<Result<Bytes, std::io::Error>> = (0..num_chunks)
+            .map(|i| Ok(Bytes::from(vec![(i % 256) as u8; chunk_size])))
+            .collect();
+
+        session
+            .execute_with_send_stream(
+                OperationCode::SendObject,
+                &[],
+                total_size,
+                stream::iter(chunks),
+            )
+            .await
+            .unwrap();
+
+        // Verify all data arrived (mock buffers everything into one send).
+        let sends = mock.get_sends();
+        // Skip first 2 sends (OpenSession command + SendObject command).
+        let data_sends: Vec<u8> = sends[2..].iter().flat_map(|s| s.clone()).collect();
+        assert_eq!(data_sends.len(), HEADER_SIZE + total_size as usize);
+
+        let payload = &data_sends[HEADER_SIZE..];
+        for i in 0..num_chunks {
+            let chunk_start = i * chunk_size;
+            let chunk_end = chunk_start + chunk_size;
+            assert!(
+                payload[chunk_start..chunk_end]
+                    .iter()
+                    .all(|&b| b == (i % 256) as u8),
+                "chunk {i} data mismatch"
+            );
+        }
     }
 
     #[tokio::test]

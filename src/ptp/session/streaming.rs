@@ -103,7 +103,7 @@ impl PtpSession {
         mut data: S,
     ) -> Result<ResponseContainer, Error>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
     {
         use futures::StreamExt;
         use std::sync::atomic::Ordering;
@@ -144,16 +144,14 @@ impl PtpSession {
                 }
             }
         } else {
-            // Combined mode: collect header + all chunks into one buffer and
-            // send as a single USB transfer. This is the default and what most
-            // devices expect.
-            let mut buffer = Vec::with_capacity(container_length as usize);
-            buffer.extend_from_slice(&header);
-            while let Some(chunk_result) = data.next().await {
-                let chunk = chunk_result.map_err(Error::Io)?;
-                buffer.extend_from_slice(&chunk);
-            }
-            self.transport.send_bulk(&buffer).await?;
+            // Combined mode: stream header + data as one continuous USB
+            // transfer. The transport handles buffering and ZLP termination,
+            // so we never buffer the entire file in RAM.
+            let header_stream = futures::stream::once(async { Ok(Bytes::from(header)) });
+            let combined = header_stream.chain(data);
+            self.transport
+                .send_bulk_streaming(Box::pin(combined))
+                .await?;
         }
 
         // Receive response
@@ -198,7 +196,7 @@ impl PtpSession {
     /// * `data` - Stream of data chunks to send
     pub async fn send_object_stream<S>(&self, total_size: u64, data: S) -> Result<(), Error>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
     {
         let response = self
             .execute_with_send_stream(OperationCode::SendObject, &[], total_size, data)

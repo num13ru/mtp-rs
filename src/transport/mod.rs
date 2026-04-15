@@ -10,7 +10,13 @@ pub mod virtual_device;
 pub use self::nusb::{NusbTransport, UsbDeviceInfo};
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::Stream;
+use std::pin::Pin;
 use std::time::Duration;
+
+/// A boxed stream of byte chunks used by [`Transport::send_bulk_streaming`].
+pub type BulkStream<'a> = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send + 'a>>;
 
 /// Transport trait for MTP/PTP communication.
 ///
@@ -19,6 +25,25 @@ use std::time::Duration;
 pub trait Transport: Send + Sync {
     /// Send data on the bulk OUT endpoint.
     async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error>;
+
+    /// Send data as a continuous bulk transfer from a stream of chunks.
+    ///
+    /// All chunks are sent as one logical USB transfer, properly terminated
+    /// with a short packet or ZLP. This avoids buffering the entire payload
+    /// in memory.
+    ///
+    /// The default implementation collects all chunks and calls `send_bulk`.
+    /// USB transports should override this to use native streaming writes.
+    async fn send_bulk_streaming(&self, chunks: BulkStream<'_>) -> Result<(), crate::Error> {
+        use futures::StreamExt;
+        let mut buffer = Vec::new();
+        let mut stream = chunks;
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(crate::Error::Io)?;
+            buffer.extend_from_slice(&chunk);
+        }
+        self.send_bulk(&buffer).await
+    }
 
     /// Receive data from the bulk IN endpoint.
     ///
