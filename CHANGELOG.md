@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-04-15
+
+### Changed
+
+- **Streaming uploads:** `Storage::upload()` and `upload_with_progress()` now stream data directly to USB via `send_object_stream` instead of buffering the entire file in memory. Peak memory during upload drops from O(file_size) to O(chunk_size). The API is unchanged.
+
 ## [0.11.0] - 2026-04-10
 
 ### Added
