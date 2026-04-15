@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-04-16
+
+### Added
+
+- **`Transport::send_bulk_streaming()`**: New trait method that sends data as a continuous USB transfer from a stream of chunks, with proper ZLP termination. Default implementation buffers and calls `send_bulk()`. `NusbTransport` streams in 256KB USB transfers using nusb's low-level endpoint API.
+
+### Changed
+
+- **Breaking:** `Storage::upload()` and `upload_with_progress()` now require `Send` on the stream type parameter
+- **Breaking:** `Transport` trait has a new `send_bulk_streaming()` method (with a default implementation, so most custom impls don't need changes)
+- **Breaking:** `PtpSession::execute_with_send_stream()` and `send_object_stream()` now require `Send` on the stream type parameter
+- Uploads stream data directly to USB instead of buffering the entire file in memory. Peak memory during upload drops from O(file_size) to O(256KB).
+
 ## [0.11.1] - 2026-04-15
 
 ### Changed
