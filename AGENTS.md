@@ -56,7 +56,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 
 - **Pure Rust**: No C/FFI, no `-sys` crates
 - **Runtime-agnostic**: `futures` traits only, no tokio/async-std dependency
-- **Stream-based**: Downloads return `Stream<Item = Chunk>` for memory efficiency
+- **Stream-based**: Downloads and uploads stream via `Stream<Item = Chunk>` for memory efficiency
 - **Safe cancellation**: Mid-stream downloads can be cancelled via USB SIC class cancel
 - **Type-safe handles**: Newtypes prevent ID mixups
 
@@ -76,6 +76,28 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   the CancelTransaction event is left unread.
 - See `NusbTransport::cancel_transfer()` for the full implementation with
   detailed comments.
+
+## Streaming uploads (USB bulk transfer details)
+
+Uploads use `Transport::send_bulk_streaming()` to avoid buffering the entire
+file in RAM. Key implementation notes:
+
+- PTP data containers can span multiple USB bulk transfers. The device
+  detects end-of-data via a short packet (< max packet size) or a
+  zero-length packet (ZLP) when the total is a multiple of max packet size.
+- Each `Endpoint::submit()` call is a separate USB transfer. The header
+  (12 bytes) is prepended to the first chunk so the device sees the PTP
+  container header in the first transfer (matching libmtp behavior).
+- Data is batched into 256KB USB transfers using nusb's low-level
+  `allocate/submit/wait_next_complete` API. `EndpointWrite` would be
+  cleaner but requires ownership of the `Endpoint`, which lives behind
+  a `Mutex` in `NusbTransport`.
+- A ZLP must be sent after the final transfer if its size is a multiple
+  of `max_packet_size`. Without this, Android devices hang waiting for
+  more data (validated on Pixel 9 Pro XL).
+- Mock and virtual transports use the default implementation which
+  buffers everything and calls `send_bulk()`.
+- See `NusbTransport::send_bulk_streaming()` for the full implementation.
 
 ## Things to avoid
 

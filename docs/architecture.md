@@ -52,8 +52,10 @@ This document describes the internal architecture and design decisions for `mtp-
 │  │                 transport::Transport                  │   │
 │  │  (trait)                                              │   │
 │  │  - send_bulk(&[u8])                                   │   │
+│  │  - send_bulk_streaming(Stream<Bytes>)                 │   │
 │  │  - receive_bulk() -> Vec<u8>                          │   │
 │  │  - receive_interrupt() -> Event                       │   │
+│  │  - cancel_transfer()                                  │   │
 │  └──────────────────────────┬───────────────────────────┘   │
 │                             │                                │
 │  ┌──────────────────────────▼───────────────────────────┐   │
@@ -147,14 +149,17 @@ src/
 ```rust
 pub trait Transport: Send + Sync {
     async fn send_bulk(&self, data: &[u8]) -> Result<(), Error>;
+    async fn send_bulk_streaming(&self, chunks: BulkStream) -> Result<(), Error>;
     async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, Error>;
     async fn receive_interrupt(&self) -> Result<Vec<u8>, Error>;
+    async fn cancel_transfer(&self, transaction_id: u32, idle_timeout: Duration) -> Result<(), Error>;
 }
 ```
 
 **Rationale**:
 - Enables unit testing with mock transport
-- Future-proofs for alternative backends if needed
+- `send_bulk_streaming` allows memory-efficient uploads (has a default impl that buffers and calls `send_bulk`)
+- `cancel_transfer` enables safe mid-stream download cancellation
 - Clean separation of concerns
 
 ### 3. Storage as first-class object

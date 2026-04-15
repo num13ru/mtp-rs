@@ -25,7 +25,7 @@ No `libmtp`, no `libusb`, no FFI, just async Rust built on [`nusb`](https://crat
 - Connect to devices over USB
 - List, download, upload, delete, move, copy, and rename files
 - Create, delete, and rename folders
-- Stream large file downloads with continued progress indication
+- Stream large file downloads and uploads with continued progress indication
 - Listen for device events (file added, storage removed, etc.)
 - See free space
 - Also exposes a lower-level interface for PTP, so it can be used for cameras too.
@@ -80,7 +80,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mtp-rs = "0.4"
+mtp-rs = "0.12"
 ```
 
 You'll also need an async runtime. The library is runtime-agnostic, but [tokio](https://github.com/tokio-rs/tokio) is
