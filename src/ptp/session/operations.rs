@@ -4,8 +4,8 @@
 //! listing storage and objects, downloading/uploading files, etc.
 
 use crate::ptp::{
-    pack_string, unpack_u32_array, DeviceInfo, EventContainer, ObjectFormatCode, ObjectHandle,
-    ObjectInfo, ObjectPropertyCode, OperationCode, StorageId, StorageInfo,
+    pack_string, unpack_u32_array, unpack_u64, DeviceInfo, EventContainer, ObjectFormatCode,
+    ObjectHandle, ObjectInfo, ObjectPropertyCode, OperationCode, StorageId, StorageInfo,
 };
 use crate::Error;
 
@@ -73,12 +73,48 @@ impl PtpSession {
     }
 
     /// Returns metadata about an object, including filename, size, and timestamps.
+    ///
+    /// Note: the `size` field is parsed from the standard `ObjectInfo` dataset, which
+    /// uses a u32 for `ObjectCompressedSize` and saturates at `u32::MAX` for files
+    /// larger than 4 GB. Use [`get_object_info_full`](Self::get_object_info_full)
+    /// to auto-resolve the real u64 size via `GetObjectPropValue`.
     pub async fn get_object_info(&self, handle: ObjectHandle) -> Result<ObjectInfo, Error> {
         let (response, data) = self
             .execute_with_receive(OperationCode::GetObjectInfo, &[handle.0])
             .await?;
         Self::check_response(&response, OperationCode::GetObjectInfo)?;
         ObjectInfo::from_bytes(&data)
+    }
+
+    /// Returns object metadata with the full 64-bit size resolved.
+    ///
+    /// Calls [`get_object_info`](Self::get_object_info) first. If the returned
+    /// `size` is saturated at `u32::MAX` (indicating the file is larger than 4 GB),
+    /// it follows up with `GetObjectPropValue(ObjectSize)` to retrieve the real
+    /// u64 size and overwrites the field before returning.
+    ///
+    /// Falls back to the saturated value if the device doesn't support
+    /// `GetObjectPropValue`, doesn't support the `ObjectSize` property, or if
+    /// the response can't be parsed. Transport-level errors from the follow-up
+    /// are swallowed so that listing operations aren't aborted by an optional
+    /// property lookup; the saturated size is returned instead.
+    pub async fn get_object_info_full(&self, handle: ObjectHandle) -> Result<ObjectInfo, Error> {
+        let mut info = self.get_object_info(handle).await?;
+        if info.size == u64::from(u32::MAX) {
+            if let Ok(bytes) = self
+                .get_object_prop_value(handle, ObjectPropertyCode::ObjectSize)
+                .await
+            {
+                if let Ok(real_size) = unpack_u64(&bytes) {
+                    info.size = real_size;
+                }
+            }
+            // Any error (op not supported, prop not supported, parse failure, transport
+            // error) leaves `info.size` at the saturated u32::MAX. Callers that need the
+            // exact size for >4 GB objects on devices without GetObjectPropValue support
+            // must fetch it through another mechanism.
+        }
+        Ok(info)
     }
 
     /// Downloads the complete data of an object.

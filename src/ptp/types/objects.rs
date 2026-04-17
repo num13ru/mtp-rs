@@ -26,8 +26,15 @@ pub struct ObjectInfo {
     pub protection_status: ProtectionStatus,
     /// Object size in bytes.
     ///
-    /// Note: Protocol uses u32, but we store as u64. Values of 0xFFFFFFFF indicate
-    /// the object is larger than 4GB (use GetObjectPropValue for actual size).
+    /// The standard `ObjectInfo` dataset encodes size as u32 which saturates at
+    /// `u32::MAX` for files larger than 4 GB. When this happens and the dataset
+    /// is obtained via high-level APIs like [`Storage::get_object_info`],
+    /// [`Storage::list_objects`], or [`PtpSession::get_object_info_full`], the
+    /// real u64 size is auto-resolved via `GetObjectPropValue(ObjectSize)`.
+    ///
+    /// [`Storage::get_object_info`]: crate::mtp::Storage::get_object_info
+    /// [`Storage::list_objects`]: crate::mtp::Storage::list_objects
+    /// [`PtpSession::get_object_info_full`]: crate::ptp::PtpSession::get_object_info_full
     pub size: u64,
     /// Thumbnail format.
     pub thumb_format: ObjectFormatCode,

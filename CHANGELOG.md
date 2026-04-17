@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-04-17
+
+### Fixed
+
+- **`Storage::get_object_info()` and `Storage::list_objects()` now return the real u64 size for files larger than 4 GB.** The standard `ObjectInfo` dataset encodes size as a u32 which saturates at `u32::MAX`; the new logic auto-resolves the full size via `GetObjectPropValue(ObjectSize)` when saturation is detected. Falls back to the saturated value on devices that don't support the follow-up op.
+
+### Added
+
+- **`PtpSession::get_object_info_full()`**: Low-level method that fetches ObjectInfo and resolves the u64 size when saturated.
+- 5 new unit tests covering saturation detection, fallback behavior, and the edge case where a file's real size happens to equal `u32::MAX`.
+- Virtual-device integration test that creates a 5 GB sparse file and verifies size resolution end-to-end.
+
+### Changed
+
+- Doc comment on `ObjectInfo::size` updated to reflect the new auto-resolution behavior of high-level APIs.
+
 ## [0.13.0] - 2026-04-17
 
 ### Added

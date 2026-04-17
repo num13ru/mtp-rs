@@ -1259,4 +1259,32 @@ mod tests {
 
         drop(device);
     }
+
+    #[tokio::test]
+    async fn list_objects_resolves_full_size_for_files_larger_than_4gb() {
+        // Create a 5 GB sparse file on the backing filesystem. Its ObjectInfo size
+        // field will saturate at u32::MAX; the real u64 size must be resolved via
+        // GetObjectPropValue(ObjectSize).
+        const REAL_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+
+        let dir = tempfile::tempdir().unwrap();
+        let big_path = dir.path().join("movie.mkv");
+        let file = std::fs::File::create(&big_path).unwrap();
+        file.set_len(REAL_SIZE).unwrap();
+        drop(file);
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let objects = storages[0].list_objects(None).await.unwrap();
+
+        let movie = objects
+            .iter()
+            .find(|o| o.filename == "movie.mkv")
+            .expect("movie.mkv not found in listing");
+        assert_eq!(
+            movie.size, REAL_SIZE,
+            "full u64 size should be resolved for files >4 GB"
+        );
+    }
 }

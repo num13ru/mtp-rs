@@ -88,7 +88,7 @@ impl ObjectListing {
             let handle = self.handles[self.cursor];
             self.cursor += 1;
 
-            let mut info = match self.inner.session.get_object_info(handle).await {
+            let mut info = match self.inner.session.get_object_info_full(handle).await {
                 Ok(info) => info,
                 Err(e) => return Some(Err(e)),
             };
@@ -306,7 +306,7 @@ impl Storage {
 
         let mut objects = Vec::with_capacity(handles.len());
         for handle in handles {
-            let mut info = self.inner.session.get_object_info(handle).await?;
+            let mut info = self.inner.session.get_object_info_full(handle).await?;
             info.handle = handle;
             objects.push(info);
         }
@@ -336,8 +336,12 @@ impl Storage {
     }
 
     /// Get object metadata by handle.
+    ///
+    /// Files larger than 4 GB have their u64 size auto-resolved via
+    /// `GetObjectPropValue(ObjectSize)`; the standard `ObjectInfo` dataset
+    /// only encodes a u32 size which saturates at 4 GB - 1.
     pub async fn get_object_info(&self, handle: ObjectHandle) -> Result<ObjectInfo, Error> {
-        let mut info = self.inner.session.get_object_info(handle).await?;
+        let mut info = self.inner.session.get_object_info_full(handle).await?;
         info.handle = handle;
         Ok(info)
     }
@@ -866,5 +870,131 @@ mod tests {
             assert_eq!(a.filename, b.filename);
             assert_eq!(a.handle, b.handle);
         }
+    }
+
+    // -- Full-size (>4 GB) resolution via GetObjectPropValue ------------------
+
+    /// Build an ObjectInfo payload with a specific `size`. Sizes > u32::MAX are
+    /// serialized as u32::MAX by `ObjectInfo::to_bytes`, matching real-device behavior.
+    fn object_info_bytes_with_size(filename: &str, parent: u32, size: u64) -> Vec<u8> {
+        let info = ObjectInfo {
+            storage_id: StorageId(1),
+            format: ObjectFormatCode::Jpeg,
+            parent: ObjectHandle(parent),
+            filename: filename.to_string(),
+            size,
+            ..ObjectInfo::default()
+        };
+        info.to_bytes().unwrap()
+    }
+
+    fn queue_object_info_with_size(
+        mock: &MockTransport,
+        tx_id: u32,
+        filename: &str,
+        parent: u32,
+        size: u64,
+    ) {
+        let data = object_info_bytes_with_size(filename, parent, size);
+        mock.queue_response(data_container(tx_id, OperationCode::GetObjectInfo, &data));
+        mock.queue_response(ok_response(tx_id));
+    }
+
+    fn queue_object_size_prop(mock: &MockTransport, tx_id: u32, size: u64) {
+        let payload = crate::ptp::pack_u64(size);
+        mock.queue_response(data_container(
+            tx_id,
+            OperationCode::GetObjectPropValue,
+            &payload,
+        ));
+        mock.queue_response(ok_response(tx_id));
+    }
+
+    #[tokio::test]
+    async fn get_object_info_resolves_saturated_size() {
+        // Simulate a 5 GB file: ObjectInfo reports u32::MAX, GetObjectPropValue returns real u64.
+        const REAL_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_object_info_with_size(&mock, 1, "big.mkv", 0, REAL_SIZE);
+        queue_object_size_prop(&mock, 2, REAL_SIZE);
+
+        let storage = mock_storage(transport, "").await;
+        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
+
+        assert_eq!(info.filename, "big.mkv");
+        assert_eq!(info.size, REAL_SIZE, "size should be resolved to full u64");
+    }
+
+    #[tokio::test]
+    async fn get_object_info_skips_lookup_when_size_fits_u32() {
+        // Under u32::MAX: GetObjectPropValue must NOT be called. If it were, the test
+        // would hang or fail because we only queue one response.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_object_info_with_size(&mock, 1, "small.jpg", 0, 1_000_000);
+
+        let storage = mock_storage(transport, "").await;
+        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
+
+        assert_eq!(info.size, 1_000_000);
+    }
+
+    #[tokio::test]
+    async fn get_object_info_falls_back_when_prop_lookup_fails() {
+        // Device reports saturated size but doesn't support GetObjectPropValue.
+        // Caller should receive the saturated value rather than an error.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_object_info_with_size(&mock, 1, "big.mkv", 0, 8 * 1024 * 1024 * 1024);
+        mock.queue_response(error_response(2, ResponseCode::OperationNotSupported));
+
+        let storage = mock_storage(transport, "").await;
+        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
+
+        assert_eq!(
+            info.size,
+            u64::from(u32::MAX),
+            "should keep saturated u32::MAX when prop lookup fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_object_info_exactly_u32_max_triggers_lookup() {
+        // A file whose real size happens to equal u32::MAX is ambiguous: we can't
+        // distinguish it from a saturated >4GB file. The lookup runs and returns the
+        // true size, which in this case happens to match. Verify we handle it correctly.
+        const REAL_SIZE: u64 = u32::MAX as u64;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_object_info_with_size(&mock, 1, "edge.bin", 0, REAL_SIZE);
+        queue_object_size_prop(&mock, 2, REAL_SIZE);
+
+        let storage = mock_storage(transport, "").await;
+        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
+
+        assert_eq!(info.size, REAL_SIZE);
+    }
+
+    #[tokio::test]
+    async fn list_objects_stream_resolves_saturated_size() {
+        // Verify the fix also applies to the streaming listing path.
+        const REAL_SIZE: u64 = 6 * 1024 * 1024 * 1024;
+
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_handles(&mock, 1, &[10, 20]);
+        queue_object_info_with_size(&mock, 2, "small.jpg", 0, 500_000);
+        queue_object_info_with_size(&mock, 3, "huge.mkv", 0, REAL_SIZE);
+        queue_object_size_prop(&mock, 4, REAL_SIZE);
+
+        let storage = mock_storage(transport, "").await;
+        let objects = storage.list_objects(None).await.unwrap();
+
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].size, 500_000);
+        assert_eq!(objects[1].size, REAL_SIZE);
     }
 }
