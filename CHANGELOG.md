@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-04-17
+
+### Added
+
+- **`Storage::download_partial_64()`** and **`PtpSession::get_partial_object_64()`**: Byte-range reads with 64-bit offsets using the Android/MTP `GetPartialObject64` extension (0x95C1). Enables partial reads beyond the 4 GB boundary for large files (videos, archives, etc.). Tested end-to-end on a Pixel 9 Pro XL with an 8 GB file.
+- **`OperationCode::GetPartialObject64`** variant
+- Virtual device supports `GetPartialObject64` and advertises it in `operations_supported`
+- New example `test_partial_download_64.rs` for real-device verification
+- 3 new unit tests covering byte-range reads and 64-bit offset correctness
+
+### Changed
+
+- Documented the 4 GB offset limitation on `download_partial()` / `get_partial_object()` and cross-linked to the new 64-bit variants
+
 ## [0.12.0] - 2026-04-16
 
 ### Added

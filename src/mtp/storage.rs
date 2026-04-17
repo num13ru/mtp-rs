@@ -355,6 +355,10 @@ impl Storage {
     }
 
     /// Download a partial file (byte range).
+    ///
+    /// Uses the standard `GetPartialObject` operation, which has a 32-bit offset.
+    /// Offsets beyond 4 GB will be silently truncated — for files larger than 4 GB,
+    /// use [`download_partial_64()`](Self::download_partial_64) instead.
     pub async fn download_partial(
         &self,
         handle: ObjectHandle,
@@ -364,6 +368,23 @@ impl Storage {
         self.inner
             .session
             .get_partial_object(handle, offset, size)
+            .await
+    }
+
+    /// Download a partial file (byte range) with 64-bit offset support.
+    ///
+    /// Uses the Android/MTP extension `GetPartialObject64`, which supports offsets
+    /// beyond 4 GB. Only works on devices that advertise support for it (most modern
+    /// Android devices do); others return `OperationNotSupported`.
+    pub async fn download_partial_64(
+        &self,
+        handle: ObjectHandle,
+        offset: u64,
+        size: u32,
+    ) -> Result<Vec<u8>, Error> {
+        self.inner
+            .session
+            .get_partial_object_64(handle, offset, size)
             .await
     }
 

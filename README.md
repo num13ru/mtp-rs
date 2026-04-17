@@ -189,6 +189,26 @@ println ! ("{:.1}%", download.progress() * 100.0);
 }
 ```
 
+### Partial reads (byte ranges)
+
+Useful for previews, thumbnails, streaming media, or random access into large files:
+
+```rust
+// First 1 MB of a file
+let head = storage.download_partial(file.handle, 0, 1024 * 1024).await?;
+
+// Read from the middle
+let middle = storage.download_partial(file.handle, 5_000_000, 100_000).await?;
+```
+
+For files larger than 4 GB, use the 64-bit variant (requires device support — most modern
+Android devices advertise it):
+
+```rust
+// Read 64 KB at offset 6 GB
+let chunk = storage.download_partial_64(file.handle, 6 * 1024 * 1024 * 1024, 65536).await?;
+```
+
 ### Listen for events
 
 `next_event()` awaits indefinitely, so wrap it in a timeout to allow checking for shutdown, etc.:
@@ -307,7 +327,7 @@ We use `nusb` for USB access, which is also runtime-agnostic.
 
 | Limitation                | Details                                            |
 |---------------------------|----------------------------------------------------|
-| Files >4GB                | Size reported as 4GB due to protocol limitation    |
+| Files >4GB (size field)   | `ObjectInfo::size` is u32 and caps at 4 GB. For byte-range reads beyond 4 GB, use `download_partial_64()` (tested end-to-end on Pixel 9 Pro XL with an 8 GB file). |
 | Filename length           | Max 254 characters                                 |
 | Non-empty folder delete   | Fails; delete contents first                       |
 | One connection per device | Can't open the same device twice                   |
@@ -384,6 +404,10 @@ Beyond raw speed, mtp-rs is far more predictable. At 100 MB downloads, libmtp's 
 18.2s (std dev 4.6s — that's 47% of its median). mtp-rs stayed within a 15ms band (std dev 4.7ms — 0.2% of its median).
 In practice this means a 100 MB transfer with mtp-rs reliably takes ~2.4s, while with libmtp it could take anywhere from
 4s to 18s.
+
+For large-file throughput, a separate test uploaded an 8.06 GB file to a Pixel 9 Pro XL over USB 3.2 in 98.5s —
+sustained **83.8 MB/s**. Partial reads at offsets 2 GB, 4.1 GB, and near-EOF all returned correct bytes, confirming
+`GetPartialObject64` works end-to-end on Android.
 
 The benchmark tool is included in the repo. [Run it yourself](benchmarks/mtp-rs-vs-libmtp/) with
 `cargo run -p mtp-bench -- --warmup 5 --runs 10`.

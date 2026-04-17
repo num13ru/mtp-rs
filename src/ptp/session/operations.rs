@@ -92,12 +92,15 @@ impl PtpSession {
 
     /// Get partial object.
     ///
-    /// Downloads a portion of an object's data.
+    /// Downloads a portion of an object's data. Uses the standard `GetPartialObject`
+    /// operation, which has a 32-bit offset — offsets beyond 4 GB are truncated to
+    /// u32 and will silently wrap. For files larger than 4 GB, use
+    /// [`get_partial_object_64()`](Self::get_partial_object_64) instead.
     ///
     /// # Arguments
     ///
     /// * `handle` - The object handle
-    /// * `offset` - Byte offset to start from (truncated to u32 in standard MTP)
+    /// * `offset` - Byte offset to start from (truncated to u32)
     /// * `max_bytes` - Maximum number of bytes to retrieve
     pub async fn get_partial_object(
         &self,
@@ -114,6 +117,37 @@ impl PtpSession {
             )
             .await?;
         Self::check_response(&response, OperationCode::GetPartialObject)?;
+        Ok(data)
+    }
+
+    /// Get partial object with a 64-bit offset.
+    ///
+    /// Uses the Android/MTP extension `GetPartialObject64` (`0x95C1`) which supports
+    /// offsets beyond 4 GB. Only devices that advertise this op in their
+    /// `DeviceInfo::operations_supported` list will accept it; others return
+    /// `OperationNotSupported`.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - The object handle
+    /// * `offset` - 64-bit byte offset to start from
+    /// * `max_bytes` - Maximum number of bytes to retrieve
+    pub async fn get_partial_object_64(
+        &self,
+        handle: ObjectHandle,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<Vec<u8>, Error> {
+        // GetPartialObject64 params: handle, offset_lo (u32), offset_hi (u32), max_bytes (u32)
+        let offset_lo = offset as u32;
+        let offset_hi = (offset >> 32) as u32;
+        let (response, data) = self
+            .execute_with_receive(
+                OperationCode::GetPartialObject64,
+                &[handle.0, offset_lo, offset_hi, max_bytes],
+            )
+            .await?;
+        Self::check_response(&response, OperationCode::GetPartialObject64)?;
         Ok(data)
     }
 

@@ -45,3 +45,4 @@ MtpDevice (unchanged)
 - The global registries (device registry + active-state registry) are process-wide and shared across tests. Registry tests must clean up with `unregister_virtual_device()` and use unique serial numbers to avoid interference. Rescan tests must also use unique serials.
 - `event_poll_interval` lives on `VirtualTransport` (not inside `VirtualDeviceState`) because we need it after dropping the mutex lock and before an async `.await`.
 - Fs watcher tests use canonicalized backing dirs and `poll_event_with_retry` to handle macOS FSEvents latency. The removal test drains create events first because macOS may coalesce or reorder events.
+- `GetPartialObject64` (0x95C1) has a **different param layout** from `GetPartialObject` (0x101B): 4 params (handle, offset_lo, offset_hi, max_bytes) vs 3 (handle, offset, max_bytes). The two handlers share `read_partial()` for the actual file I/O but parse params separately.

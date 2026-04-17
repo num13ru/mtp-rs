@@ -383,6 +383,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_partial_reads_byte_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let items = storages[0].list_objects(None).await.unwrap();
+        let obj = &items[0];
+
+        // Read from the beginning.
+        let head = storages[0]
+            .download_partial(obj.handle, 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(head, &content[0..100]);
+
+        // Read from the middle.
+        let middle = storages[0]
+            .download_partial(obj.handle, 500, 100)
+            .await
+            .unwrap();
+        assert_eq!(middle, &content[500..600]);
+
+        // Read past the end: device returns whatever's left.
+        let tail = storages[0]
+            .download_partial(obj.handle, 990, 1000)
+            .await
+            .unwrap();
+        assert_eq!(tail, &content[990..1000]);
+    }
+
+    #[tokio::test]
+    async fn download_partial_64_reads_byte_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let items = storages[0].list_objects(None).await.unwrap();
+        let obj = &items[0];
+
+        // Same scenarios as the 32-bit version, using the 64-bit op.
+        let head = storages[0]
+            .download_partial_64(obj.handle, 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(head, &content[0..100]);
+
+        let middle = storages[0]
+            .download_partial_64(obj.handle, 500, 100)
+            .await
+            .unwrap();
+        assert_eq!(middle, &content[500..600]);
+
+        let tail = storages[0]
+            .download_partial_64(obj.handle, 990, 1000)
+            .await
+            .unwrap();
+        assert_eq!(tail, &content[990..1000]);
+    }
+
+    #[tokio::test]
+    async fn download_partial_64_reassembles_offset_correctly() {
+        // Verifies the lo/hi u32 → u64 round-trip. We can't realistically create a >4GB
+        // file, so instead we test that an offset whose low u32 is 0 (i.e. an exact
+        // multiple of 2^32) routes through the same code path with no truncation.
+        // For a small file, any offset >= file length returns an empty read, which
+        // still proves the u64 offset made it through correctly (if the high bits
+        // were dropped, we'd incorrectly read from the start of the file).
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..100).map(|i| i as u8).collect();
+        std::fs::write(dir.path().join("small.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let items = storages[0].list_objects(None).await.unwrap();
+        let obj = &items[0];
+
+        // Offset = 2^32 + 10. If the hi u32 were dropped, this would read from byte 10.
+        let offset_beyond_4gb: u64 = (1u64 << 32) + 10;
+        let data = storages[0]
+            .download_partial_64(obj.handle, offset_beyond_4gb, 50)
+            .await
+            .unwrap();
+        assert!(
+            data.is_empty(),
+            "offset past EOF should return empty, got {} bytes — high offset bits may be getting dropped",
+            data.len()
+        );
+    }
+
+    #[tokio::test]
     async fn upload_file() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(dir.path());

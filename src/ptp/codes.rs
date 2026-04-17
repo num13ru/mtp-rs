@@ -54,12 +54,15 @@ pub enum OperationCode {
     MoveObject = 0x1019,
     /// Copy an object.
     CopyObject = 0x101A,
-    /// Get partial object data (range request).
+    /// Get partial object data (range request). Offset is u32, so capped at 4 GB.
     GetPartialObject = 0x101B,
     /// Get the value of an object property (MTP extension).
     GetObjectPropValue = 0x9803,
     /// Set the value of an object property (MTP extension).
     SetObjectPropValue = 0x9804,
+    /// Get partial object data with 64-bit offset (Android/MTP extension).
+    /// Supports files larger than 4 GB. Parameters: handle, offset_lo, offset_hi, max_bytes.
+    GetPartialObject64 = 0x95C1,
     /// Unknown or vendor-specific operation code.
     #[num_enum(catch_all)]
     Unknown(u16),

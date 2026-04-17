@@ -67,6 +67,9 @@ pub(super) fn dispatch(
                 OperationCode::GetPartialObject => {
                     handle_get_partial_object(state, op_code, tx_id, params)
                 }
+                OperationCode::GetPartialObject64 => {
+                    handle_get_partial_object_64(state, op_code, tx_id, params)
+                }
                 OperationCode::GetThumb => handle_get_thumb(state, tx_id, params),
                 OperationCode::SendObjectInfo => {
                     handle_send_object_info(state, tx_id, params, data_payload)
@@ -263,11 +266,35 @@ fn handle_get_partial_object(
     tx_id: u32,
     params: &[u32],
 ) {
-    use std::io::{Read, Seek, SeekFrom};
-
     let handle = ObjectHandle(params.first().copied().unwrap_or(0));
     let offset = params.get(1).copied().unwrap_or(0) as u64;
     let max_bytes = params.get(2).copied().unwrap_or(0) as usize;
+    read_partial(state, op_code, tx_id, handle, offset, max_bytes);
+}
+
+fn handle_get_partial_object_64(
+    state: &mut VirtualDeviceState,
+    op_code: u16,
+    tx_id: u32,
+    params: &[u32],
+) {
+    let handle = ObjectHandle(params.first().copied().unwrap_or(0));
+    let offset_lo = params.get(1).copied().unwrap_or(0) as u64;
+    let offset_hi = params.get(2).copied().unwrap_or(0) as u64;
+    let offset = (offset_hi << 32) | offset_lo;
+    let max_bytes = params.get(3).copied().unwrap_or(0) as usize;
+    read_partial(state, op_code, tx_id, handle, offset, max_bytes);
+}
+
+fn read_partial(
+    state: &mut VirtualDeviceState,
+    op_code: u16,
+    tx_id: u32,
+    handle: ObjectHandle,
+    offset: u64,
+    max_bytes: usize,
+) {
+    use std::io::{Read, Seek, SeekFrom};
 
     let path = match state.resolve_path(handle) {
         Some(p) => p,

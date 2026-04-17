@@ -42,6 +42,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 ## Known device quirks
 
 - **Android**: `ObjectHandle::ALL` recursive listing broken; library auto-detects via `"android.com"` in vendor extension
+- **Android**: Uploads to the storage root are rejected with `InvalidObjectHandle`. Upload into an existing folder (for example, `Download`) instead.
 - **Fujifilm cameras**: Report `AccessCapability::ReadWrite` but return `StoreReadOnly` on writes. Advertised ops lie.
 - **Samsung**: Returns `InvalidObjectHandle` for root listing; needs recursive traversal with filtering
 
