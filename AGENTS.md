@@ -116,4 +116,5 @@ Run `just check` before committing. `cargo fmt`, `cargo clippy -D warnings`, tes
 
 - [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md), [docs/debugging.md](docs/debugging.md)
 - [docs/releasing.md](docs/releasing.md) — how to publish a new version to crates.io
+- [docs/notes/community-threads.md](docs/notes/community-threads.md) — required reading before working on issues or PRs. Recap of every GitHub thread so far, known device quirks, and recurring contributors. Update after work that affects community-facing context.
 - [MTP v1.1 Spec](https://github.com/vdavid/mtp-v1_1-spec-md)
