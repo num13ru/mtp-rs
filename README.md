@@ -376,7 +376,7 @@ storage.upload(Some(download.handle), file_info, data).await?;
 |--------------------------------------------------|---------|-----------------|
 | Google Pixel 9 Pro XL                            | 15      | Full support    |
 | Samsung Galaxy S23 Ultra (SM-S918B)              | 14      | No root listing |
-| Amazon Kindle Paperwhite 12th Generation (2024)  | -       | Full support    |
+| [Amazon Kindle Paperwhite 12th Generation (2024)](https://github.com/vdavid/mtp-rs/pull/2#issuecomment-4264713119) | -       | Full support    |
 | [Fairphone 5](https://github.com/vdavid/mtp-rs/issues/6#issuecomment-4234861708) (e/OS 3.0.4, LineageOS-derived) | 13 | Full support |
 
 **Samsung quirk**: Samsung devices return `InvalidObjectHandle` when listing the root folder with handle 0.
