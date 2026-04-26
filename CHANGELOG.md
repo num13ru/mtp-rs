@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-04-27
+
+### Fixed
+
+- **Root listing is now fast on Kindle and other non-Android MTP devices.** `Storage::list_objects_stream(None)` previously took the slow `parent=0` path on any device that didn't advertise `"android.com"` in its vendor extension, which made root-level listings very slow on devices that return every object on the storage for `parent=0` (for example, Kindle Paperwhite 12th gen returned 2541 handles instead of 23 root-level items). The fast `parent=0xFFFFFFFF` path is now tried first for all devices, falling back to `parent=0` only when the device rejects it with an error. An empty `Ok(_)` from the fast path is treated as a legit empty storage, not a fallback trigger. Reported and fixed by [@num13ru](https://github.com/num13ru) in [#9](https://github.com/vdavid/mtp-rs/pull/9), closes [#8](https://github.com/vdavid/mtp-rs/issues/8).
+
+### Changed
+
+- The `is_android()` gate inside `Storage::list_objects_stream` is gone. The unified fast-path/fallback logic handles Android, Kindle, Samsung, and Fuji quirks without vendor-specific detection. The `is_android()` check inside `list_objects_recursive_auto` remains: it gates a different workaround.
+
 ## [0.13.1] - 2026-04-17
 
 ### Fixed
