@@ -4,7 +4,7 @@ Catch-up reading for any agent that picks up issue or PR work, so you don't have
 start. Read this first when triaging a new issue or PR, and update it after work that affects community-facing context
 (see [Updating this doc](#updating-this-doc) at the bottom).
 
-Last updated: 2026-04-27.
+Last updated: 2026-05-02.
 
 ## Intentionally / continuously open threads
 
@@ -17,10 +17,14 @@ Confirmed working from this thread:
 
 - **Fairphone 5** (Android 13, e/OS 3.0.4, LineageOS-derived) — full integration suite passed on 2026-04-13. Added to
   README's tested devices table.
-- **Garmin Forerunner 955** (reported by [@dasJ](https://github.com/dasJ) on 2026-04-26) — works in production, but the
-  integration suite is unhappy
-  (specific failures unspecified). Uploads need `set_split_header_data(true)`. Same workaround as the Zune-era hardware
-  from #3/#4. Ball is in @dasJ's court for a PR; no action needed from us until then.
+- **Garmin Forerunner 955** (reported by [@dasJ](https://github.com/dasJ) on 2026-04-26, PR
+  [#10](https://github.com/vdavid/mtp-rs/pull/10) merged 2026-05-02) — works in production with the
+  `set_split_header_data(true)` quirk auto-applied for `manufacturer == "Garmin"` (in
+  `MtpDeviceBuilder::open`). Same workaround as the Zune-era hardware from #3/#4, but auto-applied. The
+  manufacturer-string match violates the "no device knowledge baked in" philosophy and is on the cleanup list once we
+  have evidence it can be removed. The `test_ptp_device` integration failure was a separate protocol bug
+  (session-less `GetDeviceInfo` didn't accumulate split USB transfers) and was fixed independently of #10. Awaiting
+  @dasJ's re-test confirmation that the protocol fix resolves the test on real hardware.
 
 ## Active threads
 
@@ -96,6 +100,24 @@ not a fallback trigger. The
 `is_android()` check inside `list_objects_recursive_auto` remains and gates a different workaround. 110× reduction in
 USB round-trips for root listing on the Kindle (2541 → 23). Tested end-to-end on the Kindle and on Pixel 9 Pro XL.
 
+### #10 — Garmin Forerunner 955 quirk and split-receive bug fix (merged 2026-05-02)
+
+Reporter and contributor: [@dasJ](https://github.com/dasJ). PR added two things:
+
+- README row for FR955 in the tested devices table.
+- Auto-applies `set_split_header_data(true)` in `MtpDeviceBuilder::open` when `manufacturer == "Garmin"`. This is the
+  same primitive Zune-era hardware needs (#3 / #4); without it, Garmin uploads fail. Manufacturer-string match
+  violates the "no device knowledge baked in" philosophy and is on the cleanup list, but kept for now to ship a
+  working device today.
+
+The PR's failing `test_ptp_device` (`data container length mismatch: header says 281, have 12`) turned out to be a
+separate protocol bug: `PtpDevice::get_device_info()` (the session-less variant) didn't accumulate split USB bulk
+transfers the way in-session `execute_with_receive` already did. Garmin sends the 12-byte container header in one
+transfer and the payload in a follow-up transfer (allowed by the PTP spec). Fixed by mirroring the in-session
+multi-transfer loop and added two regression tests using the mock transport. Side-effect refactor:
+`PtpDevice::transport` is now `Arc<dyn Transport>` instead of `Arc<NusbTransport>` so the mock can be plugged in.
+Awaiting @dasJ's confirmation that the protocol fix resolves `test_ptp_device` on real hardware.
+
 ## Device quirks reference
 
 Cross-cutting summary of every quirk currently handled or known. Sorted by device family.
@@ -112,7 +134,8 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 | Fuji cameras                 | Returns all objects for root listing                                  | Filter by exact parent handle                     | Pre-public             |
 | Fuji cameras                 | Reports `AccessCapability::ReadWrite` but errors on writes            | Trust the per-operation `StoreReadOnly` response  | Pre-public             |
 | Zune-era hardware (MTPZ)     | Won't accept combined header+payload bulk transfers                   | `set_split_header_data(true)`                     | #3 / #4                |
-| Garmin Forerunner 955        | Same as Zune (uploads need split mode)                                | `set_split_header_data(true)`                     | #6 (@dasJ, 2026-04-26) |
+| Garmin Forerunner 955        | Same as Zune on send (uploads need split mode)                        | Auto-applied via manufacturer-string match (#10)  | #6 (@dasJ, 2026-04-26) |
+| Garmin Forerunner 955        | Sends container header and payload as separate bulk transfers on receive | Multi-transfer accumulation in session-less `GetDeviceInfo` | #10 (protocol bug, fixed 2026-05-02) |
 | Vendor-class macOS devices   | IOKit doesn't publish interfaces until config is set                  | `SetConfiguration(1)` retry on `claim_interface`  | #4                     |
 
 ## Recurring contributors
