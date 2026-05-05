@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-05-05
+
+### Fixed
+
+- **`PtpDevice::get_device_info()` now handles devices that send the container header and payload in separate USB bulk transfers.** Some spec-compliant MTP devices (Garmin Forerunner 955, observed) send the 12-byte data container header in one bulk transfer and the payload in a follow-up transfer. The session-less `GetDeviceInfo` path parsed straight from the first transfer and bailed with `data container length mismatch: header says N, have 12`. The in-session `PtpSession::execute_with_receive` already handled this; the fix mirrors the same multi-transfer accumulation in the session-less path. Reported by [@dasJ](https://github.com/dasJ) on [#10](https://github.com/vdavid/mtp-rs/pull/10).
+
+### Changed
+
+- `PtpDevice::transport` is now `Arc<dyn Transport>` instead of `Arc<NusbTransport>`. Internal change; no public API impact. Enables mock-based unit testing of session-less paths.
+- AGENTS.md now codifies the multi-transfer receive convention so future code paths that parse a `DataContainer` know to accumulate USB transfers until the full container is in hand.
+
 ## [0.13.2] - 2026-04-27
 
 ### Fixed
