@@ -50,7 +50,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 
 - **Unit**: `cargo test` (uses mock transport)
 - **Virtual device**: `cargo test --features virtual-device` (full protocol tests against local filesystem)
-- **Integration**: `cargo test --test integration -- --ignored --nocapture` (needs device)
+- **Integration**: `cargo test --test integration -- --ignored --nocapture` (needs device). Destructive tests pick a writable root folder from a priority list (Android `Download`, Garmin `Music`, Kindle `documents`, etc.); set `MTP_TEST_FOLDER=Name` to override. See `tests/integration.rs` header for full details.
 - **Property**: `cargo test --all-features` (proptest fuzzing)
 
 ## Design principles

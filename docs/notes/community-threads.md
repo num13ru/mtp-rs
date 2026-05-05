@@ -116,7 +116,12 @@ transfers the way in-session `execute_with_receive` already did. Garmin sends th
 transfer and the payload in a follow-up transfer (allowed by the PTP spec). Fixed by mirroring the in-session
 multi-transfer loop and added two regression tests using the mock transport. Side-effect refactor:
 `PtpDevice::transport` is now `Arc<dyn Transport>` instead of `Arc<NusbTransport>` so the mock can be plugged in.
-Awaiting @dasJ's confirmation that the protocol fix resolves `test_ptp_device` on real hardware.
+@dasJ confirmed `test_ptp_device` passes on FR955 with the fix.
+
+Follow-up: @dasJ also surfaced that the destructive integration tests assumed a `Download` folder, which is too
+Android-specific. Refactored `tests/integration.rs` to walk a priority list of writable folder names covering
+Android, Kindle, and Garmin, with `MTP_TEST_FOLDER` env var as override. Tests now skip cleanly with a helpful log
+when no match is found.
 
 ## Device quirks reference
 

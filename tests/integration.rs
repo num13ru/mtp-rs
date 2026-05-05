@@ -1,7 +1,8 @@
 //! Integration tests for mtp-rs.
 //!
-//! Requires a real MTP device (e.g., Android phone) connected via USB.
-//! MTP only supports one operation at a time, so use `--test-threads=1`.
+//! Requires a real MTP device (Android phone, Kindle, Garmin watch, etc.)
+//! connected via USB. MTP only supports one operation at a time, so use
+//! `--test-threads=1`.
 //!
 //! ```sh
 //! # Read-only tests (safe):
@@ -13,6 +14,20 @@
 //! # All tests (skip slow ones):
 //! cargo test --test integration -- --ignored --nocapture --test-threads=1 --skip slow
 //! ```
+//!
+//! ## Picking a writable folder
+//!
+//! Destructive tests need a folder they can write into. By default they walk a
+//! priority list of common folder names (`Download`, `Downloads`, `Music`,
+//! `Documents`, `documents`, `Pictures`, `Audiobooks`, `Podcasts`) and use the
+//! first one that exists in the storage root. If your device exposes a
+//! differently-named folder, override the list with `MTP_TEST_FOLDER`:
+//!
+//! ```sh
+//! MTP_TEST_FOLDER=Internal cargo test --test integration destructive -- --ignored ...
+//! ```
+//!
+//! When no match is found, destructive tests skip with a clear log line.
 
 use mtp_rs::mtp::Storage;
 use mtp_rs::ptp::ObjectHandle;
@@ -161,6 +176,43 @@ async fn find_suitable_file(
         .iter()
         .find(|o| o.is_file() && o.size > min_size && o.size < max_size)
         .map(|f| (f.handle, f.size, f.filename.clone()))
+}
+
+/// Find a writable folder at storage root for destructive tests.
+///
+/// If `MTP_TEST_FOLDER` is set, look for that folder name only.
+/// Otherwise walk a priority list covering Android, Kindle, and Garmin
+/// devices and return the first match. Returns `(handle, name)`.
+async fn find_writable_folder(storage: &Storage) -> Option<(ObjectHandle, String)> {
+    let root_objects = storage.list_objects(None).await.ok()?;
+
+    let candidates: Vec<String> = if let Ok(override_name) = std::env::var("MTP_TEST_FOLDER") {
+        vec![override_name]
+    } else {
+        [
+            "Download",   // Android (most common)
+            "Downloads",  // Android (alt)
+            "Music",      // Android, Garmin music-capable watches
+            "Documents",  // Android (capitalized)
+            "documents",  // Kindle (lowercase)
+            "Pictures",   // Android
+            "Audiobooks", // Garmin
+            "Podcasts",   // Garmin
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+    };
+
+    for name in &candidates {
+        if let Some(folder) = root_objects
+            .iter()
+            .find(|o| o.is_folder() && o.filename == *name)
+        {
+            return Some((folder.handle, folder.filename.clone()));
+        }
+    }
+    None
 }
 
 /// Read-only tests that don't modify the device.
@@ -541,23 +593,29 @@ mod destructive {
     use mtp_rs::mtp::{MtpDevice, NewObjectInfo};
     use mtp_rs::Error;
 
-    /// Helper to get device, storage, and Download folder handle
-    async fn setup_with_download_folder() -> Option<(MtpDevice, mtp_rs::mtp::Storage, ObjectHandle)>
+    /// Helper to get device, storage, and a writable folder handle.
+    ///
+    /// Walks a priority list of common folder names (or the
+    /// `MTP_TEST_FOLDER` override). Logs which folder was selected so test
+    /// output is unambiguous on devices with non-standard layouts.
+    async fn setup_with_writable_folder() -> Option<(MtpDevice, mtp_rs::mtp::Storage, ObjectHandle)>
     {
         let device = MtpDevice::open_first().await.ok()?;
         let storages = device.storages().await.ok()?;
         let storage = storages.into_iter().next()?;
-        let root = storage.list_objects(None).await.ok()?;
-        let download = root.iter().find(|o| o.filename == "Download")?;
-        Some((device, storage, download.handle))
+        let (handle, name) = find_writable_folder(&storage).await?;
+        tlog!("Using writable folder: {}", name);
+        Some((device, storage, handle))
     }
 
     #[tokio::test]
     #[ignore]
     #[serial]
     async fn test_upload_download_delete() {
-        let Some((_device, storage, download_handle)) = setup_with_download_folder().await else {
-            tlog!("Setup failed (no device or Download folder)");
+        let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
+            tlog!(
+                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
+            );
             return;
         };
 
@@ -570,7 +628,7 @@ mod destructive {
             content_bytes.to_vec(),
         ))]);
         let handle = storage
-            .upload(Some(download_handle), info, Box::pin(stream))
+            .upload(Some(folder_handle), info, Box::pin(stream))
             .await
             .expect("upload failed");
 
@@ -604,8 +662,10 @@ mod destructive {
     #[ignore]
     #[serial]
     async fn test_create_delete_folder() {
-        let Some((_device, storage, download_handle)) = setup_with_download_folder().await else {
-            tlog!("Setup failed");
+        let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
+            tlog!(
+                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
+            );
             return;
         };
 
@@ -613,7 +673,7 @@ mod destructive {
         tlog!("Creating folder: {}", folder_name);
 
         let handle = storage
-            .create_folder(Some(download_handle), &folder_name)
+            .create_folder(Some(folder_handle), &folder_name)
             .await
             .expect("create failed");
 
@@ -641,11 +701,11 @@ mod destructive {
 
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
-        let root = try_device!(storage.list_objects(None).await, "list root");
-        let download = root
-            .iter()
-            .find(|o| o.filename == "Download")
-            .expect("no Download folder");
+        let Some((folder_handle, folder_name)) = find_writable_folder(storage).await else {
+            tlog!("No writable folder found, skipping (set MTP_TEST_FOLDER to override)");
+            return;
+        };
+        tlog!("Using writable folder: {}", folder_name);
 
         let original = format!("mtp-rs-rename-{}.txt", std::process::id());
         let renamed = format!("mtp-rs-renamed-{}.txt", std::process::id());
@@ -655,7 +715,7 @@ mod destructive {
         let stream =
             futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(content.to_vec()))]);
         let handle = storage
-            .upload(Some(download.handle), info, Box::pin(stream))
+            .upload(Some(folder_handle), info, Box::pin(stream))
             .await
             .expect("upload failed");
 
@@ -689,8 +749,10 @@ mod destructive {
     #[ignore]
     #[serial]
     async fn test_streaming_upload() {
-        let Some((_device, storage, download_handle)) = setup_with_download_folder().await else {
-            tlog!("Setup failed");
+        let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
+            tlog!(
+                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
+            );
             return;
         };
 
@@ -707,7 +769,7 @@ mod destructive {
         let filename = format!("mtp-rs-stream-{}.bin", std::process::id());
         let info = NewObjectInfo::file(&filename, total_size as u64);
         let handle = storage
-            .upload(Some(download_handle), info, futures::stream::iter(chunks))
+            .upload(Some(folder_handle), info, futures::stream::iter(chunks))
             .await
             .expect("upload failed");
 
@@ -734,14 +796,16 @@ mod destructive {
     #[ignore]
     #[serial]
     async fn test_streaming_copy() {
-        let Some((_device, storage, download_handle)) = setup_with_download_folder().await else {
-            tlog!("Setup failed");
+        let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
+            tlog!(
+                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
+            );
             return;
         };
 
         // Find a file to copy
         let objects = storage
-            .list_objects(Some(download_handle))
+            .list_objects(Some(folder_handle))
             .await
             .unwrap_or_default();
         let Some(source) = objects
@@ -769,7 +833,7 @@ mod destructive {
         let stream =
             futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(data.clone()))]);
         let dest_handle = storage
-            .upload(Some(download_handle), info, stream)
+            .upload(Some(folder_handle), info, stream)
             .await
             .expect("upload failed");
 
