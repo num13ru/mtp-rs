@@ -69,14 +69,34 @@ tests/
 # Unit tests (no device needed)
 cargo test
 
-# With a real Android device connected
-cargo test --test integration -- --ignored --nocapture
+# With a real MTP device connected (Android, Kindle, Garmin, etc.)
+cargo test --test integration -- --ignored --nocapture --test-threads=1
 ```
 
 The integration tests are split into read-only (safe) and destructive (creates/deletes files) to avoid messing up
-your phone if you don't trust the lib too much but still want to run some tests.
+your device if you don't trust the lib too much but still want to run some tests.
 
 Integration tests run serially to avoid the obvious collisions.
+
+### Picking a writable folder for destructive tests
+
+Destructive tests need a folder they can write into. By default they walk a priority list of common folder names and
+use the first one that exists in the storage root:
+
+```
+Download → Downloads → Music → Documents → documents → Pictures → Audiobooks → Podcasts
+```
+
+This covers Android (`Download`), Garmin (`Music`), Kindle (`documents`), and most other modern devices. If your
+device exposes a differently-named writable folder, override with `MTP_TEST_FOLDER`:
+
+```bash
+MTP_TEST_FOLDER=Internal cargo test --test integration destructive -- --ignored --nocapture --test-threads=1
+```
+
+When no match is found, destructive tests skip with a clear log line instead of panicking. If you're testing a new
+device, please [share results in #6](https://github.com/vdavid/mtp-rs/issues/6) so we can keep the priority list and
+README's tested-devices table up to date.
 
 ## Code style
 
