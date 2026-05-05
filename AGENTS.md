@@ -100,6 +100,17 @@ file in RAM. Key implementation notes:
   buffers everything and calls `send_bulk()`.
 - See `NusbTransport::send_bulk_streaming()` for the full implementation.
 
+## Receiving data containers (multi-transfer convention)
+
+PTP data containers may span multiple USB bulk transfers on receive too: some
+devices (Garmin Forerunner 955, observed) send the 12-byte container header in
+one bulk transfer and the payload in a follow-up transfer. **Any new code path
+that calls `receive_bulk()` and expects a `DataContainer` must accumulate
+transfers until `bytes.len() >= total_length` (read from the first 4 bytes of
+the header) before parsing.** See `PtpSession::execute_with_receive` and
+`PtpDevice::get_device_info` for the canonical pattern. Skipping this loop
+breaks GetDeviceInfo on spec-compliant devices that split.
+
 ## Things to avoid
 
 - C dependencies (libusb, libmtp, `-sys` crates)

@@ -186,8 +186,9 @@ async fn find_suitable_file(
 async fn find_writable_folder(storage: &Storage) -> Option<(ObjectHandle, String)> {
     let root_objects = storage.list_objects(None).await.ok()?;
 
-    let candidates: Vec<String> = if let Ok(override_name) = std::env::var("MTP_TEST_FOLDER") {
-        vec![override_name]
+    let override_name = std::env::var("MTP_TEST_FOLDER").ok();
+    let candidates: Vec<String> = if let Some(name) = &override_name {
+        vec![name.clone()]
     } else {
         [
             "Download",   // Android (most common)
@@ -211,6 +212,13 @@ async fn find_writable_folder(storage: &Storage) -> Option<(ObjectHandle, String
         {
             return Some((folder.handle, folder.filename.clone()));
         }
+    }
+
+    if let Some(name) = &override_name {
+        tlog!(
+            "MTP_TEST_FOLDER='{}' is set, but no folder by that name at storage root",
+            name
+        );
     }
     None
 }
