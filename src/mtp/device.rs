@@ -126,6 +126,7 @@ impl MtpDevice {
                 product: d.product,
                 serial_number: d.serial_number,
                 location_id: d.location_id,
+                speed: d.speed,
             })
             .collect();
 
@@ -310,7 +311,11 @@ impl MtpDevice {
 /// // Save serial_number to remember "this specific phone"
 /// # Ok::<(), mtp_rs::Error>(())
 /// ```
+///
+/// Marked `#[non_exhaustive]` so future field additions don't break consumers
+/// that pattern-match or destructure. Construct via [`MtpDevice::list_devices`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MtpDeviceInfo {
     /// USB vendor ID (assigned by USB-IF to each company).
     ///
@@ -353,6 +358,14 @@ pub struct MtpDeviceInfo {
     ///
     /// Derived cross-platform from the USB bus ID and port chain (topology).
     pub location_id: u64,
+
+    /// Negotiated USB link speed (slowest of host port, cable, and device).
+    ///
+    /// A USB 3.2 Gen 2 phone connected through a USB 2.0 charging cable
+    /// reports `High` (480 Mbit/s), not the device's capability.
+    ///
+    /// `None` if the OS doesn't report it for this device.
+    pub speed: Option<crate::transport::UsbSpeed>,
 }
 
 impl MtpDeviceInfo {
@@ -646,6 +659,7 @@ mod tests {
             product: Some("Galaxy S24".to_string()),
             serial_number: Some("ABC123".to_string()),
             location_id: 0x00200000,
+            speed: None,
         };
         let display = with_serial.display();
         assert!(display.contains("Samsung") && display.contains("Galaxy S24"));

@@ -57,6 +57,9 @@ pub use mtp::{
     Storage, DEFAULT_CANCEL_TIMEOUT,
 };
 
+// Re-export USB speed enum for callers that want to surface link speed (e.g. for UI).
+pub use transport::UsbSpeed;
+
 // Re-export virtual device types when the feature is enabled
 #[cfg(feature = "virtual-device")]
 pub use transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};

@@ -37,7 +37,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 
 **Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `MtpDeviceBuilder::open_virtual()` (feature-gated)
 
-**Key types:** `ObjectHandle`, `StorageId` (newtypes), `AccessCapability`, `OperationCode`
+**Key types:** `ObjectHandle`, `StorageId` (newtypes), `AccessCapability`, `OperationCode`, `UsbSpeed` (negotiated USB link speed surfaced on `MtpDeviceInfo::speed` / `UsbDeviceInfo::speed`; both info structs are `#[non_exhaustive]`, so add fields freely without breaking consumers).
 
 ## Known device quirks
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-05-15
+
+### Added
+
+- **Negotiated USB link speed on enumerated devices.** `MtpDeviceInfo::speed` and `UsbDeviceInfo::speed` now carry `Option<UsbSpeed>` populated from `nusb::DeviceInfo::speed()`. `UsbSpeed` is a five-variant enum (`Low`, `Full`, `High`, `Super`, `SuperPlus`) re-exported at the crate root, so consumers can surface negotiated speed (USB 1.0 low / 1.1 full / 2.0 / 3.2 Gen 1 / 3.2 Gen 2) without adding a direct `nusb` dependency. The value is the slowest of host port, cable, and device, which is useful for diagnosing "fast device on a USB-2 charging cable" cases.
+
+### Changed
+
+- **Breaking**: `MtpDeviceInfo` and `UsbDeviceInfo` gained a `speed: Option<UsbSpeed>` field. Both structs are now marked `#[non_exhaustive]`, so future field additions are non-breaking. Consumers that constructed either struct via struct literal (rare — these are documented as return types from `list_devices()`) now need `..` or named construction.
+
 ## [0.13.3] - 2026-05-05
 
 ### Fixed

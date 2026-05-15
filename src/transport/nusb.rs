@@ -26,8 +26,48 @@ const SIC_CANCEL_REQUEST: u8 = 0x64;
 /// CancelTransaction event code for the cancel payload.
 const SIC_CANCEL_EVENT_CODE: u16 = 0x4001;
 
+/// Negotiated USB link speed for a device.
+///
+/// This is the speed the device, host port, and cable agreed on at enumeration,
+/// not a static device capability. A USB 3.2 Gen 2 phone connected via a USB 2.0
+/// charging cable reports `High` (480 Mbit/s).
+///
+/// Mirrors `nusb::Speed` so callers don't need a direct `nusb` dependency.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum UsbSpeed {
+    /// USB 1.0 low-speed: 1.5 Mbit/s.
+    Low,
+    /// USB 1.1 full-speed: 12 Mbit/s.
+    Full,
+    /// USB 2.0 high-speed: 480 Mbit/s.
+    High,
+    /// USB 3.2 Gen 1 (formerly USB 3.0): 5 Gbit/s.
+    Super,
+    /// USB 3.2 Gen 2 (formerly USB 3.1 Gen 2): 10 Gbit/s.
+    SuperPlus,
+}
+
+impl UsbSpeed {
+    fn from_nusb(s: nusb::Speed) -> Option<Self> {
+        match s {
+            nusb::Speed::Low => Some(UsbSpeed::Low),
+            nusb::Speed::Full => Some(UsbSpeed::Full),
+            nusb::Speed::High => Some(UsbSpeed::High),
+            nusb::Speed::Super => Some(UsbSpeed::Super),
+            nusb::Speed::SuperPlus => Some(UsbSpeed::SuperPlus),
+            // `nusb::Speed` is `#[non_exhaustive]`; unknown future variants → no info.
+            _ => None,
+        }
+    }
+}
+
 /// USB device information with topology-based location ID.
+///
+/// Marked `#[non_exhaustive]` so future field additions don't break consumers
+/// that pattern-match or destructure. Construct via the crate (return type of
+/// [`NusbTransport::list_mtp_devices`]); consumers shouldn't build it directly.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct UsbDeviceInfo {
     /// USB vendor ID
     pub vendor_id: u16,
@@ -41,6 +81,9 @@ pub struct UsbDeviceInfo {
     pub serial_number: Option<String>,
     /// USB location identifier derived from bus and port topology (stable per port)
     pub location_id: u64,
+    /// Negotiated USB link speed (slowest of host port, cable, device).
+    /// `None` if the OS doesn't report it for this device.
+    pub speed: Option<UsbSpeed>,
     /// Reference to the underlying nusb device info for opening
     nusb_info: nusb::DeviceInfo,
 }
@@ -89,6 +132,7 @@ impl NusbTransport {
             .filter(|dev| Self::is_mtp_device(dev, known))
             .map(|dev| {
                 let location_id = location_id_from_topology(&dev);
+                let speed = dev.speed().and_then(UsbSpeed::from_nusb);
                 UsbDeviceInfo {
                     vendor_id: dev.vendor_id(),
                     product_id: dev.product_id(),
@@ -96,6 +140,7 @@ impl NusbTransport {
                     product: dev.product_string().map(String::from),
                     serial_number: dev.serial_number().map(String::from),
                     location_id,
+                    speed,
                     nusb_info: dev,
                 }
             })
@@ -691,6 +736,36 @@ fn location_id_from_topology(dev: &nusb::DeviceInfo) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usb_speed_from_nusb_maps_every_documented_variant() {
+        assert_eq!(UsbSpeed::from_nusb(nusb::Speed::Low), Some(UsbSpeed::Low));
+        assert_eq!(UsbSpeed::from_nusb(nusb::Speed::Full), Some(UsbSpeed::Full));
+        assert_eq!(UsbSpeed::from_nusb(nusb::Speed::High), Some(UsbSpeed::High));
+        assert_eq!(
+            UsbSpeed::from_nusb(nusb::Speed::Super),
+            Some(UsbSpeed::Super)
+        );
+        assert_eq!(
+            UsbSpeed::from_nusb(nusb::Speed::SuperPlus),
+            Some(UsbSpeed::SuperPlus)
+        );
+    }
+
+    #[test]
+    fn usb_speed_is_round_trip_safe() {
+        // The five tiers are distinct and ordered so consumers can compare directly.
+        let tiers = [
+            UsbSpeed::Low,
+            UsbSpeed::Full,
+            UsbSpeed::High,
+            UsbSpeed::Super,
+            UsbSpeed::SuperPlus,
+        ];
+        for (a, b) in tiers.iter().zip(tiers.iter().skip(1)) {
+            assert_ne!(a, b);
+        }
+    }
 
     #[test]
     #[ignore] // Requires real MTP device

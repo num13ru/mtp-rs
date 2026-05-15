@@ -53,6 +53,7 @@ pub fn register_virtual_device(config: &VirtualDeviceConfig) -> MtpDeviceInfo {
         product: Some(config.model.clone()),
         serial_number: Some(config.serial.clone()),
         location_id,
+        speed: None,
     };
 
     reg.devices.push(VirtualRegistration {

@@ -28,6 +28,7 @@ No `libmtp`, no `libusb`, no FFI, just async Rust built on [`nusb`](https://crat
 - Stream large file downloads and uploads with continued progress indication
 - Listen for device events (file added, storage removed, etc.)
 - See free space
+- Report the negotiated USB link speed per device (USB 1.0 low through USB 3.2 Gen 2) so you can warn users when a fast device is throttled by a slow cable or port
 - Also exposes a lower-level interface for PTP, so it can be used for cameras too.
 
 ## What it doesn't do

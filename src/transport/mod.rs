@@ -7,7 +7,7 @@ pub mod nusb;
 #[cfg(feature = "virtual-device")]
 pub mod virtual_device;
 
-pub use self::nusb::{NusbTransport, UsbDeviceInfo};
+pub use self::nusb::{NusbTransport, UsbDeviceInfo, UsbSpeed};
 
 use async_trait::async_trait;
 use bytes::Bytes;
