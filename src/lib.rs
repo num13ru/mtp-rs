@@ -38,11 +38,13 @@
 //! # }
 //! ```
 
+pub mod cancel;
 pub mod error;
 pub mod mtp;
 pub mod ptp;
 pub mod transport;
 
+pub use cancel::CancelToken;
 pub use error::Error;
 
 // Re-export core types for convenience

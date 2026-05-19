@@ -61,6 +61,29 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 - **Safe cancellation**: Mid-stream downloads can be cancelled via USB SIC class cancel
 - **Type-safe handles**: Newtypes prevent ID mixups
 
+## Cooperative cancellation for list/delete ops
+
+`Storage::list_objects_with_cancel`, `list_objects_stream_with_cancel`, and
+`delete_with_cancel` take an `Option<&CancelToken>`. The token is
+`Arc<AtomicBool>`-backed, cheap to clone, and one-way (no reset; make a fresh
+token per logical op). When set, `ObjectListing::next` checks before issuing
+each `GetObjectInfo` USB roundtrip and bails with `Err(Error::Cancelled)`.
+
+If you already have an `Arc<AtomicBool>` driving cancellation on the consumer
+side (a write-operation intent flag, a shared abort signal, anything), use
+`CancelToken::from_arc(arc)` to wrap it without a second polling task. The
+constructor shares the atomic, so flipping the consumer-side bool also flips
+the token; `Default::default()` builds a fresh one from scratch.
+
+For per-handle list/delete this is sufficient and safer than mid-USB-transaction
+cancel: each `GetObjectInfo` and `DeleteObject` roundtrip completes in
+milliseconds, so there's no half-finished transfer to drain. The CancelToken
+short-circuits the per-handle for-loop, which is where 1k-entry Android folder
+listings actually spend their 15+ seconds.
+
+Streaming downloads keep using the SIC class-cancel path (see below); that's a
+different mechanism for a different problem (one big bulk-IN to drain).
+
 ## Transfer cancellation
 
 Mid-stream download cancellation uses the USB Still Image Class (SIC) cancel

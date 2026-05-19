@@ -1,5 +1,6 @@
 //! Storage operations.
 
+use crate::cancel::{bail_if_cancelled, CancelToken};
 use crate::mtp::object::NewObjectInfo;
 use crate::mtp::stream::{FileDownload, Progress};
 use crate::ptp::{ObjectHandle, ObjectInfo, StorageId, StorageInfo};
@@ -49,6 +50,9 @@ pub struct ObjectListing {
     cursor: usize,
     /// Parent filter: if Some, only items matching this parent are yielded.
     parent_filter: Option<ParentFilter>,
+    /// Optional cancellation handle. When set and flipped, [`next`](Self::next)
+    /// returns `Some(Err(Error::Cancelled))` at the next per-handle boundary.
+    cancel: Option<CancelToken>,
 }
 
 /// Describes how to filter objects by parent handle.
@@ -79,10 +83,21 @@ impl ObjectListing {
     ///
     /// Returns `None` when all handles have been processed.
     /// Items that don't match the parent filter are silently skipped.
+    ///
+    /// If a [`CancelToken`] was passed via
+    /// [`Storage::list_objects_stream_with_cancel`] and it's been cancelled,
+    /// this returns `Some(Err(Error::Cancelled))` at the next per-handle
+    /// boundary (typically within one `GetObjectInfo` USB roundtrip).
     pub async fn next(&mut self) -> Option<Result<ObjectInfo, Error>> {
         loop {
             if self.cursor >= self.handles.len() {
                 return None;
+            }
+
+            // Cooperative cancel check before issuing the per-handle USB
+            // roundtrip. On a 1k-photo listing this is the actual stop point.
+            if let Err(e) = bail_if_cancelled(self.cancel.as_ref()) {
+                return Some(Err(e));
             }
 
             let handle = self.handles[self.cursor];
@@ -157,7 +172,25 @@ impl Storage {
         &self,
         parent: Option<ObjectHandle>,
     ) -> Result<Vec<ObjectInfo>, Error> {
-        let mut listing = self.list_objects_stream(parent).await?;
+        self.list_objects_with_cancel(parent, None).await
+    }
+
+    /// Like [`list_objects`](Self::list_objects), but takes a cooperative
+    /// cancellation token.
+    ///
+    /// When `cancel` is `Some(&token)` and the token has been cancelled, the
+    /// call bails between per-handle fetches with `Err(Error::Cancelled)`.
+    /// Useful for large folders (1k+ entries on Android), where the
+    /// `GetObjectInfo` per-handle loop dominates wall-clock time.
+    ///
+    /// Pass `None` for backwards-compatible behavior identical to
+    /// `list_objects`.
+    pub async fn list_objects_with_cancel(
+        &self,
+        parent: Option<ObjectHandle>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Vec<ObjectInfo>, Error> {
+        let mut listing = self.list_objects_stream_with_cancel(parent, cancel).await?;
         let mut objects = Vec::with_capacity(listing.total());
         while let Some(result) = listing.next().await {
             objects.push(result?);
@@ -205,6 +238,21 @@ impl Storage {
         &self,
         parent: Option<ObjectHandle>,
     ) -> Result<ObjectListing, Error> {
+        self.list_objects_stream_with_cancel(parent, None).await
+    }
+
+    /// Like [`list_objects_stream`](Self::list_objects_stream), but the returned
+    /// [`ObjectListing`] carries an optional [`CancelToken`]. Every call to
+    /// [`ObjectListing::next`] checks the token before issuing the next
+    /// `GetObjectInfo` USB roundtrip, so a flipped token bails within one
+    /// roundtrip's worth of latency instead of running to completion.
+    pub async fn list_objects_stream_with_cancel(
+        &self,
+        parent: Option<ObjectHandle>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<ObjectListing, Error> {
+        bail_if_cancelled(cancel)?;
+
         // For root listings, try parent=0xFFFFFFFF first. Many devices (Android,
         // Kindle, others) return only root-level handles for this value, while
         // parent=0 returns every object on the storage. Fall back to parent=0
@@ -223,6 +271,7 @@ impl Storage {
                         handles,
                         cursor: 0,
                         parent_filter: Some(ParentFilter::AndroidRoot),
+                        cancel: cancel.cloned(),
                     });
                 }
                 Err(_) => {
@@ -230,6 +279,8 @@ impl Storage {
                 }
             }
         }
+
+        bail_if_cancelled(cancel)?;
 
         let result = self
             .inner
@@ -244,7 +295,7 @@ impl Storage {
                 ..
             }) if parent.is_none() => {
                 // Samsung fallback: use recursive listing and filter to root items
-                return self.list_objects_stream_samsung_fallback().await;
+                return self.list_objects_stream_samsung_fallback(cancel).await;
             }
             Err(e) => return Err(e),
         };
@@ -256,11 +307,15 @@ impl Storage {
             handles,
             cursor: 0,
             parent_filter,
+            cancel: cancel.cloned(),
         })
     }
 
     /// Samsung fallback returning a streaming [`ObjectListing`].
-    async fn list_objects_stream_samsung_fallback(&self) -> Result<ObjectListing, Error> {
+    async fn list_objects_stream_samsung_fallback(
+        &self,
+        cancel: Option<&CancelToken>,
+    ) -> Result<ObjectListing, Error> {
         let handles = self
             .inner
             .session
@@ -273,6 +328,7 @@ impl Storage {
             cursor: 0,
             // Root items have parent 0 or 0xFFFFFFFF (depending on device)
             parent_filter: Some(ParentFilter::AndroidRoot),
+            cancel: cancel.cloned(),
         })
     }
 
@@ -571,6 +627,22 @@ impl Storage {
     }
 
     pub async fn delete(&self, handle: ObjectHandle) -> Result<(), Error> {
+        self.inner.session.delete_object(handle).await
+    }
+
+    /// Like [`delete`](Self::delete), but bails with `Err(Error::Cancelled)`
+    /// before issuing the PTP `DeleteObject` request when the token is set.
+    ///
+    /// The PTP `DeleteObject` is a single fast transaction (no internal loop),
+    /// so the meaningful cancel point is _between_ recursive iterations on the
+    /// caller side. This entry point lets callers thread the same token through
+    /// list and delete without juggling two API shapes.
+    pub async fn delete_with_cancel(
+        &self,
+        handle: ObjectHandle,
+        cancel: Option<&CancelToken>,
+    ) -> Result<(), Error> {
+        bail_if_cancelled(cancel)?;
         self.inner.session.delete_object(handle).await
     }
 
@@ -1088,6 +1160,128 @@ mod tests {
         let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
 
         assert_eq!(info.size, REAL_SIZE);
+    }
+
+    // -- CancelToken support --------------------------------------------------
+
+    #[tokio::test]
+    async fn cancel_before_first_handle_bails_immediately() {
+        // Cancel set before the first GetObjectInfo is issued: no per-handle
+        // USB calls happen at all. We only queue the OpenSession and the
+        // GetObjectHandles responses; if `next()` issued a GetObjectInfo,
+        // the mock would block waiting for an unqueued response.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_handles(&mock, 1, &[10, 20, 30]);
+
+        let storage = mock_storage(transport, "").await;
+        let cancel = CancelToken::new();
+        let mut listing = storage
+            .list_objects_stream_with_cancel(None, Some(&cancel))
+            .await
+            .unwrap();
+
+        assert_eq!(listing.total(), 3);
+
+        // Flip cancel before pulling any handles.
+        cancel.cancel();
+
+        let first = listing.next().await.expect("expected Some(Err(Cancelled))");
+        assert!(matches!(first, Err(Error::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn cancel_mid_listing_bails_at_next_boundary() {
+        // Queue two GetObjectInfo responses; pull one successfully, then cancel
+        // and assert the next call returns Cancelled instead of fetching the
+        // third (which we never queue).
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_handles(&mock, 1, &[10, 20, 30]);
+        queue_object_info(&mock, 2, "first.jpg", 0);
+        // Only one GetObjectInfo is queued; if cancel didn't short-circuit,
+        // the test would block on the unqueued second response.
+
+        let storage = mock_storage(transport, "").await;
+        let cancel = CancelToken::new();
+        let mut listing = storage
+            .list_objects_stream_with_cancel(None, Some(&cancel))
+            .await
+            .unwrap();
+
+        let first = listing.next().await.unwrap().unwrap();
+        assert_eq!(first.filename, "first.jpg");
+
+        // Cancel between iterations; the next() call should see it before the
+        // second GetObjectInfo USB roundtrip.
+        cancel.cancel();
+
+        let second = listing.next().await.expect("expected Some(Err(Cancelled))");
+        assert!(matches!(second, Err(Error::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn cancel_via_list_objects_returns_cancelled_error() {
+        // list_objects_with_cancel surfaces the inner Cancelled error to the
+        // caller, not a Vec.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_handles(&mock, 1, &[10, 20, 30]);
+
+        let storage = mock_storage(transport, "").await;
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let result = storage.list_objects_with_cancel(None, Some(&cancel)).await;
+        assert!(matches!(result, Err(Error::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn delete_with_cancel_bails_before_request() {
+        // delete_with_cancel must NOT issue the DeleteObject request when the
+        // token is set. We don't queue any response after the OpenSession; if
+        // the implementation issued the request, the call would block waiting
+        // for an unqueued response.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+
+        let storage = mock_storage(transport, "").await;
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let result = storage
+            .delete_with_cancel(ObjectHandle(1), Some(&cancel))
+            .await;
+        assert!(matches!(result, Err(Error::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn delete_with_cancel_no_token_runs_normally() {
+        // None token: behaves identically to delete().
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        mock.queue_response(ok_response(1)); // DeleteObject
+
+        let storage = mock_storage(transport, "").await;
+        let result = storage.delete_with_cancel(ObjectHandle(1), None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancel_does_not_affect_unset_token() {
+        // Sanity: the new code path with `cancel: None` must produce identical
+        // results to the legacy `list_objects` API.
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        queue_handles(&mock, 1, &[10, 20]);
+        queue_object_info(&mock, 2, "a.jpg", 0);
+        queue_object_info(&mock, 3, "b.jpg", 0);
+
+        let storage = mock_storage(transport, "").await;
+        let objects = storage.list_objects_with_cancel(None, None).await.unwrap();
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].filename, "a.jpg");
+        assert_eq!(objects[1].filename, "b.jpg");
     }
 
     #[tokio::test]

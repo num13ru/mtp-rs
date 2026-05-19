@@ -75,6 +75,38 @@ async fn main() -> Result<(), mtp_rs::Error> {
 }
 ```
 
+## Cancellation
+
+Long operations on large folders (Android `/DCIM/Camera` with 1k+ photos, recursive deletes) are made up of many small per-object USB roundtrips. Pass a [`CancelToken`](https://docs.rs/mtp-rs/latest/mtp_rs/cancel/struct.CancelToken.html) to bail mid-loop within one roundtrip's latency:
+
+```rust
+use mtp_rs::{CancelToken, mtp::MtpDevice};
+
+#[tokio::main]
+async fn main() -> Result<(), mtp_rs::Error> {
+    let device = MtpDevice::open_first().await?;
+    let storage = &device.storages().await?[0];
+
+    let cancel = CancelToken::new();
+
+    // Fire the cancel from another task.
+    let cancel_for_task = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        cancel_for_task.cancel();
+    });
+
+    match storage.list_objects_with_cancel(None, Some(&cancel)).await {
+        Ok(objects) => println!("Listed {} objects", objects.len()),
+        Err(mtp_rs::Error::Cancelled) => println!("Cancelled mid-listing"),
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}
+```
+
+`CancelToken` is `Arc`-backed (cheap to clone), `Send + Sync`, and one-way (no reset — make a fresh token per logical operation). Streaming downloads use a separate mechanism: see [`FileDownload::cancel`](https://docs.rs/mtp-rs/latest/mtp_rs/mtp/struct.FileDownload.html#method.cancel) for USB SIC class-cancel.
+
 ## Installation
 
 Add to your `Cargo.toml`:

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-05-19
+
+### Added
+
+- **Cooperative cancellation for long list and delete operations via `CancelToken`.** New `cancel` module exposes `CancelToken` (`Arc<AtomicBool>`-backed, `Clone + Send + Sync`) and re-exports it at the crate root. `Storage::list_objects_with_cancel`, `Storage::list_objects_stream_with_cancel`, and `Storage::delete_with_cancel` accept an `Option<&CancelToken>`. When the token flips, the per-handle iteration inside `ObjectListing::next` returns `Err(Error::Cancelled)` at the next per-object boundary (typically within one `GetObjectInfo` USB roundtrip), instead of running the full 1k+ entry loop to completion. The token is one-way and cheap to clone, so consumers make a fresh one per logical op.
+- **`CancelToken::from_arc(Arc<AtomicBool>)`** wraps a consumer-owned atomic so existing cancellation state (a write-op intent flag, a shared abort signal) flips the token directly. No second polling task, no two-way sync.
+- The existing `Storage::list_objects` / `list_objects_stream` / `delete` entry points stay for backwards compatibility. They now delegate to the `_with_cancel` variants with `None`.
+
+### Notes
+
+- Streaming downloads keep their existing USB SIC class-cancel path via `FileDownload::cancel`. That handles a different problem (one long bulk-IN to drain) and stays unchanged.
+- Per-handle cancellation only fires at per-object boundaries, which is where slow listings actually spend their time. Mid-USB-transaction cancel for these ops would be both more complex and less safe (drain semantics on a half-finished `GetObjectInfo` are device-dependent).
+
 ## [0.14.0] - 2026-05-15
 
 ### Added
