@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-05-23
+
+### Added
+
+- **Event-driven backing-dir drain for virtual devices.** Tests that recreate a virtual device's backing dir externally previously had to sleep ≥600 ms (macOS FSEvents worst-case) after the writes before resuming the watcher, or risk stale events corrupting the object tree. The new observation surface replaces that with actual quiescence:
+  - `dropped_paths_since_pause(serial) -> Vec<PathBuf>` returns the canonical paths the watcher has dropped while paused, oldest first. This is the **primary primitive** — compose your own pattern on top (sentinel-file drain, event-count quiescence, per-subdir filter).
+  - `was_path_dropped(serial, suffix) -> bool` is a thin convenience wrapper for the sentinel-file pattern: write a uniquely-named file as the LAST fixture step, poll this until it returns `true`. Per-directory FS-event ordering on every supported `notify` backend means every earlier write to the same directory already arrived. Suffix-match sidesteps `/tmp` ↔ `/private/tmp` canonicalization.
+  - `clear_dropped_paths(serial)` empties the ring after a successful drain.
+  - The ring is capped at `DROPPED_PATHS_CAP = 1024` entries (publicly visible constant; ~160 KB worst case). Oldest evicted on push past the cap.
+- **Refcounted pause/resume.** `pause_watcher` now increments an internal `pause_count` instead of flipping a `bool`; `WatcherGuard::drop` decrements it. The watcher actually resumes only when the last guard drops, so multiple concurrent test drains compose correctly. Previously, two concurrent drains would race: one would resume while the other's events were still in flight. Backwards-compatible API — the change is internal to `VirtualDeviceState` (`pub(super)` field), and single-guard usage behaves identically.
+
+### Changed
+
+- `WatcherGuard::drop` no longer unconditionally clears the paused flag; it decrements the refcount and only sets the watcher to resume when the count reaches zero. Single-guard usage (the common case) is unchanged. Multi-guard usage now composes correctly instead of racing.
+
+### Notes
+
+- Behind the existing `virtual-device` feature flag; production consumers without that feature compile zero of this. Memory cost (the dropped-paths ring) lives entirely in the virtual-device code path.
+- The watcher integration is exercised end-to-end by downstream consumers' E2E suites (Cmdr's MTP Playwright lane uses the sentinel-file pattern); the library's own unit tests cover the observation API, refcount composition, and ring eviction.
+
 ## [0.15.0] - 2026-05-19
 
 ### Added

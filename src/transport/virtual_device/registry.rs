@@ -6,6 +6,7 @@
 use super::config::VirtualDeviceConfig;
 use super::state::{RescanSummary, VirtualDeviceState};
 use crate::mtp::MtpDeviceInfo;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Base for synthetic location IDs (high range, won't collide with real USB).
@@ -123,10 +124,15 @@ pub(super) fn unregister_active_state(serial: &str) {
     }
 }
 
-/// RAII guard that resumes the filesystem watcher when dropped.
+/// RAII guard that decrements the filesystem watcher's pause refcount when
+/// dropped. Resume happens only when the refcount hits zero, so multiple
+/// concurrent test drains compose correctly: each `pause_watcher` call
+/// increments, each guard drop decrements, and events only flow again once
+/// every guard is gone.
 ///
-/// Created by [`pause_watcher`]. While this guard is alive, all filesystem
-/// events for the device are silently dropped.
+/// Created by [`pause_watcher`]. While at least one guard is alive, all
+/// filesystem events for the device are recorded in `dropped_paths` (capped)
+/// and silently dropped from the live event queue.
 pub struct WatcherGuard {
     state: Arc<Mutex<VirtualDeviceState>>,
 }
@@ -134,19 +140,22 @@ pub struct WatcherGuard {
 impl Drop for WatcherGuard {
     fn drop(&mut self) {
         if let Ok(mut state) = self.state.lock() {
-            state.watcher_paused = false;
+            state.pause_count = state.pause_count.saturating_sub(1);
         }
     }
 }
 
 /// Pause the filesystem watcher for a virtual device, returning a guard that
-/// resumes it on drop.
+/// decrements the pause refcount on drop. The watcher actually resumes only
+/// when the last guard drops.
 ///
-/// While paused, filesystem events are silently dropped. This prevents stale
-/// OS-level events from corrupting the object tree when files in the backing
-/// directory are deleted and recreated externally (outside of MTP). Without
-/// pausing, delayed deletion events can arrive after a rescan has already
-/// re-added the objects, incorrectly removing them.
+/// While paused, filesystem events are silently dropped from the live event
+/// queue AND recorded in the device's `dropped_paths` ring buffer so callers
+/// can observe ordering via [`was_path_dropped`]. This prevents stale OS-level
+/// events from corrupting the object tree when files in the backing directory
+/// are deleted and recreated externally (outside of MTP), and lets test code
+/// know when those events have actually drained (rather than guessing with a
+/// fixed sleep).
 ///
 /// Returns `None` if no active virtual device with that serial exists.
 ///
@@ -161,7 +170,7 @@ impl Drop for WatcherGuard {
 ///     // ... delete and recreate files in the backing directory ...
 ///
 ///     rescan_virtual_device("my-device-serial");
-/// } // watcher resumes here when `_guard` is dropped
+/// } // watcher refcount decremented here when `_guard` is dropped
 /// ```
 pub fn pause_watcher(serial: &str) -> Option<WatcherGuard> {
     let active = active_states().lock().unwrap();
@@ -170,8 +179,79 @@ pub fn pause_watcher(serial: &str) -> Option<WatcherGuard> {
         .find(|(s, _)| s == serial)
         .map(|(_, state)| Arc::clone(state))?;
     drop(active);
-    state_arc.lock().unwrap().watcher_paused = true;
+    state_arc.lock().unwrap().pause_count += 1;
     Some(WatcherGuard { state: state_arc })
+}
+
+/// Returns the canonical paths the watcher has dropped (and recorded) while
+/// paused, oldest first. The ring is capped at
+/// [`DROPPED_PATHS_CAP`](super::state::DROPPED_PATHS_CAP) entries; once the
+/// cap is reached, the oldest entry is evicted on every new push. Cheap
+/// clone-out of the ring.
+///
+/// **This is the primary observation primitive** for test harnesses that
+/// want event-driven confirmation that a backing-dir mutation has been
+/// observed by the watcher. Compose patterns on top of it:
+///
+/// - **Sentinel-file drain**: write a uniquely-named file as the LAST
+///   fixture step, poll until a returned path ends with that name.
+///   Per-directory FS-event ordering on every supported `notify` backend
+///   means every earlier write to the same directory already arrived.
+///   See [`was_path_dropped`] for a thin convenience wrapper.
+/// - **Event-count quiescence**: snapshot `.len()`, wait, snapshot again;
+///   declare quiet when the count hasn't grown for N polls.
+/// - **Per-subdir filter**: count only events under a specific directory.
+///
+/// Returns an empty `Vec` if no active virtual device with that serial
+/// exists, so callers can poll without `Option` plumbing.
+pub fn dropped_paths_since_pause(serial: &str) -> Vec<PathBuf> {
+    let active = active_states().lock().unwrap();
+    let state_arc = match active
+        .iter()
+        .find(|(s, _)| s == serial)
+        .map(|(_, s)| Arc::clone(s))
+    {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    drop(active);
+    let state = state_arc.lock().unwrap();
+    state.dropped_paths.iter().cloned().collect()
+}
+
+/// Returns `true` if any path the watcher dropped while paused ends with
+/// `suffix`. Thin convenience over [`dropped_paths_since_pause`] for the
+/// common sentinel-file drain pattern: write a uniquely-named file as the
+/// LAST fixture step, then poll this until it returns `true`.
+///
+/// The suffix match avoids the caller having to canonicalize the path
+/// (macOS `/tmp` ↔ `/private/tmp`, the watcher's own canonicalization).
+/// Pass a sufficiently unique suffix (a UUID-bearing filename) so concurrent
+/// drains don't false-positive on each other's sentinels.
+///
+/// Returns `false` if no active virtual device with that serial exists.
+pub fn was_path_dropped(serial: &str, suffix: &str) -> bool {
+    dropped_paths_since_pause(serial)
+        .iter()
+        .any(|p| p.to_string_lossy().ends_with(suffix))
+}
+
+/// Clears the recorded `dropped_paths` ring buffer for the device. Cheap;
+/// call it after a successful drain + rescan so the ring stays scoped to
+/// in-flight pauses rather than accumulating across long-running test
+/// sessions.
+pub fn clear_dropped_paths(serial: &str) {
+    let active = active_states().lock().unwrap();
+    let state_arc = match active
+        .iter()
+        .find(|(s, _)| s == serial)
+        .map(|(_, s)| Arc::clone(s))
+    {
+        Some(s) => s,
+        None => return,
+    };
+    drop(active);
+    state_arc.lock().unwrap().dropped_paths.clear();
 }
 
 /// Force a rescan of a virtual device's backing directories, identified by
@@ -374,6 +454,177 @@ mod tests {
         assert_eq!(device.device_info().model, "Registry Phone");
 
         // Clean up
+        unregister_virtual_device(info.location_id);
+    }
+
+    // ── Pause refcount + dropped-paths tracking ─────────────────────────────
+    //
+    // The state lookups below go through `active_states()`, which is the
+    // OPENED-device registry (populated by `VirtualTransport::new`), not the
+    // discovery registry that `register_virtual_device` writes to. So these
+    // tests open a real `MtpDevice` (via `#[tokio::test]` + `open_by_serial`)
+    // and let it `Drop` to unregister via `VirtualTransport::drop`.
+
+    async fn open_test_device(serial: &str) -> (crate::MtpDevice, MtpDeviceInfo) {
+        let dir = tempfile::tempdir().unwrap();
+        // Release the tempdir's auto-cleanup guard so the path stays valid for
+        // the device's lifetime; /tmp clears on reboot, which is fine for test
+        // fixtures.
+        let backing = dir.keep();
+        let config = VirtualDeviceConfig {
+            manufacturer: "TestCorp".into(),
+            model: "Drain Phone".into(),
+            serial: serial.into(),
+            storages: vec![VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024 * 1024 * 1024,
+                backing_dir: backing,
+                read_only: false,
+            }],
+            supports_rename: true,
+            event_poll_interval: Duration::ZERO,
+            watch_backing_dirs: false,
+        };
+        let info = register_virtual_device(&config);
+        let device = crate::MtpDevice::builder()
+            .open_by_serial(serial)
+            .await
+            .unwrap();
+        (device, info)
+    }
+
+    fn state_of(serial: &str) -> Arc<Mutex<VirtualDeviceState>> {
+        let active = active_states().lock().unwrap();
+        active
+            .iter()
+            .find(|(s, _)| s == serial)
+            .map(|(_, s)| Arc::clone(s))
+            .expect("device must be opened (not just registered) before state lookup")
+    }
+
+    #[tokio::test]
+    async fn pause_refcount_composes_across_concurrent_guards() {
+        let (device, info) = open_test_device("pause-refcount-001").await;
+
+        let guard_a = pause_watcher("pause-refcount-001").expect("device is open");
+        assert_eq!(
+            state_of("pause-refcount-001").lock().unwrap().pause_count,
+            1
+        );
+
+        let guard_b = pause_watcher("pause-refcount-001").expect("still open");
+        assert_eq!(
+            state_of("pause-refcount-001").lock().unwrap().pause_count,
+            2
+        );
+
+        // First drop must leave the watcher paused — the other guard is alive.
+        drop(guard_a);
+        assert_eq!(
+            state_of("pause-refcount-001").lock().unwrap().pause_count,
+            1
+        );
+
+        // Last drop releases.
+        drop(guard_b);
+        assert_eq!(
+            state_of("pause-refcount-001").lock().unwrap().pause_count,
+            0
+        );
+
+        drop(device); // VirtualTransport::drop unregisters active state
+        unregister_virtual_device(info.location_id);
+    }
+
+    #[test]
+    fn pause_watcher_returns_none_for_unknown_serial() {
+        // Nothing to open; just hit the lookup miss path.
+        assert!(pause_watcher("pause-refcount-no-such-serial").is_none());
+    }
+
+    #[tokio::test]
+    async fn dropped_paths_observation_round_trip() {
+        let (device, info) = open_test_device("dropped-paths-001").await;
+
+        // Empty before anything pushed.
+        assert!(dropped_paths_since_pause("dropped-paths-001").is_empty());
+        assert!(!was_path_dropped("dropped-paths-001", "sentinel-xyz"));
+
+        // Push two paths directly (this unit tests the observation API; the
+        // watcher's own dropped-paths push path is covered by the downstream
+        // virtual-mtp E2E suite, where the OS actually delivers FS events).
+        {
+            let state_arc = state_of("dropped-paths-001");
+            let mut state = state_arc.lock().unwrap();
+            state
+                .dropped_paths
+                .push_back(PathBuf::from("/tmp/cmdr-mtp/internal/foo.txt"));
+            state
+                .dropped_paths
+                .push_back(PathBuf::from("/tmp/cmdr-mtp/internal/sentinel-xyz"));
+        }
+
+        // Primary primitive returns both, oldest first.
+        let paths = dropped_paths_since_pause("dropped-paths-001");
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("/tmp/cmdr-mtp/internal/foo.txt"));
+
+        // Suffix convenience matches.
+        assert!(was_path_dropped("dropped-paths-001", "sentinel-xyz"));
+        assert!(was_path_dropped("dropped-paths-001", "/foo.txt")); // suffix, not basename
+        assert!(!was_path_dropped("dropped-paths-001", "not-there"));
+
+        // Clear empties the ring without affecting the device's other state.
+        clear_dropped_paths("dropped-paths-001");
+        assert!(dropped_paths_since_pause("dropped-paths-001").is_empty());
+
+        drop(device);
+        unregister_virtual_device(info.location_id);
+    }
+
+    #[test]
+    fn dropped_paths_for_unknown_serial_returns_empty() {
+        // Defensively returns Vec::new() / false instead of panicking, so
+        // polling loops don't have to special-case device unregistration.
+        assert!(dropped_paths_since_pause("dropped-paths-no-such-serial").is_empty());
+        assert!(!was_path_dropped(
+            "dropped-paths-no-such-serial",
+            "anything"
+        ));
+        clear_dropped_paths("dropped-paths-no-such-serial"); // no-op, must not panic
+    }
+
+    #[tokio::test]
+    async fn dropped_paths_ring_evicts_oldest_past_cap() {
+        use crate::transport::virtual_device::state::DROPPED_PATHS_CAP;
+
+        let (device, info) = open_test_device("dropped-paths-cap-001").await;
+
+        // Push cap + 5 entries directly. Oldest 5 must evict; newest 5 must
+        // remain at the back.
+        {
+            let state_arc = state_of("dropped-paths-cap-001");
+            let mut state = state_arc.lock().unwrap();
+            for i in 0..(DROPPED_PATHS_CAP + 5) {
+                state
+                    .dropped_paths
+                    .push_back(PathBuf::from(format!("/tmp/drop-{i}")));
+                if state.dropped_paths.len() > DROPPED_PATHS_CAP {
+                    state.dropped_paths.pop_front();
+                }
+            }
+        }
+
+        let paths = dropped_paths_since_pause("dropped-paths-cap-001");
+        assert_eq!(paths.len(), DROPPED_PATHS_CAP);
+        // The first 5 (indices 0..5) were evicted; oldest surviving is index 5.
+        assert_eq!(paths[0], PathBuf::from("/tmp/drop-5"));
+        assert_eq!(
+            paths[DROPPED_PATHS_CAP - 1],
+            PathBuf::from(format!("/tmp/drop-{}", DROPPED_PATHS_CAP + 4))
+        );
+
+        drop(device);
         unregister_virtual_device(info.location_id);
     }
 }

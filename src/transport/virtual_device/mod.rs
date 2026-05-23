@@ -54,8 +54,8 @@ use crate::ptp::{unpack_u16, unpack_u32};
 use crate::transport::Transport;
 use async_trait::async_trait;
 use config::VirtualDeviceConfig;
-pub use state::RescanSummary;
 use state::{PendingCommand, VirtualDeviceState};
+pub use state::{RescanSummary, DROPPED_PATHS_CAP};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

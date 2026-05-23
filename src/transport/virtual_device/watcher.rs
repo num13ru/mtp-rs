@@ -154,7 +154,14 @@ fn handle_notify_event(
 
         let mut state = state.lock().unwrap();
 
-        if state.watcher_paused {
+        if state.pause_count > 0 {
+            // Record the dropped path so test harnesses can wait for a sentinel
+            // file's event to confirm the queue has drained past their writes.
+            // Bound the ring at DROPPED_PATHS_CAP so memory stays scoped.
+            state.dropped_paths.push_back(canonical.clone());
+            if state.dropped_paths.len() > super::state::DROPPED_PATHS_CAP {
+                state.dropped_paths.pop_front();
+            }
             continue;
         }
 

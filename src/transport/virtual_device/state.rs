@@ -60,11 +60,33 @@ pub(super) struct VirtualDeviceState {
     pub pending_command: Option<PendingCommand>,
     pub event_queue: VecDeque<Vec<u8>>,
     pub response_queue: VecDeque<Vec<u8>>,
-    /// When true, the filesystem watcher silently drops all events. Managed
-    /// by [`WatcherGuard`](super::registry::WatcherGuard) via
-    /// [`pause_watcher`](super::registry::pause_watcher).
-    pub(super) watcher_paused: bool,
+    /// Refcount of in-flight pause guards. When > 0, the filesystem watcher
+    /// silently drops all events (and records them in `dropped_paths` so test
+    /// code can observe a sentinel arriving). Refcounted so multiple concurrent
+    /// test drains compose correctly: the watcher only resumes when the last
+    /// guard drops. Managed by [`WatcherGuard`](super::registry::WatcherGuard)
+    /// via [`pause_watcher`](super::registry::pause_watcher).
+    pub(super) pause_count: u32,
+    /// Canonical paths the watcher dropped while paused. Bounded (oldest evicted
+    /// past `DROPPED_PATHS_CAP`). Test code writes a unique sentinel file after
+    /// recreating fixtures and polls this set to confirm the watcher's queue
+    /// has drained past that point: per-directory ordering on every supported
+    /// `notify` backend means the sentinel's event arrives after every event
+    /// from any preceding write to the same directory.
+    pub(super) dropped_paths: VecDeque<PathBuf>,
 }
+
+/// Maximum number of entries in [`VirtualDeviceState::dropped_paths`]; oldest
+/// is evicted on push past this. 1024 comfortably holds the events from a few
+/// hundred concurrent fixture-recreate drains; bounds memory at ~160 KB worst
+/// case (1024 × ~150 byte `PathBuf` average), so long-running test sessions
+/// can't leak.
+///
+/// If your test scenario pauses the watcher for multi-minute spans and
+/// generates more than 1024 FS events you care about, file an issue — a
+/// runtime-configurable cap is the natural next step, but every consumer so
+/// far has been comfortably under the default.
+pub const DROPPED_PATHS_CAP: usize = 1024;
 
 impl VirtualDeviceState {
     /// Create initial state from config.
@@ -98,7 +120,8 @@ impl VirtualDeviceState {
             pending_command: None,
             event_queue: VecDeque::new(),
             response_queue: VecDeque::new(),
-            watcher_paused: false,
+            pause_count: 0,
+            dropped_paths: VecDeque::new(),
         }
     }
 

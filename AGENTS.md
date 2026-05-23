@@ -134,6 +134,24 @@ the header) before parsing.** See `PtpSession::execute_with_receive` and
 `PtpDevice::get_device_info` for the canonical pattern. Skipping this loop
 breaks GetDeviceInfo on spec-compliant devices that split.
 
+## Test-time backing-dir drain (virtual-device only)
+
+External test fixtures that delete and recreate files in a virtual device's backing dir hit the same race the watcher's pause/resume is designed to prevent: FS events from the writes can land *after* the rescan and resume, and the watcher then incorrectly emits removes for the freshly re-added objects. Old approach: pause, write, sleep ≥600 ms (macOS FSEvents worst-case), rescan, resume. Slow and brittle.
+
+The current API supports an event-driven drain:
+
+- `pause_watcher(serial)` returns a `WatcherGuard`. The pause is **refcounted** (`VirtualDeviceState::pause_count`), so multiple concurrent guards compose — the watcher only resumes when the last guard drops. Tests can drain in parallel without stepping on each other.
+- While at least one guard is alive, every dropped FS event's canonical path is pushed into `VirtualDeviceState::dropped_paths` (a `VecDeque` capped at `DROPPED_PATHS_CAP = 1024`, oldest evicted past that).
+- `dropped_paths_since_pause(serial) -> Vec<PathBuf>` is the **primary observation primitive**: returns a clone of the ring, oldest first.
+- `was_path_dropped(serial, suffix) -> bool` is a thin convenience over the above for the sentinel-file drain pattern: write a uniquely-named file as the LAST fixture step (per-directory FS-event ordering on every supported `notify` backend means every earlier write to the same directory already arrived once you see the sentinel), then poll this until it returns `true`.
+- `clear_dropped_paths(serial)` empties the ring; call after a successful drain so the buffer stays scoped to in-flight pauses.
+
+**Why suffix-match, not exact path**: macOS canonicalizes `/tmp` → `/private/tmp`, the watcher canonicalizes again, and the backing-dir path may be relative. Suffix-match sidesteps the whole class of false negatives. Choose a unique enough suffix (UUID-bearing filename) so concurrent drains don't false-positive on each other.
+
+**Composing your own pattern**: any test harness that doesn't fit sentinel-file (counting events under a subdir, declaring quiet when the count hasn't grown for N polls) should call `dropped_paths_since_pause` directly. `was_path_dropped` exists for the common case only.
+
+Unit tests for the API live in `transport/virtual_device/registry.rs` (`pause_refcount_composes_across_concurrent_guards`, `dropped_paths_observation_round_trip`, `dropped_paths_ring_evicts_oldest_past_cap`, and the unknown-serial defensive paths).
+
 ## Things to avoid
 
 - C dependencies (libusb, libmtp, `-sys` crates)
