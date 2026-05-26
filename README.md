@@ -124,9 +124,62 @@ the most common choice:
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-### Platform notes
+## CLI
 
-#### Linux
+`mtp-rs` also ships a universal MTP file-transfer CLI. It is not tied to a
+specific device brand: Android phones, Kindles, Garmin watches, media players,
+and other MTP devices all use the same `devices`, `info`, `ls`, `put`, `get`,
+`mkdir`, `rm`, `rename`, `mv`, `cp`, and `doctor` commands.
+
+Install it with the `cli` feature:
+
+```sh
+cargo install mtp-rs --features cli
+```
+
+```sh
+# List visible devices
+mtp-rs devices
+mtp-rs devices --json
+
+# Inspect the selected device and its storages
+mtp-rs info --device SERIAL
+
+# List files
+mtp-rs ls /
+mtp-rs ls /Music --recursive
+
+# Upload and download files
+mtp-rs put ./song.mp3 /Music/song.mp3 --replace
+mtp-rs get /Music/song.mp3 ./song.mp3
+
+# Create and remove remote objects
+mtp-rs mkdir /Upload
+mtp-rs rm /Upload/old.bin --yes
+
+# Rename, move, and copy remote objects
+mtp-rs rename /Upload/old.bin new.bin
+mtp-rs mv /Upload/new.bin /Archive/new.bin
+mtp-rs cp /Archive/new.bin /Archive/new-copy.bin
+
+# Diagnose access, storage, and common USB ownership issues
+mtp-rs doctor
+```
+
+Remote paths are POSIX-like and absolute: `/`, `/Music/song.mp3`,
+`/GARMIN/APPS/app.prg`. Device-specific workflows are expressed through normal
+file operations. For example, Garmin Connect IQ sideloading is just:
+
+```sh
+mtp-rs put ./MyApp.prg /GARMIN/APPS/MyApp.prg --replace --verify
+```
+
+See [docs/cli.md](docs/cli.md) for command reference, path semantics, JSON
+output, exit codes, and troubleshooting.
+
+## Platform notes
+
+### Linux
 
 You may need udev rules to access USB devices without root. Create `/etc/udev/rules.d/99-mtp.rules`:
 
@@ -136,7 +189,7 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="*",  MODE="0666"
 
 Then run `sudo udevadm control --reload-rules`.
 
-#### macOS
+### macOS
 
 It's a bit of a nightmare because macOS's built-in `ptpcamerad` daemon automatically claims MTP/PTP devices right on
 connection, blocking other apps. This sucks because it it NOT `MTP`, just `PTP`, so Android phones, Kindles, etc.
@@ -146,6 +199,11 @@ this) will be unable to access the device. 🤯
 One more potential offender is [Android File Transfer](https://www.android-file-transfer-mac.com/): If installed, it
 spawns a process that also grabs devices. You must quit it before trying to connect to an MTP device using this (or,
 honestly, any) library.
+
+Recent macOS versions can also deny USB user-client access to processes that are launched from background agents or
+tool runners instead of a normal app/Terminal context. In that case the device may appear in `mtp-rs devices`, but open
+fails while creating the IOKit PlugInInterface. Try running the CLI from Terminal or iTerm with the Mac unlocked and the
+accessory allowed.
 
 **Workarounds:**
 
@@ -172,7 +230,7 @@ honestly, any) library.
 - See [Cmdr](https://github.com/vdavid/cmdr) and [Commander One](https://mac.eltima.com/file-manager.html) for UX
   inspiration on handling this gracefully.
 
-#### Windows
+### Windows
 
 Should work, and no dependencies needed, but we haven't tested it.
 
