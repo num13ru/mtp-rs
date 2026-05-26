@@ -3,6 +3,8 @@ mod cli;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    register_test_virtual_device();
+
     match cli::run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
@@ -14,3 +16,30 @@ async fn main() -> std::process::ExitCode {
         }
     }
 }
+
+#[cfg(all(feature = "virtual-device", debug_assertions))]
+fn register_test_virtual_device() {
+    let Ok(root) = std::env::var("__MTP_RS_TEST_VIRTUAL_ROOT") else {
+        return;
+    };
+    let serial = std::env::var("__MTP_RS_TEST_VIRTUAL_SERIAL")
+        .unwrap_or_else(|_| "mtp-rs-cli-test".to_string());
+    let config = mtp_rs::VirtualDeviceConfig {
+        manufacturer: "TestCorp".into(),
+        model: "CLI Test Device".into(),
+        serial,
+        storages: vec![mtp_rs::VirtualStorageConfig {
+            description: "Internal Storage".into(),
+            capacity: 64 * 1024 * 1024,
+            backing_dir: std::path::PathBuf::from(root),
+            read_only: false,
+        }],
+        supports_rename: true,
+        event_poll_interval: std::time::Duration::ZERO,
+        watch_backing_dirs: false,
+    };
+    let _ = mtp_rs::register_virtual_device(&config);
+}
+
+#[cfg(not(all(feature = "virtual-device", debug_assertions)))]
+fn register_test_virtual_device() {}
