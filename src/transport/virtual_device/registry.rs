@@ -55,6 +55,7 @@ pub fn register_virtual_device(config: &VirtualDeviceConfig) -> MtpDeviceInfo {
         serial_number: Some(config.serial.clone()),
         location_id,
         speed: None,
+        match_reason: crate::transport::MtpMatchReason::KnownVidPid,
     };
 
     reg.devices.push(VirtualRegistration {

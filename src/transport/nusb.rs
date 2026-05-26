@@ -61,6 +61,32 @@ impl UsbSpeed {
     }
 }
 
+/// Why a USB device was classified as an MTP candidate.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum MtpMatchReason {
+    /// Device or interface class/subclass/protocol matched Still Image / MTP.
+    StandardClass,
+    /// The OS-published interface string identifies the interface as MTP.
+    InterfaceString,
+    /// Caller supplied the VID/PID through `known` devices.
+    KnownVidPid,
+    /// The opened configuration descriptor has the MTP endpoint layout.
+    OpenedDescriptorScan,
+}
+
+impl MtpMatchReason {
+    /// Stable snake_case identifier for machine-readable output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StandardClass => "standard_class",
+            Self::InterfaceString => "interface_string",
+            Self::KnownVidPid => "known_vid_pid",
+            Self::OpenedDescriptorScan => "opened_descriptor_scan",
+        }
+    }
+}
+
 /// USB device information with topology-based location ID.
 ///
 /// Marked `#[non_exhaustive]` so future field additions don't break consumers
@@ -84,6 +110,8 @@ pub struct UsbDeviceInfo {
     /// Negotiated USB link speed (slowest of host port, cable, device).
     /// `None` if the OS doesn't report it for this device.
     pub speed: Option<UsbSpeed>,
+    /// Why this device was classified as an MTP candidate.
+    pub match_reason: MtpMatchReason,
     /// Reference to the underlying nusb device info for opening
     nusb_info: nusb::DeviceInfo,
 }
@@ -129,11 +157,11 @@ impl NusbTransport {
         let devices = nusb::list_devices()
             .wait()
             .map_err(crate::Error::Usb)?
-            .filter(|dev| Self::is_mtp_device(dev, known))
-            .map(|dev| {
+            .filter_map(|dev| {
+                let match_reason = Self::mtp_match_reason(&dev, known)?;
                 let location_id = location_id_from_topology(&dev);
                 let speed = dev.speed().and_then(UsbSpeed::from_nusb);
-                UsbDeviceInfo {
+                Some(UsbDeviceInfo {
                     vendor_id: dev.vendor_id(),
                     product_id: dev.product_id(),
                     manufacturer: dev.manufacturer_string().map(String::from),
@@ -141,8 +169,9 @@ impl NusbTransport {
                     serial_number: dev.serial_number().map(String::from),
                     location_id,
                     speed,
+                    match_reason,
                     nusb_info: dev,
-                }
+                })
             })
             .collect();
         Ok(devices)
@@ -154,30 +183,35 @@ impl NusbTransport {
     /// an interface with the MTP endpoint layout, or matches one of the
     /// caller-provided VID/PID pairs (used for devices with non-standard USB
     /// descriptors that still speak MTP).
-    fn is_mtp_device(dev: &nusb::DeviceInfo, known: &[(u16, u16)]) -> bool {
+    fn mtp_match_reason(dev: &nusb::DeviceInfo, known: &[(u16, u16)]) -> Option<MtpMatchReason> {
         // Fast path: caller-supplied known devices that may use non-standard descriptors.
         if known
             .iter()
             .any(|&(v, p)| v == dev.vendor_id() && p == dev.product_id())
         {
-            return true;
+            return Some(MtpMatchReason::KnownVidPid);
         }
 
         // Check device class/subclass/protocol at device level.
         if Self::is_mtp_class(dev.class(), dev.subclass(), dev.protocol()) {
-            return true;
+            return Some(MtpMatchReason::StandardClass);
         }
 
         // Many devices are composite (class 0) or vendor-specific (class 0xFF)
         // with MTP on one interface. Only inspect these further.
         if dev.class() != 0 && dev.class() != MTP_CLASS_VENDOR {
-            return false;
+            return None;
         }
 
         // Check interface-level class info available from DeviceInfo without opening.
         for intf in dev.interfaces() {
-            if Self::is_mtp_class(intf.class(), intf.subclass(), intf.protocol()) {
-                return true;
+            if let Some(reason) = Self::mtp_summary_match_reason(
+                intf.class(),
+                intf.subclass(),
+                intf.protocol(),
+                intf.interface_string(),
+            ) {
+                return Some(reason);
             }
         }
 
@@ -189,14 +223,29 @@ impl NusbTransport {
                 for interface in config.interfaces() {
                     if let Some(alt) = interface.alt_settings().next() {
                         if Self::is_mtp_interface(&alt) {
-                            return true;
+                            return Some(MtpMatchReason::OpenedDescriptorScan);
                         }
                     }
                 }
             }
         }
 
-        false
+        None
+    }
+
+    fn mtp_summary_match_reason(
+        class: u8,
+        subclass: u8,
+        protocol: u8,
+        interface_string: Option<&str>,
+    ) -> Option<MtpMatchReason> {
+        if Self::is_mtp_class(class, subclass, protocol) {
+            return Some(MtpMatchReason::StandardClass);
+        }
+        if interface_string.is_some_and(|s| s.trim().eq_ignore_ascii_case("MTP")) {
+            return Some(MtpMatchReason::InterfaceString);
+        }
+        None
     }
 
     /// Check if class/subclass/protocol match standard MTP identifiers.
@@ -765,6 +814,45 @@ mod tests {
         for (a, b) in tiers.iter().zip(tiers.iter().skip(1)) {
             assert_ne!(a, b);
         }
+    }
+
+    #[test]
+    fn summary_match_accepts_garmin_style_mtp_interface_string() {
+        assert_eq!(
+            NusbTransport::mtp_summary_match_reason(0xff, 0xff, 0x00, Some("MTP")),
+            Some(MtpMatchReason::InterfaceString)
+        );
+    }
+
+    #[test]
+    fn summary_match_rejects_vendor_specific_without_mtp_string() {
+        assert_eq!(
+            NusbTransport::mtp_summary_match_reason(0xff, 0xff, 0x00, None),
+            None
+        );
+        assert_eq!(
+            NusbTransport::mtp_summary_match_reason(0xff, 0xff, 0x00, Some("Vendor")),
+            None
+        );
+    }
+
+    #[test]
+    fn summary_match_accepts_standard_class_before_interface_string() {
+        assert_eq!(
+            NusbTransport::mtp_summary_match_reason(0x06, 0x01, 0x01, Some("Camera")),
+            Some(MtpMatchReason::StandardClass)
+        );
+    }
+
+    #[test]
+    fn match_reason_as_str_uses_stable_snake_case_values() {
+        assert_eq!(MtpMatchReason::StandardClass.as_str(), "standard_class");
+        assert_eq!(MtpMatchReason::InterfaceString.as_str(), "interface_string");
+        assert_eq!(MtpMatchReason::KnownVidPid.as_str(), "known_vid_pid");
+        assert_eq!(
+            MtpMatchReason::OpenedDescriptorScan.as_str(),
+            "opened_descriptor_scan"
+        );
     }
 
     #[test]

@@ -127,6 +127,7 @@ impl MtpDevice {
                 serial_number: d.serial_number,
                 location_id: d.location_id,
                 speed: d.speed,
+                match_reason: d.match_reason,
             })
             .collect();
 
@@ -366,6 +367,9 @@ pub struct MtpDeviceInfo {
     ///
     /// `None` if the OS doesn't report it for this device.
     pub speed: Option<crate::transport::UsbSpeed>,
+
+    /// Why this USB device was classified as an MTP candidate.
+    pub match_reason: crate::transport::MtpMatchReason,
 }
 
 impl MtpDeviceInfo {
@@ -660,6 +664,7 @@ mod tests {
             serial_number: Some("ABC123".to_string()),
             location_id: 0x00200000,
             speed: None,
+            match_reason: crate::transport::MtpMatchReason::StandardClass,
         };
         let display = with_serial.display();
         assert!(display.contains("Samsung") && display.contains("Galaxy S24"));
