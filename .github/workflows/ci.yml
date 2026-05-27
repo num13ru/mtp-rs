@@ -63,7 +63,10 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
 
-      - name: Check compilation on MSRV
-        run: cargo check --workspace --all-features
+      - name: Check compilation on MSRV (published crates only)
+        # MSRV is a contract for downstream consumers of the published crates,
+        # not for the internal mtp-bench benchmark crate (which depends on
+        # libmtp-rs / comfy-table requiring newer Rust).
+        run: cargo check -p mtp-rs -p mtp-rs-cli --all-features
         env:
           RUSTFLAGS: "-D warnings"

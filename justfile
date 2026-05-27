@@ -81,14 +81,17 @@ doc:
     @cargo doc --workspace --no-deps --quiet
     @echo "[+] Docs built"
 
-# Check MSRV compatibility (requires rustup with 1.85 toolchain)
+# Check MSRV compatibility for published crates (lib + CLI). Skips the
+# `mtp-bench` benchmark crate, which depends on libmtp-rs and comfy-table
+# that require newer Rust. MSRV is a contract for downstream consumers of
+# the published crates, not for internal benchmarks.
 msrv:
     @echo "[*] Checking MSRV (1.85) compatibility..."
     @if ! rustup run 1.85.0 rustc --version &> /dev/null; then \
         echo "[!] Rust 1.85 not found. Install with: rustup toolchain install 1.85.0"; \
         exit 1; \
     fi
-    @RUSTFLAGS="-D warnings" cargo +1.85.0 check --workspace --all-features --quiet
+    @RUSTFLAGS="-D warnings" cargo +1.85.0 check -p mtp-rs -p mtp-rs-cli --all-features --quiet
     @echo "[+] MSRV check passed"
 
 # Run security audit (requires cargo-audit)
@@ -149,15 +152,32 @@ fix: fmt
 # Release
 # ==============================================================================
 
-# Run `cargo publish --dry-run` for both published crates. Lib first, then CLI.
+# Pre-publish validation for both published crates.
+#
+# Library: full `cargo publish --dry-run`. Builds the .crate file, verifies
+# packaging, and compiles the packaged source. This is the real check.
+#
+# CLI: `cargo package --list` only, because the CLI depends on the lib via
+# `version = "X.Y.Z", path = "../mtp-rs"`. `publish --dry-run` resolves that
+# version against crates.io and fails when the new lib version isn't there
+# yet. After the lib is actually published, run `cargo publish --dry-run
+# -p mtp-rs-cli` separately (or `just release-dry-cli` below) to fully
+# verify the CLI before publishing it.
 release-dry:
     @echo "[*] Dry-run publishing mtp-rs (library)..."
     @cargo publish --dry-run -p mtp-rs
     @echo ""
+    @echo "[*] Listing files mtp-rs-cli would publish (full dry-run needs the lib on crates.io first)..."
+    @cargo package -p mtp-rs-cli --list --allow-dirty
+    @echo ""
+    @echo "[+] Lib dry-run passed and CLI file list looks sane. See docs/releasing.md for the publish flow."
+
+# Full `cargo publish --dry-run` for the CLI. Only works AFTER the lib's
+# new version is on crates.io.
+release-dry-cli:
     @echo "[*] Dry-run publishing mtp-rs-cli (binary)..."
     @cargo publish --dry-run -p mtp-rs-cli
-    @echo ""
-    @echo "[+] Both dry-runs passed. See docs/releasing.md for the publish flow."
+    @echo "[+] CLI dry-run passed."
 
 # ==============================================================================
 # Utility Commands

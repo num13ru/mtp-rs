@@ -3,6 +3,7 @@ name = "mtp-bench"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT OR Apache-2.0"
 description = "Benchmark comparing mtp-rs (pure Rust) vs libmtp-rs (C library) for MTP file transfers"
 
 [[bin]]

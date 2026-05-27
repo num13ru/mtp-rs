@@ -29,11 +29,13 @@ Publishing is manual. There's no CI automation for it.
    ```bash
    just release-dry
    ```
-   Or by hand:
-   ```bash
-   cargo publish --dry-run -p mtp-rs
-   cargo publish --dry-run -p mtp-rs-cli
-   ```
+   This fully dry-runs the lib and prints the CLI's would-be file list.
+   It does NOT dry-run the CLI publish because the CLI depends on the
+   lib via `version = "X.Y.Z", path = "../mtp-rs"`. `cargo publish
+   --dry-run -p mtp-rs-cli` resolves that version requirement against
+   crates.io and rejects it while the new lib version is still local.
+   The CLI gets its full dry-run in step 7 below, after the lib is on
+   crates.io.
 6. **Commit and tag**. Tag the workspace release with the lib version (since that's the API contract downstream consumers track):
    ```bash
    git commit -m "Prepare vX.Y.Z for release"
@@ -43,7 +45,10 @@ Publishing is manual. There's no CI automation for it.
 7. **Publish in order**. Library first, CLI second (CLI depends on the published lib version):
    ```bash
    cargo publish -p mtp-rs
-   # Wait ~30 seconds for crates.io index to update, then:
+   # Wait ~30 seconds for crates.io index to update.
+   # Now run the CLI dry-run (it can finally resolve the lib version):
+   just release-dry-cli
+   # Then publish:
    cargo publish -p mtp-rs-cli
    ```
 8. **Push** the commit and tag:

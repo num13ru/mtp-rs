@@ -6,16 +6,18 @@ cameras that expose MTP storage all use the same file commands.
 
 ## Installation
 
-Install the binary with the `cli` feature:
+Install the binary from crates.io:
 
 ```sh
-cargo install mtp-rs --features cli
+cargo install mtp-rs-cli
 ```
+
+The installed binary is called `mtp-rs`.
 
 If you are working from a checkout:
 
 ```sh
-cargo run --features cli --bin mtp-rs -- devices
+cargo run -p mtp-rs-cli -- devices
 ```
 
 ## Quick Start
