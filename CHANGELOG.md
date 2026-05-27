@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+This file covers both published crates in the workspace:
+
+- `mtp-rs` (the library)
+- `mtp-rs-cli` (the CLI binary, new in this release)
+
+Entries are grouped by release. Each entry tags which crate it applies to with **[lib]**, **[cli]**, or **[workspace]** for repo-wide changes.
+
+## [0.17.0] - 2026-05-27
+
+### Added
+
+- **[cli] New `mtp-rs-cli` crate (initial release at 0.1.0).** Ships a universal MTP file transfer CLI under the binary name `mtp-rs`. Subcommands: `devices`, `info`, `ls`, `put`, `get`, `mkdir`, `rm`, `rename`, `mv`, `cp`, `doctor`. Every command supports `--json` for automation. Stable exit codes (0/2/3/4/5/6/7). Streaming uploads and downloads with progress, `--verify` for upload byte-comparison, POSIX-like absolute remote paths. See `crates/mtp-rs-cli/docs/cli.md` for the full reference. Originally contributed by [@dtretyakov](https://github.com/dtretyakov) in [#11](https://github.com/vdavid/mtp-rs/pull/11).
+- **[lib] Match-reason on enumerated devices.** `MtpDeviceInfo::match_reason` and `UsbDeviceInfo::match_reason` carry a new `MtpMatchReason` enum (`StandardClass`, `InterfaceString`, `KnownVidPid`, `OpenedDescriptorScan`) explaining why a USB device was classified as MTP. Useful for the CLI's `doctor` command and for any consumer that wants to surface match provenance. Both info structs are `#[non_exhaustive]`, so this is additive.
+- **[lib] Garmin-style `MTP` interface-string detection.** Devices that expose MTP on a vendor-class (`0xff/0xff`) interface but advertise an `interface_string` of `MTP` are now classified correctly. Verified on Garmin Venu 2/2S; likely covers other Garmin Connect IQ devices too.
+
+### Changed
+
+- **[workspace] Repo is now a Cargo workspace.** The library is at `crates/mtp-rs/`, the CLI is at `crates/mtp-rs-cli/`. Public lib API is unchanged. Library users can keep `mtp-rs = "0.17"` in their `Cargo.toml` and rebuild against the new version without code changes. The workspace split keeps the library free of CLI-only dependencies (`clap`, `serde`, `serde_json`, `tokio`) even as optional features. The `benchmarks/mtp-rs-vs-libmtp/` crate moved to a path dep on `../../crates/mtp-rs`.
+- **[lib] Virtual-device watcher restored to `RecommendedWatcher`.** The CLI PR temporarily swapped to `PollWatcher` to work around a local test flake. That made every virtual-device user scan their backing dirs 20×/sec forever. Restored to the kernel-driven native watcher; the existing `poll_event_with_retry` test pattern already handles FSEvents latency on macOS.
+
+### Notes
+
+- The `mtp-rs` binary used to live in the library crate behind a `cli` feature. It has moved to the new `mtp-rs-cli` crate. The `cli` feature on the lib crate is gone. Installation is now `cargo install mtp-rs-cli`. The binary name itself is still `mtp-rs`.
+- Library MSRV stays at 1.85. The CLI crate also targets MSRV 1.85.
+
 ## [0.16.0] - 2026-05-23
 
 ### Added

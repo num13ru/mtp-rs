@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The crate under test
-mtp-rs = { path = "../.." }
+mtp-rs = { path = "../../crates/mtp-rs" }
 
 # C-library baseline
 libmtp-rs = "0.7"

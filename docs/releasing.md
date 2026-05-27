@@ -1,26 +1,52 @@
 # Releasing to crates.io
 
-Publishing is manual — there's no CI automation for it.
+This repo is a Cargo workspace with two published crates:
+
+- `mtp-rs` (library, `crates/mtp-rs/`)
+- `mtp-rs-cli` (CLI binary, `crates/mtp-rs-cli/`)
+
+Publishing is manual. There's no CI automation for it.
+
+## Versioning
+
+- The library version drives breaking changes for downstream lib consumers and the CLI's `mtp-rs = "X.Y.Z"` dep. Bump it with normal SemVer rules.
+- The CLI version can move independently. When the CLI ships a new feature or fix without a lib bump, only bump the CLI.
+- When you bump the lib, also bump the CLI's `mtp-rs = "X.Y.Z"` dep to the new lib version (in `crates/mtp-rs-cli/Cargo.toml`). Usually you'll release both together.
 
 ## Steps
 
-1. **Bump version** in `Cargo.toml`
-2. **Update `CHANGELOG.md`** — set the new version and date
-3. **Run `just check-all`** (formatting, clippy, tests, docs, MSRV, audit, license). Fix everything — the release commit must produce zero warnings, zero formatting diffs, zero doc-link issues. Re-run until fully clean.
-4. **Commit and tag**:
+1. **Bump versions** in the relevant `Cargo.toml` files:
+   - Library: `crates/mtp-rs/Cargo.toml` → `version = "X.Y.Z"`
+   - CLI: `crates/mtp-rs-cli/Cargo.toml` → `version = "A.B.C"` and `mtp-rs = { version = "X.Y.Z", ... }` if the lib also moved
+2. **Update `CHANGELOG.md`** at the repo root with one entry covering both crates. Tag each bullet with `[lib]`, `[cli]`, or `[workspace]` so readers can skim.
+3. **Refresh `Cargo.lock`**:
+   ```bash
+   cargo update -p mtp-rs --precise X.Y.Z
+   cargo update -p mtp-rs-cli --precise A.B.C
+   ```
+4. **Run `just check-all`** (format, clippy, test, doc, MSRV, audit, deny). The release commit must produce zero warnings, zero formatting diffs, zero doc-link issues. Re-run until clean.
+5. **Dry run** to catch packaging issues:
+   ```bash
+   just release-dry
+   ```
+   Or by hand:
+   ```bash
+   cargo publish --dry-run -p mtp-rs
+   cargo publish --dry-run -p mtp-rs-cli
+   ```
+6. **Commit and tag**. Tag the workspace release with the lib version (since that's the API contract downstream consumers track):
    ```bash
    git commit -m "Prepare vX.Y.Z for release"
    git tag vX.Y.Z
    ```
-5. **Dry run** to catch packaging issues:
+   If you're shipping a CLI-only patch with no lib change, use `mtp-rs-cli-vA.B.C` instead.
+7. **Publish in order**. Library first, CLI second (CLI depends on the published lib version):
    ```bash
-   cargo publish --dry-run
+   cargo publish -p mtp-rs
+   # Wait ~30 seconds for crates.io index to update, then:
+   cargo publish -p mtp-rs-cli
    ```
-6. **Publish**:
-   ```bash
-   cargo publish
-   ```
-7. **Push** the commit and tag:
+8. **Push** the commit and tag:
    ```bash
    git push && git push --tags
    ```
@@ -28,8 +54,18 @@ Publishing is manual — there's no CI automation for it.
 ## Prerequisites
 
 - A crates.io API token configured via `cargo login`
-- The `exclude` list in `Cargo.toml` keeps the published package small (strips `.github/`, `docs/`, `justfile`, etc.)
+- Both crates exclude non-shipping files via their own `exclude` lists in `Cargo.toml`. The lib also excludes `proptest-regressions/` to keep the package small.
+
+## CLI-only patch flow
+
+If only the CLI changes (no lib changes), you can release `mtp-rs-cli` without bumping the lib:
+
+1. Bump `crates/mtp-rs-cli/Cargo.toml` version only.
+2. Run `cargo update -p mtp-rs-cli --precise A.B.C`.
+3. `just check-all`, then `cargo publish --dry-run -p mtp-rs-cli`.
+4. Tag as `mtp-rs-cli-vA.B.C`.
+5. Publish: `cargo publish -p mtp-rs-cli`.
 
 ## Previous releases
 
-See [CHANGELOG.md](../CHANGELOG.md) for the full release history. Git tags (`v0.1.0`, `v0.2.0`, etc.) mark each release commit.
+See [CHANGELOG.md](../CHANGELOG.md) for the full history. Git tags (`v0.1.0`, `v0.2.0`, etc.) mark each library release commit. CLI-only releases use the `mtp-rs-cli-v*` prefix.

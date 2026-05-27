@@ -1,0 +1,38 @@
+[package]
+name = "mtp-rs-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Universal MTP file transfer CLI built on mtp-rs"
+keywords = ["mtp", "cli", "android", "garmin", "kindle"]
+categories = ["command-line-utilities", "filesystem"]
+readme = "README.md"
+documentation = "https://docs.rs/mtp-rs-cli"
+
+[[bin]]
+name = "mtp-rs"
+path = "src/main.rs"
+
+[dependencies]
+mtp-rs = { version = "0.17.0", path = "../mtp-rs" }
+
+clap = { version = "4.5", features = ["derive"] }
+bytes = "1.5"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
+
+[dev-dependencies]
+mtp-rs = { path = "../mtp-rs", features = ["virtual-device"] }
+serde_json = "1"
+tempfile = "3"
+
+[features]
+default = []
+# Enable to wire the test-only virtual device registration in main.rs.
+# Requires mtp-rs to be built with the virtual-device feature.
+virtual-device = ["mtp-rs/virtual-device"]

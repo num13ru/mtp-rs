@@ -1,4 +1,4 @@
-#![cfg(all(feature = "cli", feature = "virtual-device"))]
+#![cfg(feature = "virtual-device")]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};

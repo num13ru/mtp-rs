@@ -1,4 +1,3 @@
-#[path = "../cli/mod.rs"]
 mod cli;
 
 #[tokio::main]

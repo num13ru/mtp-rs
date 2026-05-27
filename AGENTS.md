@@ -2,25 +2,39 @@
 
 Pure-Rust MTP/PTP library with no C dependencies. Two-layer API: `mtp::` for high-level file transfer, `ptp::` for low-level protocol access (cameras). Zero FFI - no libmtp, no libusb, just async Rust on `nusb`.
 
+This repo is a Cargo workspace. The library lives in `crates/mtp-rs/` and is published as `mtp-rs`. A companion CLI binary lives in `crates/mtp-rs-cli/` and is published as `mtp-rs-cli` (the installed binary is named `mtp-rs`).
+
 ## Quick commands
 
-| Command                     | Description                                          |
-|-----------------------------|------------------------------------------------------|
-| `just`                      | Run all checks: format, lint, test, doc              |
-| `just fix`                  | Auto-fix formatting and clippy warnings              |
-| `just check-all`            | Include security audit and license check             |
-| `cargo test --all-features` | Run with proptest for fuzzing                        |
+| Command                                | Description                                          |
+|----------------------------------------|------------------------------------------------------|
+| `just`                                 | Run all checks: format, lint, test, doc              |
+| `just fix`                             | Auto-fix formatting and clippy warnings              |
+| `just check-all`                       | Include MSRV check, security audit, license check    |
+| `just release-dry`                     | `cargo publish --dry-run` for both crates            |
+| `cargo test --workspace --all-features`| Run with proptest fuzzing across the workspace       |
 
 ## Project structure
 
 ```
-src/
-  mtp/         # High-level API (MtpDevice, Storage)
-  ptp/         # Low-level protocol (PtpDevice, PtpSession)
-    types/     # DeviceInfo, StorageInfo, ObjectInfo, AccessCapability
-    codes.rs   # OperationCode, ResponseCode, EventCode
-  transport/   # USB abstraction (Transport trait, nusb impl, mock, virtual_device)
-examples/      # list_and_download, ptp_diagnose, fuji_capture, fuji_rw_check
+crates/
+  mtp-rs/                    # Library (crates.io: mtp-rs)
+    src/
+      mtp/                   # High-level API (MtpDevice, Storage)
+      ptp/                   # Low-level protocol (PtpDevice, PtpSession)
+        codes.rs             # OperationCode, ResponseCode, EventCode
+      transport/             # USB abstraction (Transport trait, nusb, mock, virtual_device)
+    tests/integration.rs     # Real-device tests
+    examples/                # list_and_download, ptp_diagnose, fuji_capture, etc.
+  mtp-rs-cli/                # CLI binary (crates.io: mtp-rs-cli, binary: mtp-rs)
+    src/
+      main.rs                # Entry point
+      cli/                   # Subcommand dispatch, args, error mapping, paths
+    tests/cli.rs             # Cross-process tests via the built binary + virtual device
+    docs/cli.md              # Full command reference
+benchmarks/
+  mtp-rs-vs-libmtp/          # Throughput vs libmtp comparison (not published)
+docs/                        # Protocol, architecture, debugging, release process
 ```
 
 ## Architecture
@@ -48,10 +62,11 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 
 ## Testing
 
-- **Unit**: `cargo test` (uses mock transport)
-- **Virtual device**: `cargo test --features virtual-device` (full protocol tests against local filesystem)
-- **Integration**: `cargo test --test integration -- --ignored --nocapture` (needs device). Destructive tests pick a writable root folder from a priority list (Android `Download`, Garmin `Music`, Kindle `documents`, etc.); set `MTP_TEST_FOLDER=Name` to override. See `tests/integration.rs` header for full details.
-- **Property**: `cargo test --all-features` (proptest fuzzing)
+- **Unit**: `cargo test --workspace` (uses mock transport)
+- **Virtual device**: `cargo test -p mtp-rs --features virtual-device` (full protocol tests against local filesystem)
+- **Integration**: `cargo test -p mtp-rs --test integration -- --ignored --nocapture` (needs device). Destructive tests pick a writable root folder from a priority list (Android `Download`, Garmin `Music`, Kindle `documents`, etc.); set `MTP_TEST_FOLDER=Name` to override. See `crates/mtp-rs/tests/integration.rs` header for full details.
+- **CLI**: `cargo test -p mtp-rs-cli --features virtual-device` (runs the built binary against a virtual device)
+- **Property**: `cargo test --workspace --all-features` (proptest fuzzing)
 
 ## Design principles
 

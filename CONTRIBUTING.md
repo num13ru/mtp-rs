@@ -38,39 +38,56 @@ This catches issues that only appear on older Rust versions (different lint beha
 
 ## Project structure
 
-```
-src/
-├── ptp/             # Low-level protocol implementation
-│   ├── codes.rs     # Operation/response/event code enums
-│   ├── pack.rs      # Binary serialization (little-endian, UTF-16LE strings)
-│   ├── container.rs # USB container format
-│   ├── types.rs     # DeviceInfo, StorageInfo, ObjectInfo structs
-│   ├── session.rs   # Session management and operations
-│   └── device.rs    # PtpDevice public API
-├── mtp/             # High-level API
-│   ├── device.rs    # MtpDevice and builder
-│   ├── storage.rs   # Storage and file operations
-│   ├── stream.rs    # Streaming downloads
-│   ├── object.rs    # NewObjectInfo for uploads
-│   └── event.rs     # Device events
-├── transport/       # USB abstraction
-│   ├── mock.rs      # Mock for testing
-│   └── nusb.rs      # Real USB implementation
-├── error.rs         # Error types
-└── lib.rs           # Crate root
+The repo is a Cargo workspace with two published crates and one internal benchmark crate.
 
-tests/
-└── integration.rs   # Tests that need a real device
+```
+crates/
+├── mtp-rs/                       # The library (published as `mtp-rs`)
+│   ├── src/
+│   │   ├── ptp/                  # Low-level protocol implementation
+│   │   │   ├── codes.rs          # Operation/response/event code enums
+│   │   │   ├── pack/             # Binary serialization (little-endian, UTF-16LE strings)
+│   │   │   ├── container.rs      # USB container format
+│   │   │   ├── session/          # Session management and operations
+│   │   │   └── device.rs         # PtpDevice public API
+│   │   ├── mtp/                  # High-level API
+│   │   │   ├── device.rs         # MtpDevice and builder
+│   │   │   ├── storage.rs        # Storage and file operations
+│   │   │   ├── stream.rs         # Streaming downloads
+│   │   │   ├── object.rs         # NewObjectInfo for uploads
+│   │   │   └── event.rs          # Device events
+│   │   ├── transport/            # USB abstraction
+│   │   │   ├── mock.rs           # Mock for testing
+│   │   │   ├── nusb.rs           # Real USB implementation
+│   │   │   └── virtual_device/   # Filesystem-backed virtual device
+│   │   ├── error.rs              # Error types
+│   │   └── lib.rs                # Crate root
+│   ├── tests/integration.rs      # Tests that need a real device
+│   └── examples/                 # Standalone examples (download, diagnose, etc.)
+└── mtp-rs-cli/                   # The CLI binary (published as `mtp-rs-cli`)
+    ├── src/
+    │   ├── main.rs               # Entry point
+    │   └── cli/                  # Command dispatch, args, error mapping, paths
+    ├── tests/cli.rs              # Cross-process tests against the built binary
+    └── docs/cli.md               # Full command reference
+
+benchmarks/
+└── mtp-rs-vs-libmtp/             # Throughput/predictability comparison vs libmtp
+
+docs/                             # Protocol, architecture, debugging, release process
 ```
 
 ## Running tests
 
 ```bash
-# Unit tests (no device needed)
-cargo test
+# Unit tests (no device needed) — runs the whole workspace
+cargo test --workspace
 
-# With a real MTP device connected (Android, Kindle, Garmin, etc.)
-cargo test --test integration -- --ignored --nocapture --test-threads=1
+# Library integration tests (real MTP device connected)
+cargo test -p mtp-rs --test integration -- --ignored --nocapture --test-threads=1
+
+# CLI tests (use a virtual device, no real hardware needed)
+cargo test -p mtp-rs-cli --features virtual-device
 ```
 
 The integration tests are split into read-only (safe) and destructive (creates/deletes files) to avoid messing up

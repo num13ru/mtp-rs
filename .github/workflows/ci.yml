@@ -33,19 +33,19 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Run clippy lints
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --workspace
 
       - name: Run tests with all features
-        run: cargo test --all-features
+        run: cargo test --workspace --all-features
 
       - name: Build documentation
-        run: cargo doc --no-deps
+        run: cargo doc --workspace --no-deps
 
   msrv:
     name: Verify MSRV (1.85)
@@ -64,6 +64,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check compilation on MSRV
-        run: cargo check --all-features
+        run: cargo check --workspace --all-features
         env:
           RUSTFLAGS: "-D warnings"

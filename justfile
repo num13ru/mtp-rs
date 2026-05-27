@@ -1,27 +1,37 @@
 # mtp-rs Development Commands
 # ============================
 #
+# This is a Cargo workspace with two published crates:
+#   - mtp-rs       (the library)        crates/mtp-rs/
+#   - mtp-rs-cli   (the CLI binary)     crates/mtp-rs-cli/
+# Plus a non-published benchmark crate at benchmarks/mtp-rs-vs-libmtp/.
+#
+# All checks below run across the whole workspace unless noted otherwise.
+#
 # Available commands (run `just --list` for details):
 #
 #   Individual checks:
-#     fmt         - Format code with cargo fmt
-#     fmt-check   - Check formatting (CI mode)
-#     clippy      - Run clippy with -D warnings
-#     test        - Run tests
-#     test-all    - Run tests with all features
-#     doc         - Build documentation
-#     msrv        - Check MSRV (1.85) compatibility
-#     audit       - Security audit (requires cargo-audit)
-#     deny        - License/dependency check (requires cargo-deny)
-#     udeps       - Find unused dependencies (requires nightly + cargo-udeps)
+#     fmt          - Format code with cargo fmt
+#     fmt-check    - Check formatting (CI mode)
+#     clippy       - Run clippy with -D warnings
+#     test         - Run tests (default features)
+#     test-all     - Run tests with all features
+#     doc          - Build documentation
+#     msrv         - Check MSRV (1.85) compatibility
+#     audit        - Security audit (requires cargo-audit)
+#     deny         - License/dependency check (requires cargo-deny)
+#     udeps        - Find unused dependencies (requires nightly + cargo-udeps)
 #
 #   Composite commands:
-#     check       - Run fast checks: fmt-check, clippy, test, doc (default)
-#     check-all   - Run all checks including audit and deny
-#     fix         - Auto-fix formatting and clippy warnings
+#     check        - Run fast checks: fmt-check, clippy, test, doc (default)
+#     check-all    - Run all checks including audit and deny
+#     fix          - Auto-fix formatting and clippy warnings
+#
+#   Release:
+#     release-dry  - cargo publish --dry-run for both published crates
 #
 #   Utility commands:
-#     clean       - Remove build artifacts
+#     clean         - Remove build artifacts
 #     install-tools - Install required development tools
 #
 # MSRV: 1.85
@@ -38,37 +48,37 @@ default: check
 # Format code with cargo fmt
 fmt:
     @echo "[*] Formatting..."
-    @cargo fmt
+    @cargo fmt --all
     @echo "[+] Formatted"
 
 # Check formatting without modifying files (for CI)
 fmt-check:
     @echo "[*] Checking formatting..."
-    @cargo fmt --check
+    @cargo fmt --all --check
     @echo "[+] Formatting OK"
 
 # Run clippy with strict warnings
 clippy:
     @echo "[*] Running clippy..."
-    @cargo clippy --all-targets --all-features --quiet -- -D warnings
+    @cargo clippy --workspace --all-targets --all-features --quiet -- -D warnings
     @echo "[+] Clippy passed"
 
 # Run tests
 test:
     @echo "[*] Running tests..."
-    @cargo test --quiet
+    @cargo test --workspace --quiet
     @echo "[+] Tests passed"
 
 # Run tests with all features enabled
 test-all:
     @echo "[*] Running tests with all features..."
-    @cargo test --all-features --quiet
+    @cargo test --workspace --all-features --quiet
     @echo "[+] All feature tests passed"
 
 # Build documentation
 doc:
     @echo "[*] Building docs..."
-    @cargo doc --no-deps --quiet
+    @cargo doc --workspace --no-deps --quiet
     @echo "[+] Docs built"
 
 # Check MSRV compatibility (requires rustup with 1.85 toolchain)
@@ -78,7 +88,7 @@ msrv:
         echo "[!] Rust 1.85 not found. Install with: rustup toolchain install 1.85.0"; \
         exit 1; \
     fi
-    @RUSTFLAGS="-D warnings" cargo +1.85.0 check --all-features --quiet
+    @RUSTFLAGS="-D warnings" cargo +1.85.0 check --workspace --all-features --quiet
     @echo "[+] MSRV check passed"
 
 # Run security audit (requires cargo-audit)
@@ -112,7 +122,7 @@ udeps:
         echo "[!] Nightly toolchain not found. Install with: rustup install nightly"; \
         exit 1; \
     fi
-    cargo +nightly udeps --all-targets
+    cargo +nightly udeps --workspace --all-targets
     @echo "[+] No unused dependencies found"
 
 # ==============================================================================
@@ -132,8 +142,22 @@ check-all: check msrv audit deny
 # Auto-fix formatting and clippy warnings
 fix: fmt
     @echo "[*] Running clippy --fix..."
-    @cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged --quiet -- -D warnings
+    @cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged --quiet -- -D warnings
     @echo "[+] Fixed"
+
+# ==============================================================================
+# Release
+# ==============================================================================
+
+# Run `cargo publish --dry-run` for both published crates. Lib first, then CLI.
+release-dry:
+    @echo "[*] Dry-run publishing mtp-rs (library)..."
+    @cargo publish --dry-run -p mtp-rs
+    @echo ""
+    @echo "[*] Dry-run publishing mtp-rs-cli (binary)..."
+    @cargo publish --dry-run -p mtp-rs-cli
+    @echo ""
+    @echo "[+] Both dry-runs passed. See docs/releasing.md for the publish flow."
 
 # ==============================================================================
 # Utility Commands
