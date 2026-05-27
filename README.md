@@ -31,6 +31,10 @@ just fix        # auto-fix formatting and clippy warnings
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for more.
 
+## Credits
+
+The `mtp-rs-cli` crate was originally contributed by [Dmitry Tretyakov](https://github.com/dtretyakov) in [#11](https://github.com/vdavid/mtp-rs/pull/11). For the full list of contributors to the library, see the [contributors page](https://github.com/vdavid/mtp-rs/graphs/contributors).
+
 ## License
 
 MIT OR Apache-2.0, at your option.

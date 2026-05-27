@@ -92,6 +92,10 @@ The CLI auto-detects Garmin watches that expose MTP as a vendor-class interface 
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) in the repo root.
 
+## Credits
+
+Originally contributed by [Dmitry Tretyakov](https://github.com/dtretyakov) in [#11](https://github.com/vdavid/mtp-rs/pull/11). Maintained by [David Veszelovszki](https://github.com/vdavid).
+
 ## License
 
 MIT OR Apache-2.0, at your option.

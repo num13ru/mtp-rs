@@ -5,7 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-authors.workspace = true
+# Override the workspace `authors` field so Dmitry, who contributed the
+# initial CLI in #11, is credited on the crates.io page alongside the
+# maintainer. The workspace default lists the maintainer only.
+authors = [
+    "David Veszelovszki <veszelovszki@gmail.com>",
+    "Dmitry Tretyakov <dtretyakov@gmail.com>",
+]
 description = "Universal MTP file transfer CLI built on mtp-rs"
 keywords = ["mtp", "cli", "android", "garmin", "kindle"]
 categories = ["command-line-utilities", "filesystem"]
