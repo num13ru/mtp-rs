@@ -128,7 +128,7 @@ udeps:
         echo "[!] Nightly toolchain not found. Install with: rustup install nightly"; \
         exit 1; \
     fi
-    cargo +nightly udeps --all-targets
+    cargo +nightly udeps --all-features --all-targets
     @echo "[+] No unused dependencies found"
 
 # ==============================================================================

@@ -113,10 +113,12 @@ jobs:
         run: cargo install cargo-udeps --locked
 
       - name: Check for unused dependencies
-        # Scope to the published crates explicitly. `--workspace` (or
-        # `--all-targets` without `-p`) would include mtp-bench, which
-        # depends on libmtp via pkg-config and won't build on CI runners.
-        run: cargo +nightly udeps -p mtp-rs -p mtp-rs-cli --all-targets
+        # Default-members (in root Cargo.toml) scopes to lib + CLI, skipping
+        # the C-library-bound mtp-bench. `--all-features` is required so udeps
+        # sees code gated behind feature flags (virtual-device tests in the
+        # CLI crate, etc.) — without it, dev-deps used only inside those
+        # cfg-gated blocks look unused.
+        run: cargo +nightly udeps --all-features --all-targets
         env:
           # Suppress warnings to focus on unused dependency output
           RUSTFLAGS: '-A warnings'
