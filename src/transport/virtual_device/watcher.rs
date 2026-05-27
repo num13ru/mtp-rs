@@ -30,7 +30,7 @@
 use super::builders::build_event;
 use super::state::VirtualDeviceState;
 use crate::ptp::{EventCode, ObjectHandle, StorageId};
-use notify::{Config, EventKind, PollWatcher, RecursiveMode, Watcher};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -43,7 +43,7 @@ type StorageMap = Vec<(PathBuf, StorageId)>;
 /// The watcher pushes events into `state.event_queue` via the shared mutex.
 pub(super) fn start_fs_watcher(
     state: &std::sync::Arc<Mutex<VirtualDeviceState>>,
-) -> Option<PollWatcher> {
+) -> Option<RecommendedWatcher> {
     let state_clone = std::sync::Arc::clone(state);
 
     // Build a map of backing_dir → storage_id for resolving events.
@@ -62,7 +62,7 @@ pub(super) fn start_fs_watcher(
             .collect()
     };
 
-    let mut watcher = PollWatcher::new(
+    let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
             let event = match res {
                 Ok(e) => e,
@@ -71,16 +71,14 @@ pub(super) fn start_fs_watcher(
 
             handle_notify_event(&state_clone, &storage_map, event);
         },
-        Config::default().with_poll_interval(std::time::Duration::from_millis(50)),
+        Config::default(),
     )
     .ok()?;
 
     // Watch all backing directories recursively.
     let state_lock = state.lock().unwrap();
     for storage in &state_lock.storages {
-        watcher
-            .watch(&storage.config.backing_dir, RecursiveMode::Recursive)
-            .ok()?;
+        let _ = watcher.watch(&storage.config.backing_dir, RecursiveMode::Recursive);
     }
     drop(state_lock);
 

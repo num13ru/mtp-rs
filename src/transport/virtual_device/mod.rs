@@ -78,7 +78,7 @@ pub struct VirtualTransport {
     /// Serial number, used to unregister from the active-states registry on drop.
     serial: String,
     /// Filesystem watcher. Stops watching when dropped.
-    _watcher: Option<notify::PollWatcher>,
+    _watcher: Option<notify::RecommendedWatcher>,
 }
 
 impl VirtualTransport {
