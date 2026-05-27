@@ -57,28 +57,31 @@ fmt-check:
     @cargo fmt --all --check
     @echo "[+] Formatting OK"
 
-# Run clippy with strict warnings
+# Run clippy with strict warnings.
+# Scoped to `default-members` (lib + CLI) via workspace Cargo.toml. The
+# benchmark crate `mtp-bench` depends on libmtp via pkg-config and is
+# tested manually with `cargo clippy -p mtp-bench` when libmtp is installed.
 clippy:
     @echo "[*] Running clippy..."
-    @cargo clippy --workspace --all-targets --all-features --quiet -- -D warnings
+    @cargo clippy --all-targets --all-features --quiet -- -D warnings
     @echo "[+] Clippy passed"
 
 # Run tests
 test:
     @echo "[*] Running tests..."
-    @cargo test --workspace --quiet
+    @cargo test --quiet
     @echo "[+] Tests passed"
 
 # Run tests with all features enabled
 test-all:
     @echo "[*] Running tests with all features..."
-    @cargo test --workspace --all-features --quiet
+    @cargo test --all-features --quiet
     @echo "[+] All feature tests passed"
 
 # Build documentation
 doc:
     @echo "[*] Building docs..."
-    @cargo doc --workspace --no-deps --quiet
+    @cargo doc --no-deps --quiet
     @echo "[+] Docs built"
 
 # Check MSRV compatibility for published crates (lib + CLI). Skips the
@@ -91,7 +94,7 @@ msrv:
         echo "[!] Rust 1.85 not found. Install with: rustup toolchain install 1.85.0"; \
         exit 1; \
     fi
-    @RUSTFLAGS="-D warnings" cargo +1.85.0 check -p mtp-rs -p mtp-rs-cli --all-features --quiet
+    @RUSTFLAGS="-D warnings" cargo +1.85.0 check --all-features --quiet
     @echo "[+] MSRV check passed"
 
 # Run security audit (requires cargo-audit)
@@ -125,7 +128,7 @@ udeps:
         echo "[!] Nightly toolchain not found. Install with: rustup install nightly"; \
         exit 1; \
     fi
-    cargo +nightly udeps --workspace --all-targets
+    cargo +nightly udeps --all-targets
     @echo "[+] No unused dependencies found"
 
 # ==============================================================================
@@ -145,7 +148,7 @@ check-all: check msrv audit deny
 # Auto-fix formatting and clippy warnings
 fix: fmt
     @echo "[*] Running clippy --fix..."
-    @cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged --quiet -- -D warnings
+    @cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged --quiet -- -D warnings
     @echo "[+] Fixed"
 
 # ==============================================================================

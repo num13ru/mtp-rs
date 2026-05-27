@@ -113,7 +113,10 @@ jobs:
         run: cargo install cargo-udeps --locked
 
       - name: Check for unused dependencies
-        run: cargo +nightly udeps --workspace --all-targets
+        # Scope to the published crates explicitly. `--workspace` (or
+        # `--all-targets` without `-p`) would include mtp-bench, which
+        # depends on libmtp via pkg-config and won't build on CI runners.
+        run: cargo +nightly udeps -p mtp-rs -p mtp-rs-cli --all-targets
         env:
           # Suppress warnings to focus on unused dependency output
           RUSTFLAGS: '-A warnings'

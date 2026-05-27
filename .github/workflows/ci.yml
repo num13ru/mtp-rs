@@ -36,16 +36,19 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Run clippy lints
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        # `--workspace` would include `mtp-bench` (needs libmtp via pkg-config,
+        # not installed on CI runners). Default-members in root Cargo.toml
+        # scopes to the lib + CLI only.
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test
 
       - name: Run tests with all features
-        run: cargo test --workspace --all-features
+        run: cargo test --all-features
 
       - name: Build documentation
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --no-deps
 
   msrv:
     name: Verify MSRV (1.85)
