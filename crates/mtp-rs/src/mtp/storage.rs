@@ -4,7 +4,7 @@ use crate::cancel::{bail_if_cancelled, CancelToken};
 use crate::mtp::object::NewObjectInfo;
 use crate::mtp::stream::{FileDownload, Progress};
 use crate::ptp::{ObjectHandle, ObjectInfo, StorageId, StorageInfo};
-use crate::Error;
+use crate::{Error, UploadError};
 use bytes::Bytes;
 use futures::Stream;
 use std::ops::ControlFlow;
@@ -524,20 +524,30 @@ impl Storage {
 
     /// Upload a file from a stream.
     ///
-    /// The stream is consumed and all data is buffered before sending
-    /// (MTP protocol requires knowing the total size upfront).
+    /// The data streams directly to USB in chunks; the protocol only needs the
+    /// total size upfront (provided via `info`), not the whole file in memory.
     ///
     /// # Arguments
     ///
     /// * `parent` - Parent folder handle (None for root)
     /// * `info` - Object metadata including filename and size
     /// * `data` - Stream of data chunks to upload
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UploadError`] on failure. PTP uploads are two-phase:
+    /// `SendObjectInfo` creates the object on the device (yielding a handle),
+    /// then `SendObject` streams the bytes. If the data phase fails, the device
+    /// is left holding a partial (possibly empty or truncated) object, and
+    /// [`UploadError::partial`] carries its handle so you can
+    /// [`delete`](Self::delete) it or retry the data phase to resume. The library
+    /// does **not** auto-delete it. See [`UploadError`] for the full contract.
     pub async fn upload<S>(
         &self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: S,
-    ) -> Result<ObjectHandle, Error>
+    ) -> Result<ObjectHandle, UploadError>
     where
         S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
     {
@@ -549,13 +559,24 @@ impl Storage {
     ///
     /// Progress is reported as data is read from the stream. Return
     /// `ControlFlow::Break(())` from the callback to cancel the upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UploadError`] on failure or cancellation. When the failure
+    /// happens after the object was created (any error or cancellation during
+    /// the data phase), [`UploadError::partial`] carries the handle of the
+    /// possibly-partial object the device still holds, so you can
+    /// [`delete`](Self::delete) it or retry the data phase to resume. The library
+    /// does **not** auto-delete it. Cancellation surfaces as
+    /// [`Error::Cancelled`](crate::Error::Cancelled) in
+    /// [`UploadError::source`]. See [`UploadError`] for the full contract.
     pub async fn upload_with_progress<S, F>(
         &self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: S,
         mut on_progress: F,
-    ) -> Result<ObjectHandle, Error>
+    ) -> Result<ObjectHandle, UploadError>
     where
         S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
         F: FnMut(Progress) -> ControlFlow<()> + Send,
@@ -566,11 +587,17 @@ impl Storage {
         let object_info = info.to_object_info();
         let parent_handle = parent.unwrap_or(ObjectHandle::ROOT);
 
+        // Phase 1: SendObjectInfo. No object exists yet, so a failure here has no
+        // partial to surface.
         let (_, _, handle) = self
             .inner
             .session
             .send_object_info(self.id, parent_handle, &object_info)
-            .await?;
+            .await
+            .map_err(|source| UploadError {
+                source,
+                partial: None,
+            })?;
 
         // Wrap the stream to report progress and support cancellation.
         let mut bytes_sent = 0u64;
@@ -590,6 +617,9 @@ impl Storage {
             Ok(chunk)
         });
 
+        // Phase 2: SendObject. The object already exists on the device, so any
+        // failure (genuine error or cancellation) surfaces the handle as
+        // `partial` for the caller to delete or resume. We do NOT delete it here.
         self.inner
             .session
             .send_object_stream(total_size, progress_stream)
@@ -599,6 +629,10 @@ impl Storage {
                     Error::Cancelled
                 }
                 _ => e,
+            })
+            .map_err(|source| UploadError {
+                source,
+                partial: Some(handle),
             })?;
 
         Ok(handle)

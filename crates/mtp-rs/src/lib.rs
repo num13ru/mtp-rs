@@ -45,7 +45,7 @@ pub mod ptp;
 pub mod transport;
 
 pub use cancel::CancelToken;
-pub use error::Error;
+pub use error::{Error, UploadError};
 
 // Re-export core types for convenience
 pub use ptp::{

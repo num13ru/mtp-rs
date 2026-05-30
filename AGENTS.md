@@ -138,6 +138,23 @@ file in RAM. Key implementation notes:
   buffers everything and calls `send_bulk()`.
 - See `NusbTransport::send_bulk_streaming()` for the full implementation.
 
+### Partial-handle contract on upload failure
+
+`Storage::upload` / `upload_with_progress` are two-phase: `SendObjectInfo`
+creates the object on the device (returning a handle), then `SendObject` streams
+the bytes. If the data phase fails or is cancelled, the device keeps a partial
+(empty or truncated) object. Both functions return `Result<ObjectHandle,
+UploadError>`; on a data-phase failure `UploadError::partial` is `Some(handle)`
+so the caller can `delete` it or retry the data phase to resume. The library
+**never** auto-deletes it: that would issue hidden USB I/O to a possibly-gone
+device, the leave-vs-delete behavior is device-dependent, and PTP's design
+intends a failed `SendObject` to be retriable against the same handle. We push
+the cleanup-or-resume policy to the consumer. `From<UploadError> for Error` keeps
+`?` ergonomic; callers drop `partial` unless they match on `UploadError`. The
+virtual device mirrors real devices here: it creates the object (empty
+placeholder) at `SendObjectInfo` time, so a partial upload leaves a real,
+queryable, deletable handle.
+
 ## Receiving data containers (multi-transfer convention)
 
 PTP data containers may span multiple USB bulk transfers on receive too: some

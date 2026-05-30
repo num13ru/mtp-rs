@@ -211,6 +211,25 @@ let handle = storage.upload(None, info, Box::pin(stream)).await?;
 println!("Uploaded with handle {:?}", handle);
 ```
 
+Uploads are two-phase: the device creates the object, then receives the data. If
+the data phase fails or is cancelled, the device is left holding a partial
+object. `upload()` returns an `UploadError` whose `partial` field carries that
+object's handle so you decide what to do — the library never auto-deletes it,
+which keeps resume (retrying the data phase against the same handle) possible:
+
+```rust
+match storage.upload(None, info, Box::pin(stream)).await {
+    Ok(handle) => println!("Uploaded with handle {:?}", handle),
+    Err(e) => {
+        if let Some(partial) = e.partial {
+            // Discard the corrupt artifact (or retry the data phase to resume).
+            storage.delete(partial).await?;
+        }
+        return Err(e.source); // `UploadError: Into<Error>` keeps `?` ergonomic.
+    }
+}
+```
+
 ### Download with progress
 
 ```rust
@@ -366,7 +385,7 @@ We use `nusb` for USB access, which is also runtime-agnostic.
 | Filename length           | Max 254 characters                                 |
 | Non-empty folder delete   | Fails; delete contents first                       |
 | One connection per device | Can't open the same device twice                   |
-| Upload cancellation       | Partial files may remain on device                 |
+| Upload cancellation       | A partial object may remain on the device. `upload()` surfaces its handle via `UploadError::partial` so you can delete it or resume; the library never auto-deletes it. |
 | Recursive listing speed   | Manual traversal is slower (~1 request per folder) |
 
 ## Android weirdnesses

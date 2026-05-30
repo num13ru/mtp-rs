@@ -531,6 +531,145 @@ mod tests {
         );
     }
 
+    /// A stream that yields one good chunk, then an `io::Error`, simulating a
+    /// source that fails partway through (disk read error, dropped network mount).
+    fn failing_stream(
+        good: &[u8],
+    ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin {
+        let good = bytes::Bytes::copy_from_slice(good);
+        futures::stream::iter(vec![
+            Ok(good),
+            Err(std::io::Error::other("source blew up mid-stream")),
+        ])
+    }
+
+    #[tokio::test]
+    async fn upload_surfaces_partial_handle_on_midstream_error() {
+        use crate::error::UploadError;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Download")).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        // Find the Download folder to upload into (avoids root-creation quirks).
+        let items = storages[0].list_objects(None).await.unwrap();
+        let download = items.iter().find(|i| i.filename == "Download").unwrap();
+
+        // Claim the file is 100 bytes, but the stream fails after one short chunk.
+        let info = crate::mtp::NewObjectInfo::file("partial.bin", 100);
+        let err = storages[0]
+            .upload(Some(download.handle), info, failing_stream(b"abc"))
+            .await
+            .expect_err("upload should fail when the source stream errors mid-stream");
+
+        // The created handle must be surfaced so the caller can clean up or resume.
+        let UploadError { source, partial } = err;
+        assert!(
+            matches!(source, crate::Error::Io(_)),
+            "expected the underlying I/O error, got {source:?}"
+        );
+        let handle = partial.expect("partial handle must be Some after SendObjectInfo succeeded");
+
+        // The library must NOT have auto-deleted the object: it's a real handle on
+        // the device, so resuming the data phase against it stays possible.
+        let info = storages[0]
+            .get_object_info(handle)
+            .await
+            .expect("the partially-written object should still exist at the surfaced handle");
+        assert_eq!(info.filename, "partial.bin");
+
+        // And the caller CAN clean it up with the surfaced handle.
+        storages[0]
+            .delete(handle)
+            .await
+            .expect("the surfaced handle should be deletable");
+        assert!(
+            storages[0].get_object_info(handle).await.is_err(),
+            "object should be gone after delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_surfaces_partial_handle_on_cancel() {
+        use crate::error::UploadError;
+        use std::ops::ControlFlow;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Download")).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        let items = storages[0].list_objects(None).await.unwrap();
+        let download = items.iter().find(|i| i.filename == "Download").unwrap();
+
+        let info = crate::mtp::NewObjectInfo::file("cancelled.bin", 5);
+        // Break from the progress callback on the first chunk -> Error::Cancelled.
+        let err = storages[0]
+            .upload_with_progress(
+                Some(download.handle),
+                info,
+                bytes_stream(b"hello"),
+                |_progress| ControlFlow::Break(()),
+            )
+            .await
+            .expect_err("cancelled upload should fail");
+
+        let UploadError { source, partial } = err;
+        assert!(
+            matches!(source, crate::Error::Cancelled),
+            "cancellation must map to Error::Cancelled, got {source:?}"
+        );
+        assert!(
+            partial.is_some(),
+            "partial handle must be surfaced on cancellation too"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_success_returns_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        let info = crate::mtp::NewObjectInfo::file("complete.txt", 12);
+        let handle = storages[0]
+            .upload(None, info, bytes_stream(b"hello upload"))
+            .await
+            .expect("a full upload should succeed");
+
+        // Object is present and complete at the returned handle.
+        let data = storages[0].download(handle).await.unwrap();
+        assert_eq!(data.as_slice(), b"hello upload");
+    }
+
+    #[tokio::test]
+    async fn upload_to_readonly_storage_has_no_partial() {
+        use crate::error::UploadError;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config_readonly(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        // SendObjectInfo itself is rejected (read-only), so no object is created.
+        let info = crate::mtp::NewObjectInfo::file("nope.txt", 4);
+        let err: UploadError = storages[0]
+            .upload(None, info, bytes_stream(b"data"))
+            .await
+            .expect_err("upload to read-only storage should fail");
+        assert!(
+            err.partial.is_none(),
+            "no object is created when SendObjectInfo fails, so partial must be None"
+        );
+    }
+
     #[tokio::test]
     async fn delete_file() {
         let dir = tempfile::tempdir().unwrap();

@@ -434,50 +434,68 @@ fn handle_send_object_info(
         assigned_handle: new_handle,
     });
 
-    // For folders, create immediately (no SendObject phase needed)
+    // Create the object on disk immediately, matching real devices: PTP's
+    // SendObjectInfo creates the object (a real, addressable handle) before the
+    // SendObject data phase. Folders need no data phase, so they're complete
+    // here. Files get an empty placeholder that the SendObject phase overwrites;
+    // if that phase never arrives (mid-stream error, cancellation), the empty
+    // object remains under `new_handle` so callers can delete it or resume,
+    // exactly as `UploadError::partial` promises.
+    let storage = state.find_storage(storage_id).unwrap();
+    let parent_path = if parent == ObjectHandle::ROOT || parent.0 == 0 {
+        PathBuf::new()
+    } else {
+        state.objects.get(&parent.0).unwrap().rel_path.clone()
+    };
+    let rel_path = parent_path.join(&info.filename);
+    let full_path = storage.config.backing_dir.join(&rel_path);
+
+    if validate_path_within(&storage.config.backing_dir, &full_path).is_err() {
+        state.pending_send = None;
+        state
+            .response_queue
+            .push_back(build_response(GENERAL_ERROR, tx_id, &[]));
+        return;
+    }
+
+    let create_result = if is_folder {
+        std::fs::create_dir_all(&full_path)
+    } else {
+        // Ensure the parent directory exists, then write an empty placeholder.
+        full_path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&full_path, []))
+    };
+
+    if create_result.is_err() {
+        state.pending_send = None;
+        state
+            .response_queue
+            .push_back(build_response(GENERAL_ERROR, tx_id, &[]));
+        return;
+    }
+
+    state.objects.insert(
+        new_handle.0,
+        super::state::VirtualObject {
+            rel_path,
+            storage_id,
+            parent,
+        },
+    );
+
+    // Queue events
+    state
+        .event_queue
+        .push_back(build_event(EventCode::ObjectAdded, &[new_handle.0]));
+    state
+        .event_queue
+        .push_back(build_event(EventCode::StorageInfoChanged, &[storage_id.0]));
+
+    // Folders are fully created; files still expect a SendObject data phase to
+    // fill in their contents, so keep `pending_send` set for them.
     if is_folder {
-        let storage = state.find_storage(storage_id).unwrap();
-        let parent_path = if parent == ObjectHandle::ROOT || parent.0 == 0 {
-            PathBuf::new()
-        } else {
-            state.objects.get(&parent.0).unwrap().rel_path.clone()
-        };
-        let rel_path = parent_path.join(&info.filename);
-        let full_path = storage.config.backing_dir.join(&rel_path);
-
-        if validate_path_within(&storage.config.backing_dir, &full_path).is_err() {
-            state.pending_send = None;
-            state
-                .response_queue
-                .push_back(build_response(GENERAL_ERROR, tx_id, &[]));
-            return;
-        }
-
-        if std::fs::create_dir_all(&full_path).is_err() {
-            state.pending_send = None;
-            state
-                .response_queue
-                .push_back(build_response(GENERAL_ERROR, tx_id, &[]));
-            return;
-        }
-
-        state.objects.insert(
-            new_handle.0,
-            super::state::VirtualObject {
-                rel_path,
-                storage_id,
-                parent,
-            },
-        );
-
-        // Queue events
-        state
-            .event_queue
-            .push_back(build_event(EventCode::ObjectAdded, &[new_handle.0]));
-        state
-            .event_queue
-            .push_back(build_event(EventCode::StorageInfoChanged, &[storage_id.0]));
-
         state.pending_send = None;
     }
 
@@ -562,6 +580,9 @@ fn handle_send_object(state: &mut VirtualDeviceState, tx_id: u32, data_payload: 
     }
 
     let handle = pending.assigned_handle;
+    // The object was already registered (as an empty placeholder) during
+    // SendObjectInfo; re-insert defensively in case its rel_path changed, then
+    // signal that its data changed rather than re-announcing it as added.
     state.objects.insert(
         handle.0,
         super::state::VirtualObject {
@@ -571,10 +592,11 @@ fn handle_send_object(state: &mut VirtualDeviceState, tx_id: u32, data_payload: 
         },
     );
 
-    // Queue events
+    // Queue events. The ObjectAdded fired at SendObjectInfo time, so the data
+    // phase emits ObjectInfoChanged (the object's size/content changed).
     state
         .event_queue
-        .push_back(build_event(EventCode::ObjectAdded, &[handle.0]));
+        .push_back(build_event(EventCode::ObjectInfoChanged, &[handle.0]));
     state.event_queue.push_back(build_event(
         EventCode::StorageInfoChanged,
         &[pending.storage_id.0],

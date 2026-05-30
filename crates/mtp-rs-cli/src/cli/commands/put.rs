@@ -72,7 +72,7 @@ pub async fn run(cli: &Cli, args: &PutArgs) -> Result<(), CliError> {
     let stream = file_stream(file);
     let info = NewObjectInfo::file(target.filename.clone(), total_size);
     let mut last_percent = 101u64;
-    let handle = storage
+    let handle = match storage
         .upload_with_progress(target.parent, info, stream, |progress| {
             print_progress(
                 "upload",
@@ -83,7 +83,28 @@ pub async fn run(cli: &Cli, args: &PutArgs) -> Result<(), CliError> {
             ControlFlow::Continue(())
         })
         .await
-        .map_err(|e| CliError::from_mtp("upload file", e, cli.verbose))?;
+    {
+        Ok(handle) => handle,
+        Err(upload_err) => {
+            finish_progress();
+            // `put` is a one-shot transfer with no resume story, so clean up the
+            // partial object the device may still hold rather than leaving junk.
+            // Best-effort: if the delete fails (device gone), surface the original
+            // upload error anyway.
+            if let Some(partial) = upload_err.partial {
+                if let Err(cleanup_err) = storage.delete(partial).await {
+                    if cli.verbose {
+                        eprintln!("warning: failed to delete partial upload: {cleanup_err}");
+                    }
+                }
+            }
+            return Err(CliError::from_mtp(
+                "upload file",
+                upload_err.source,
+                cli.verbose,
+            ));
+        }
+    };
     finish_progress();
     let mut verified = false;
 

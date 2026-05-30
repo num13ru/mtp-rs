@@ -40,7 +40,7 @@ MtpDevice (unchanged)
 ## Gotchas
 
 - `list_objects(None)` applies a parent filter (`ParentFilter::Exact(ROOT)`), so the virtual transport must set `parent = ObjectHandle::ROOT` on root-level objects for them to appear.
-- `SendObjectInfo` for folders creates the directory immediately (no `SendObject` phase needed for folders per MTP spec).
+- `SendObjectInfo` creates the object on disk immediately (folder via `create_dir_all`; file as an empty placeholder), matching real devices where `SendObjectInfo` yields a real, addressable handle before the data phase. Folders need no `SendObject`, so `pending_send` clears for them; files keep `pending_send` set, and `SendObject` overwrites the placeholder with the real bytes. This is what makes `UploadError::partial` truthful: a mid-stream upload failure leaves a real, queryable, deletable empty object at the surfaced handle (resume or delete, the consumer's call). Event-wise, `SendObjectInfo` emits `ObjectAdded` (once, at creation) and `SendObject` emits `ObjectInfoChanged` (data changed), so the watcher-dedup contract of exactly one `ObjectAdded` per upload holds.
 - Storage IDs start at `0x00010001` (matching real MTP convention).
 - The global registries (device registry + active-state registry) are process-wide and shared across tests. Registry tests must clean up with `unregister_virtual_device()` and use unique serial numbers to avoid interference. Rescan tests must also use unique serials.
 - `event_poll_interval` lives on `VirtualTransport` (not inside `VirtualDeviceState`) because we need it after dropping the mutex lock and before an async `.await`.
