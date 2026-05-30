@@ -14,19 +14,15 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [0.19.0] - 2026-05-30
 
+Inadvertent no-op re-release: the source is byte-identical to 0.18.0 (only `Cargo.toml` / `Cargo.lock` / this changelog differ). It was published while reconciling a downstream (Cmdr) build failure that looked like 0.18.0 lacked the `UploadError` API; the real cause was a transient stale lockfile during a parallel build, not a missing release. 0.18.0 (lib) / 0.2.0 (cli) already shipped `UploadError` correctly — see below. 0.19.0 (lib) / 0.3.0 (cli) add nothing; they exist only because they were published. Prefer 0.18.0 / 0.2.0.
+
+## [0.18.0] - 2026-05-30
+
 ### Changed
 
 - **[lib] Breaking: `Storage::upload` and `upload_with_progress` now return `Result<ObjectHandle, UploadError>`** (was `Result<ObjectHandle, Error>`). PTP uploads are two-phase: `SendObjectInfo` creates the object on the device (yielding a handle), then `SendObject` streams the bytes. If the data phase fails or is cancelled, the device is left holding a partial (often empty or truncated) object that the caller previously had no way to address. The new `UploadError` carries `source: Error` plus `partial: Option<ObjectHandle>` — `Some(handle)` when `SendObjectInfo` succeeded but the data phase didn't, `None` when no object was created. The library does **not** auto-delete the partial: that would issue hidden USB I/O to a possibly-disconnected device, the leave-vs-delete behavior is device-dependent, and PTP's model is designed so a failed `SendObject` can be retried against the same handle (resume). The consumer owns the cleanup-or-resume decision. `From<UploadError> for Error` keeps `?` ergonomic in an `Error` context (the `partial` is dropped unless the caller matches on `UploadError`). `UploadError` is re-exported at the crate root.
 - **[lib] Virtual device now creates the object at `SendObjectInfo` time**, matching real devices (an empty placeholder file for files, the directory for folders), so a mid-stream or cancelled upload leaves a real, queryable, deletable object at the surfaced `partial` handle. `SendObject` then overwrites the placeholder and emits `ObjectInfoChanged` (rather than a second `ObjectAdded`), preserving the one-`ObjectAdded`-per-upload watcher-dedup contract.
-- **[cli] `put` now cleans up the partial object on upload failure.** A failed/cancelled `mtp-rs put` deletes the partial object the device created (best-effort; `put` has no resume story), then reports the underlying error. Bumped to 0.3.0 because the lib dependency moved to a breaking version and the failure-path behavior changed.
-
-### Notes
-
-- This is the release that actually ships the `UploadError` change on crates.io. The work was originally staged in git under 0.18.0 (lib) / 0.2.0 (cli), but those version numbers had already been published as a version-only bump (source identical to 0.17.0), so the new API could never go out under them. 0.19.0 (lib) / 0.3.0 (cli) are its publishable home.
-
-## [0.18.0] - 2026-05-30
-
-Version-only release: source is identical to 0.17.0 (no functional changes). The `UploadError` work intended for this slot ships in 0.19.0 instead — see above.
+- **[cli] `put` now cleans up the partial object on upload failure.** A failed/cancelled `mtp-rs put` deletes the partial object the device created (best-effort; `put` has no resume story), then reports the underlying error. Bumped to 0.2.0 because the lib dependency moved to a breaking version and the failure-path behavior changed.
 
 ## [0.17.0] - 2026-05-27
 
