@@ -171,7 +171,13 @@ async fn find_suitable_file(
 
     // Fall back to recursive listing (slow)
     tlog!("No file in common folders, trying recursive listing...");
-    let objects = storage.list_objects_recursive(None).await.ok()?;
+    let objects = match storage.list_objects_recursive(None).await {
+        Ok(objects) => objects,
+        Err(e) => {
+            tlog!("Recursive listing failed: {:?}", e);
+            return None;
+        }
+    };
     objects
         .iter()
         .find(|o| o.is_file() && o.size > min_size && o.size < max_size)
@@ -606,12 +612,35 @@ mod destructive {
     /// Walks a priority list of common folder names (or the
     /// `MTP_TEST_FOLDER` override). Logs which folder was selected so test
     /// output is unambiguous on devices with non-standard layouts.
+    ///
+    /// Returns `None` after logging the reason when the test should skip:
+    /// no device, device doesn't advertise upload support (read-only
+    /// devices like PTP cameras), or no writable folder found.
     async fn setup_with_writable_folder() -> Option<(MtpDevice, mtp_rs::mtp::Storage, ObjectHandle)>
     {
-        let device = MtpDevice::open_first().await.ok()?;
-        let storages = device.storages().await.ok()?;
+        let device = match MtpDevice::open_first().await {
+            Ok(d) => d,
+            Err(e) => {
+                tlog!("SKIPPING: open device - {:?}", e);
+                return None;
+            }
+        };
+        if !device.supports_upload() {
+            tlog!("Device doesn't support upload (no SendObjectInfo/SendObject), skipping");
+            return None;
+        }
+        let storages = match device.storages().await {
+            Ok(s) => s,
+            Err(e) => {
+                tlog!("SKIPPING: get storages - {:?}", e);
+                return None;
+            }
+        };
         let storage = storages.into_iter().next()?;
-        let (handle, name) = find_writable_folder(&storage).await?;
+        let Some((handle, name)) = find_writable_folder(&storage).await else {
+            tlog!("No writable folder found, skipping (set MTP_TEST_FOLDER to override)");
+            return None;
+        };
         tlog!("Using writable folder: {}", name);
         Some((device, storage, handle))
     }
@@ -621,9 +650,7 @@ mod destructive {
     #[serial]
     async fn test_upload_download_delete() {
         let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
-            tlog!(
-                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
-            );
+            // setup_with_writable_folder() already logged the skip reason
             return;
         };
 
@@ -671,9 +698,7 @@ mod destructive {
     #[serial]
     async fn test_create_delete_folder() {
         let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
-            tlog!(
-                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
-            );
+            // setup_with_writable_folder() already logged the skip reason
             return;
         };
 
@@ -704,6 +729,11 @@ mod destructive {
 
         if !device.supports_rename() {
             tlog!("Device doesn't support rename, skipping");
+            return;
+        }
+
+        if !device.supports_upload() {
+            tlog!("Device doesn't support upload (no SendObjectInfo/SendObject), skipping");
             return;
         }
 
@@ -758,9 +788,7 @@ mod destructive {
     #[serial]
     async fn test_streaming_upload() {
         let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
-            tlog!(
-                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
-            );
+            // setup_with_writable_folder() already logged the skip reason
             return;
         };
 
@@ -805,9 +833,7 @@ mod destructive {
     #[serial]
     async fn test_streaming_copy() {
         let Some((_device, storage, folder_handle)) = setup_with_writable_folder().await else {
-            tlog!(
-                "Setup failed: no device or no writable folder (set MTP_TEST_FOLDER to override)"
-            );
+            // setup_with_writable_folder() already logged the skip reason
             return;
         };
 

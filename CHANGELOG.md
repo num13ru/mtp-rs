@@ -12,6 +12,16 @@ This file covers both published crates in the workspace:
 
 Entries are grouped by release. Each entry tags which crate it applies to with **[lib]**, **[cli]**, or **[workspace]** for repo-wide changes.
 
+## [Unreleased]
+
+### Added
+
+- **[lib] `MtpDevice::supports_upload()` and `DeviceInfo::supports_upload()`.** Returns true when the device advertises both `SendObjectInfo` (0x100C) and `SendObject` (0x100D), the two-phase object creation flow. Read-only devices (PTP cameras like the Panasonic Lumix DMC-TZ61 from [#12](https://github.com/vdavid/mtp-rs/issues/12)) typically don't advertise these, so consumers can skip write attempts up front. Mirrors the existing `supports_rename()`. Note the result means "worth attempting", not "guaranteed": Fuji cameras advertise write support yet reject writes per-operation.
+
+### Changed
+
+- **[workspace] Destructive integration tests now skip cleanly on read-only devices.** They check `supports_upload()` before writing (same pattern as the existing rename-support skip), and the test harness logs the specific skip reason (no device, no upload support, no writable folder) instead of a generic setup-failed message. The recursive file-search helper also logs listing errors instead of silently treating them as "no file found". Triggered by the Panasonic Lumix DMC-TZ61 report in [#12](https://github.com/vdavid/mtp-rs/issues/12).
+
 ## [0.19.0] - 2026-05-30
 
 Inadvertent no-op re-release: the source is byte-identical to 0.18.0 (only `Cargo.toml` / `Cargo.lock` / this changelog differ). It was published while reconciling a downstream (Cmdr) build failure that looked like 0.18.0 lacked the `UploadError` API; the real cause was a transient stale lockfile during a parallel build, not a missing release. 0.18.0 (lib) / 0.2.0 (cli) already shipped `UploadError` correctly — see below. 0.19.0 (lib) / 0.3.0 (cli) add nothing; they exist only because they were published. Prefer 0.18.0 / 0.2.0.

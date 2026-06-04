@@ -4,7 +4,7 @@ Catch-up reading for any agent that picks up issue or PR work, so you don't have
 start. Read this first when triaging a new issue or PR, and update it after work that affects community-facing context
 (see [Updating this doc](#updating-this-doc) at the bottom).
 
-Last updated: 2026-05-02.
+Last updated: 2026-06-04.
 
 ## Intentionally / continuously open threads
 
@@ -28,7 +28,28 @@ Confirmed working from this thread:
 
 ## Active threads
 
-(Nothing now)
+### #12 — Test failures: Panasonic Lumix DMC-TZ61 (opened 2026-06-03)
+
+Reporter: [@juleskers](https://github.com/juleskers) (the #6 tracker maintainer), testing their 2014 PictBridge/PTP
+camera as promised in #6. Two failure classes, full log attached to the issue:
+
+1. **Write tests panicked** with `Protocol { code: InvalidObjectFormatCode, operation: SendObjectInfo }`. The camera is
+   firmware-filtered read-only (only `/DCIM/1nn_PANA/nnnmmmm.jpg`-named files show; even camera-made photos copied to
+   root or `MISC` stay hidden). Fixed on our side 2026-06-04: destructive integration tests now check the new
+   `supports_upload()` (advertises both `SendObjectInfo` and `SendObject`) and skip cleanly, mirroring the
+   `supports_rename()` pattern that already worked on this camera. Caveat: if the Lumix *does* advertise
+   `SendObjectInfo` (some PictBridge cameras accept JPEG-only uploads), the gate won't trigger — awaiting
+   `ptp_diagnose` output to confirm.
+2. **Recursive file search finds nothing** despite hundreds of 4–9 MB photos in `/DCIM/1nn_PANA/` (~46 s spent, then
+   "No suitable file found"). Leading hypothesis: the camera either returns all objects for any parent query
+   (Fuji-style) or reports `parent = 0` in ObjectInfo datasets, so `ParentFilter::Exact` silently drops everything and
+   the manual traversal never descends past `DCIM`. Also possible: a mid-traversal protocol error swallowed by the
+   test helper (now logged instead of swallowed). Awaiting `diagnose` + `ptp_diagnose` output from the reporter to pin
+   it down. Don't ship a library-side quirk fix before that lands — a "retry unfiltered if everything got filtered"
+   fallback could conflict with the Fuji workaround.
+
+Note: the reporter's retest cycles can take weeks ("days/weeks/months"), so bundle asks into single well-aimed
+comments.
 
 ## Closed and merged
 
@@ -142,6 +163,7 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 | Garmin Forerunner 955        | Same as Zune on send (uploads need split mode)                        | Auto-applied via manufacturer-string match (#10)  | #6 (@dasJ, 2026-04-26) |
 | Garmin Forerunner 955        | Sends container header and payload as separate bulk transfers on receive | Multi-transfer accumulation in session-less `GetDeviceInfo` | #10 (protocol bug, fixed 2026-05-02) |
 | Vendor-class macOS devices   | IOKit doesn't publish interfaces until config is set                  | `SetConfiguration(1)` retry on `claim_interface`  | #4                     |
+| Panasonic Lumix DMC-TZ61     | Firmware-filtered read-only PTP view; rejects `SendObjectInfo` with `InvalidObjectFormatCode` | Gate writes on `supports_upload()` (pending device confirmation) | #12 (@juleskers, 2026-06-03) |
 
 ## Recurring contributors
 

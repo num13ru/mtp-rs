@@ -163,6 +163,27 @@ impl DeviceInfo {
     pub fn supports_rename(&self) -> bool {
         self.supports_operation(OperationCode::SetObjectPropValue)
     }
+
+    /// Check if the device supports creating objects (uploads and folders).
+    ///
+    /// This checks for support of both SendObjectInfo (0x100C) and
+    /// SendObject (0x100D), which together form the two-phase object
+    /// creation flow. Read-only devices (for example, PTP cameras) typically
+    /// don't advertise these.
+    ///
+    /// Note: some devices advertise these operations but still reject writes
+    /// per-storage or per-format (Fuji cameras report ReadWrite capability yet
+    /// return StoreReadOnly). A `true` here means uploads are worth attempting,
+    /// not that they're guaranteed to succeed.
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the device advertises both SendObjectInfo and SendObject.
+    #[must_use]
+    pub fn supports_upload(&self) -> bool {
+        self.supports_operation(OperationCode::SendObjectInfo)
+            && self.supports_operation(OperationCode::SendObject)
+    }
 }
 
 // --- StorageInfo Structure ---
@@ -476,6 +497,46 @@ mod tests {
     fn device_info_supports_rename_empty() {
         let info = DeviceInfo::default();
         assert!(!info.supports_rename());
+    }
+
+    #[test]
+    fn device_info_supports_upload_true() {
+        let info = DeviceInfo {
+            operations_supported: vec![
+                OperationCode::GetDeviceInfo,
+                OperationCode::SendObjectInfo,
+                OperationCode::SendObject,
+            ],
+            ..Default::default()
+        };
+
+        assert!(info.supports_upload());
+    }
+
+    #[test]
+    fn device_info_supports_upload_false_missing_send_object() {
+        let info = DeviceInfo {
+            operations_supported: vec![OperationCode::SendObjectInfo],
+            ..Default::default()
+        };
+
+        assert!(!info.supports_upload());
+    }
+
+    #[test]
+    fn device_info_supports_upload_false_missing_send_object_info() {
+        let info = DeviceInfo {
+            operations_supported: vec![OperationCode::SendObject],
+            ..Default::default()
+        };
+
+        assert!(!info.supports_upload());
+    }
+
+    #[test]
+    fn device_info_supports_upload_empty() {
+        let info = DeviceInfo::default();
+        assert!(!info.supports_upload());
     }
 
     // Fuzz tests using shared macros - verify parsers don't panic on arbitrary input

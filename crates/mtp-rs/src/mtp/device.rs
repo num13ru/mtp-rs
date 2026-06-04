@@ -169,6 +169,26 @@ impl MtpDevice {
         self.inner.device_info.supports_rename()
     }
 
+    /// Check if the device supports creating objects (uploads and folders).
+    ///
+    /// This checks for support of both SendObjectInfo (0x100C) and
+    /// SendObject (0x100D), which together form the two-phase object
+    /// creation flow. Read-only devices (for example, PTP cameras) typically
+    /// don't advertise these.
+    ///
+    /// Note: some devices advertise these operations but still reject writes
+    /// per-storage or per-format (Fuji cameras report ReadWrite capability yet
+    /// return StoreReadOnly). A `true` here means uploads are worth attempting,
+    /// not that they're guaranteed to succeed.
+    ///
+    /// # Returns
+    ///
+    /// Returns true if the device advertises both SendObjectInfo and SendObject.
+    #[must_use]
+    pub fn supports_upload(&self) -> bool {
+        self.inner.device_info.supports_upload()
+    }
+
     /// Get all storages on the device.
     pub async fn storages(&self) -> Result<Vec<Storage>, Error> {
         let ids = self.inner.session.get_storage_ids().await?;
