@@ -20,11 +20,72 @@ const MTP_SUBCLASS: u8 = 0x01;
 /// MTP protocol code (PTP).
 const MTP_PROTOCOL: u8 = 0x01;
 
-// USB Still Image Class (SIC) cancel constants.
+// USB Still Image Class (SIC) class-specific request constants.
 /// SIC Cancel Request bRequest code.
 const SIC_CANCEL_REQUEST: u8 = 0x64;
 /// CancelTransaction event code for the cancel payload.
 const SIC_CANCEL_EVENT_CODE: u16 = 0x4001;
+/// SIC Get Device Status Request bRequest code.
+const SIC_GET_DEVICE_STATUS_REQUEST: u8 = 0x67;
+/// PTP response code Device_Busy, reported in a device status response while
+/// the device is still processing a cancel.
+const SIC_STATUS_DEVICE_BUSY: u16 = 0x2019;
+
+/// Parse a SIC GET_DEVICE_STATUS response.
+///
+/// Layout: wLength (u16 LE, total meaningful bytes), Code (u16 LE, a PTP
+/// response code), then optional 32-bit parameters. When the device has
+/// stalled its bulk endpoint(s) during a cancel, the parameters carry the
+/// stalled endpoint addresses.
+///
+/// Returns `(code, stalled_endpoint_addresses)`, or `None` when the response
+/// is too short to contain a status code.
+fn parse_device_status(data: &[u8]) -> Option<(u16, Vec<u8>)> {
+    if data.len() < 4 {
+        return None;
+    }
+    let wlength = u16::from_le_bytes([data[0], data[1]]) as usize;
+    let code = u16::from_le_bytes([data[2], data[3]]);
+
+    let end = data.len().min(wlength);
+    let mut endpoints = Vec::new();
+    let mut offset = 4;
+    while offset + 4 <= end {
+        let param = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
+        // The endpoint address lives in the low byte of the 32-bit parameter.
+        endpoints.push(param as u8);
+        offset += 4;
+    }
+    Some((code, endpoints))
+}
+
+/// Clear the endpoint's halt after a STALL so the pipe is usable again, then
+/// convert the error.
+///
+/// Devices STALL a bulk endpoint to signal errors (PTP cameras do this for
+/// unsupported operations and properties). The halt persists until the host
+/// clears it — even across process restarts — so skipping this wedges every
+/// subsequent transfer on the endpoint (observed on the Panasonic Lumix
+/// DMC-TZ61, issue #12: a re-run of `ptp_diagnose` failed at `GetDeviceInfo`
+/// with "endpoint stalled" from the previous run's property probing).
+async fn clear_halt_if_stalled<T, D>(
+    ep: &mut nusb::Endpoint<T, D>,
+    err: TransferError,
+) -> crate::Error
+where
+    T: nusb::transfer::BulkOrInterrupt,
+    D: nusb::transfer::EndpointDirection,
+{
+    if matches!(err, TransferError::Stall) {
+        let _ = ep.clear_halt().await;
+    }
+    NusbTransport::convert_transfer_error(err)
+}
 
 /// Negotiated USB link speed for a device.
 ///
@@ -446,6 +507,85 @@ impl NusbTransport {
             | TransferError::Unknown(_) => crate::Error::Io(std::io::Error::other(err.to_string())),
         }
     }
+
+    /// Poll SIC GET_DEVICE_STATUS until the device reports it has finished
+    /// processing a cancel, clearing any bulk endpoint halts it reports.
+    ///
+    /// SIC-compliant devices (PTP cameras) report Device_Busy (0x2019) while
+    /// a cancel is in progress and expect the host to poll until the status
+    /// turns OK. Skipping this leaves them permanently unresponsive: on the
+    /// Panasonic Lumix DMC-TZ61 (issue #12), every operation after a
+    /// "successful" cancel timed out until a battery pull.
+    ///
+    /// This must run AFTER the bulk/interrupt drains (see `cancel_transfer`):
+    /// inserting it between CLASS_CANCEL and the drain breaks Android.
+    /// Android doesn't implement this control request at all — any error is
+    /// treated as "nothing to wait for" and ignored.
+    async fn settle_after_cancel(&self) {
+        const POLL_INTERVAL: Duration = Duration::from_millis(50);
+        // 100 polls x 50ms = 5s cap, far beyond any sane cancel processing.
+        const MAX_POLLS: u32 = 100;
+
+        for _ in 0..MAX_POLLS {
+            let result = self
+                .interface
+                .control_in(
+                    nusb::transfer::ControlIn {
+                        control_type: ControlType::Class,
+                        recipient: Recipient::Interface,
+                        request: SIC_GET_DEVICE_STATUS_REQUEST,
+                        value: 0,
+                        index: self.interface_number as u16,
+                        length: 64,
+                    },
+                    Duration::from_millis(300),
+                )
+                .await;
+
+            let Ok(data) = result else {
+                return; // Request unsupported (Android) or failed: done.
+            };
+            let Some((code, stalled_endpoints)) = parse_device_status(&data) else {
+                return; // Unparseable response: don't insist.
+            };
+            for address in stalled_endpoints {
+                self.clear_bulk_halt_by_address(address).await;
+            }
+            if code != SIC_STATUS_DEVICE_BUSY {
+                return;
+            }
+            Delay::new(POLL_INTERVAL).await;
+        }
+    }
+
+    /// Clear the halt condition on the bulk endpoint with the given address,
+    /// consuming any pending transfers first (nusb requires the endpoint to
+    /// be idle when clearing). Unknown addresses are ignored.
+    async fn clear_bulk_halt_by_address(&self, address: u8) {
+        {
+            let mut ep = self.bulk_in.lock().await;
+            if ep.endpoint_address() == address {
+                if ep.pending() > 0 {
+                    ep.cancel_all();
+                    while ep.pending() > 0 {
+                        let _ = ep.next_complete().await;
+                    }
+                }
+                let _ = ep.clear_halt().await;
+                return;
+            }
+        }
+        let mut ep = self.bulk_out.lock().await;
+        if ep.endpoint_address() == address {
+            if ep.pending() > 0 {
+                ep.cancel_all();
+                while ep.pending() > 0 {
+                    let _ = ep.next_complete().await;
+                }
+            }
+            let _ = ep.clear_halt().await;
+        }
+    }
 }
 
 #[async_trait]
@@ -454,7 +594,9 @@ impl Transport for NusbTransport {
         let mut ep = self.bulk_out.lock().await;
         let buf: Buffer = data.to_vec().into();
         let completion = ep.transfer_blocking(buf, self.timeout);
-        completion.status.map_err(Self::convert_transfer_error)?;
+        if let Err(e) = completion.status {
+            return Err(clear_halt_if_stalled(&mut ep, e).await);
+        }
         Ok(())
     }
 
@@ -486,7 +628,9 @@ impl Transport for NusbTransport {
                     let completion = ep
                         .wait_next_complete(self.timeout)
                         .ok_or(crate::Error::Timeout)?;
-                    completion.status.map_err(Self::convert_transfer_error)?;
+                    if let Err(e) = completion.status {
+                        return Err(clear_halt_if_stalled(&mut ep, e).await);
+                    }
                     total_sent += transfer_size;
                     current_buf = ep.allocate(transfer_size);
                 }
@@ -500,7 +644,9 @@ impl Transport for NusbTransport {
             let completion = ep
                 .wait_next_complete(self.timeout)
                 .ok_or(crate::Error::Timeout)?;
-            completion.status.map_err(Self::convert_transfer_error)?;
+            if let Err(e) = completion.status {
+                return Err(clear_halt_if_stalled(&mut ep, e).await);
+            }
 
             // If the final transfer was a multiple of max_packet_size, send ZLP
             // so the device sees a short packet delimiter.
@@ -509,7 +655,9 @@ impl Transport for NusbTransport {
                 let completion = ep
                     .wait_next_complete(self.timeout)
                     .ok_or(crate::Error::Timeout)?;
-                completion.status.map_err(Self::convert_transfer_error)?;
+                if let Err(e) = completion.status {
+                    return Err(clear_halt_if_stalled(&mut ep, e).await);
+                }
             }
         } else if total_sent > 0 && total_sent % max_packet_size == 0 {
             // All data fit in full transfers. Send ZLP to terminate.
@@ -517,7 +665,9 @@ impl Transport for NusbTransport {
             let completion = ep
                 .wait_next_complete(self.timeout)
                 .ok_or(crate::Error::Timeout)?;
-            completion.status.map_err(Self::convert_transfer_error)?;
+            if let Err(e) = completion.status {
+                return Err(clear_halt_if_stalled(&mut ep, e).await);
+            }
         }
 
         Ok(())
@@ -539,18 +689,30 @@ impl Transport for NusbTransport {
         // next_complete() is cancel-safe: dropping its future does NOT cancel
         // the underlying USB transfer. On timeout we leave the transfer pending
         // so a subsequent call picks up the in-flight data.
-        let completion = futures::future::select(
-            Box::pin(ep.next_complete()),
-            Box::pin(Delay::new(self.timeout)),
-        )
-        .await;
+        //
+        // The select result is unwrapped inside a block so the Either (which
+        // borrows `ep` through the next_complete future) is dropped before we
+        // need `ep` again for halt clearing.
+        let completed = {
+            let selected = futures::future::select(
+                Box::pin(ep.next_complete()),
+                Box::pin(Delay::new(self.timeout)),
+            )
+            .await;
+            match selected {
+                futures::future::Either::Left((comp, _)) => Some(comp),
+                futures::future::Either::Right((_, _)) => None,
+            }
+        };
 
-        match completion {
-            futures::future::Either::Left((comp, _)) => {
-                comp.status.map_err(Self::convert_transfer_error)?;
+        match completed {
+            Some(comp) => {
+                if let Err(e) = comp.status {
+                    return Err(clear_halt_if_stalled(&mut ep, e).await);
+                }
                 Ok(comp.buffer[..comp.actual_len].to_vec())
             }
-            futures::future::Either::Right((_, _)) => {
+            None => {
                 // Don't cancel the transfer — it stays pending in the endpoint.
                 // next_complete() is cancel-safe, so dropping its future is fine.
                 // On retry, the next call will find pending() > 0 and pick it up.
@@ -572,7 +734,9 @@ impl Transport for NusbTransport {
         // Await indefinitely — callers handle cancellation via async
         // cancellation (e.g. tokio::time::timeout or select!).
         let completion = ep.next_complete().await;
-        completion.status.map_err(Self::convert_transfer_error)?;
+        if let Err(e) = completion.status {
+            return Err(clear_halt_if_stalled(&mut ep, e).await);
+        }
         Ok(completion.buffer[..completion.actual_len].to_vec())
     }
 
@@ -595,10 +759,20 @@ impl Transport for NusbTransport {
     /// Android doesn't support anyway) causes the drain to find an empty pipe
     /// while the device's MTP state machine remains stuck.
     ///
+    /// AFTER the drains, though, GET_DEVICE_STATUS polling is required: the SIC
+    /// spec says the device reports Device_Busy while the cancel is processed,
+    /// and SIC-compliant devices (PTP cameras) wait for the host to poll until
+    /// the status turns OK before accepting new operations. Without this step,
+    /// the Panasonic Lumix DMC-TZ61 (issue #12) timed out on every operation
+    /// after a "successful" cancel until a battery pull. Android doesn't
+    /// implement the request; its failure is ignored.
+    ///
     /// The sequence is:
     /// 1. Send CLASS_CANCEL control request (bRequest=0x64, 300ms timeout)
     /// 2. Drain bulk IN pipe (read + discard until idle_timeout, maxpacket chunks)
     /// 3. Drain interrupt pipe (consume CancelTransaction event if present)
+    /// 4. Poll GET_DEVICE_STATUS (bRequest=0x67) until not Device_Busy,
+    ///    clearing any bulk endpoint halts the device reports
     ///
     /// References:
     /// - libmtp PR #2: <https://github.com/libmtp/libmtp/pull/2>
@@ -735,6 +909,12 @@ impl Transport for NusbTransport {
                 }
             }
         }
+
+        // Step 4: Poll GET_DEVICE_STATUS until the device reports it's done
+        // cancelling, clearing any endpoint halts it reports. Cameras need
+        // this to accept new operations after a cancel; Android ignores it.
+        self.settle_after_cancel().await;
+
         Ok(())
     }
 }
@@ -785,6 +965,49 @@ fn location_id_from_topology(dev: &nusb::DeviceInfo) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_device_status_ok() {
+        // wLength=4, code=OK (0x2001), no params
+        let data = [0x04, 0x00, 0x01, 0x20];
+        assert_eq!(parse_device_status(&data), Some((0x2001, vec![])));
+    }
+
+    #[test]
+    fn parse_device_status_busy() {
+        // wLength=4, code=Device_Busy (0x2019)
+        let data = [0x04, 0x00, 0x19, 0x20];
+        assert_eq!(parse_device_status(&data), Some((0x2019, vec![])));
+    }
+
+    #[test]
+    fn parse_device_status_with_stalled_endpoints() {
+        // wLength=12, code=Transaction_Cancelled (0x201F), params carry the
+        // stalled endpoint addresses 0x81 (bulk IN) and 0x02 (bulk OUT).
+        let data = [
+            0x0C, 0x00, 0x1F, 0x20, // header
+            0x81, 0x00, 0x00, 0x00, // param 1
+            0x02, 0x00, 0x00, 0x00, // param 2
+        ];
+        assert_eq!(parse_device_status(&data), Some((0x201F, vec![0x81, 0x02])));
+    }
+
+    #[test]
+    fn parse_device_status_respects_wlength_over_buffer_padding() {
+        // Device says 8 bytes meaningful, host buffer has trailing garbage.
+        let data = [
+            0x08, 0x00, 0x01, 0x20, // header: wLength=8, OK
+            0x81, 0x00, 0x00, 0x00, // param 1
+            0xFF, 0xFF, 0xFF, 0xFF, // garbage past wLength: ignored
+        ];
+        assert_eq!(parse_device_status(&data), Some((0x2001, vec![0x81])));
+    }
+
+    #[test]
+    fn parse_device_status_too_short() {
+        assert_eq!(parse_device_status(&[]), None);
+        assert_eq!(parse_device_status(&[0x04, 0x00, 0x01]), None);
+    }
 
     #[test]
     fn usb_speed_from_nusb_maps_every_documented_variant() {
