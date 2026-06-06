@@ -21,6 +21,11 @@ documentation = "https://docs.rs/mtp-rs-cli"
 [[bin]]
 name = "mtp-rs"
 path = "src/main.rs"
+# The bin target's rustdoc output dir (`mtp_rs`) collides with the lib crate's,
+# and `cargo doc` racily corrupts the docs (rust-lang/cargo#6313; flaky CI
+# failures). The bin has no doc content anyway (no `//!`, no public items), and
+# docs.rs shows the crate page for bin-only crates regardless.
+doc = false
 
 [dependencies]
 mtp-rs = { version = "0.19.0", path = "../mtp-rs" }
