@@ -114,8 +114,26 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   libmtp and Windows behavior).
 - The interrupt pipe must also be drained — some devices (GoPro) freeze if
   the CancelTransaction event is left unread.
+- **After** the drains, GET_DEVICE_STATUS (0x67) **must** be polled until the
+  device stops reporting Device_Busy, clearing any endpoint halts the status
+  reports. SIC-compliant cameras wait for this before accepting new
+  operations; skipping it left the Lumix DMC-TZ61 (#12) dead after every
+  cancel. The order is the whole trick: drain first (for Android), poll after
+  (for cameras). Android fails the request harmlessly.
 - See `NusbTransport::cancel_transfer()` for the full implementation with
   detailed comments.
+
+## Stall recovery and device reset
+
+- Devices STALL a bulk endpoint to signal errors (cameras do this for
+  unsupported operations); the halt persists until cleared, even across
+  process restarts. Every bulk completion site clears the halt via
+  `clear_halt` on STALL.
+- `Transport::reset_device()` / `PtpDevice::reset_device()` / the CLI's
+  `mtp-rs reset` send the SIC DEVICE_RESET request (0x66), clear halts, and
+  drain stale bulk data — without a PTP session, so they work on a device too
+  wedged for `OpenSession` ("Transaction ID mismatch" / "expected Response
+  container type" on every command).
 
 ## Streaming uploads (USB bulk transfer details)
 

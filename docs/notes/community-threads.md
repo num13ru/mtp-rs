@@ -4,7 +4,7 @@ Catch-up reading for any agent that picks up issue or PR work, so you don't have
 start. Read this first when triaging a new issue or PR, and update it after work that affects community-facing context
 (see [Updating this doc](#updating-this-doc) at the bottom).
 
-Last updated: 2026-06-06.
+Last updated: 2026-06-07.
 
 ## Intentionally / continuously open threads
 
@@ -45,13 +45,34 @@ camera as promised in #6. Two failure classes, both root-caused via the reporter
    `DateCreated`/`DateModified`. `unpack_datetime` raised a hard error on it, which failed the whole `ObjectInfo`
    parse, which failed the entire listing — and the old test helper swallowed the error into "no suitable file found".
    Fixed 2026-06-06: receive-side datetime parsing is lenient (unparseable → `None`); send-side packing stays strict.
+   **Confirmed by the reporter 2026-06-06**: the recursive search found a photo and ran the cancel test.
    (An earlier hypothesis blamed `ParentFilter::Exact` dropping objects on mismatched parent handles — that was
    wrong, don't chase it.)
 
-Also surfaced, **not actionable in the library**: aborting (Ctrl+C) a connected session mid-listing froze the camera
-completely (no power-button response; "Transaction ID mismatch" / "expected Response container type (3), got 2" on
-reconnect) until a battery pull. Camera firmware bug. The camera does advertise `ResetDevice` (0x1010), which might
-un-stick it without a battery pull — untested.
+Second test batch (2026-06-06, logs on the issue) surfaced four more problems; all addressed 2026-06-07, hardware
+confirmation pending:
+
+3. **Camera dead after a "successful" cancel.** `Cancel succeeded` was followed by `list root after cancel - Timeout`
+   and every subsequent test timing out until power-cycle, identically in two runs. Root cause: our cancel flow
+   skipped the SIC spec's post-cancel step. Fixed: `cancel_transfer` now polls GET_DEVICE_STATUS (0x67) after the
+   drains until the device stops reporting Device_Busy, clearing reported endpoint halts. Polling must stay AFTER the
+   drains (between cancel and drain it breaks Android — that's what the old comment warned about; Android simply
+   fails the request, harmlessly).
+4. **Persistent "endpoint stalled" across process runs.** Probing unsupported device properties (`ptp_diagnose`)
+   makes the camera STALL the bulk endpoint, and the halt survives process restarts, so an immediate re-run failed at
+   `GetDeviceInfo`. Fixed: every bulk/interrupt completion site clears the halt (`clear_halt`) before surfacing the
+   error.
+5. **Embedded NUL in the serial number** (editor encoding warning on logs). The camera pads the serial to a fixed
+   width with multiple NULs; `unpack_string` stripped only one. Fixed: strings truncate at the first NUL.
+6. **10+ minute test file search.** The recursive fallback listed the whole storage before filtering. Fixed:
+   breadth-first streaming search with early exit, cross-test caching of the find, and an `MTP_TEST_READFILE` env
+   override (the reporter's suggestion). The `diagnose` example's recursion is bounded to 200 objects for the same
+   reason.
+
+On the hard freeze (Ctrl+C mid-listing → no power-button response → battery pull): that's camera firmware, but the
+state it gets stuck in is now addressable. New `mtp-rs reset` CLI command / `PtpDevice::reset_device()` sends the SIC
+DEVICE_RESET control request (0x66) without needing a PTP session, clears halts, and drains stale data. Whether it
+rescues the Lumix's full freeze is untested; it should at least fix the softer "Transaction ID mismatch" wedge.
 
 Note: the reporter's retest cycles can take weeks ("days/weeks/months"), so bundle asks into single well-aimed
 comments.
@@ -170,7 +191,10 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 | Vendor-class macOS devices   | IOKit doesn't publish interfaces until config is set                  | `SetConfiguration(1)` retry on `claim_interface`  | #4                     |
 | Panasonic Lumix DMC-TZ61     | Firmware-filtered read-only PTP view; doesn't advertise `SendObjectInfo`/`SendObject`; rejects `SendObjectInfo` with `InvalidObjectFormatCode` | Gate writes on `supports_upload()` (confirmed working) | #12 (@juleskers, 2026-06-03) |
 | Panasonic Lumix DMC-TZ61     | Reports `20480000T000000` (month 0, day 0) as "no date" in ObjectInfo datetimes | Lenient receive-side datetime parsing (unparseable → `None`) | #12 (root-caused 2026-06-05) |
-| Panasonic Lumix DMC-TZ61     | Freezes hard (battery-pull-level) if the host aborts mid-listing | None (camera firmware bug); `ResetDevice` (0x1010) advertised but untested | #12 |
+| Panasonic Lumix DMC-TZ61     | Freezes hard (battery-pull-level) if the host aborts mid-listing | `mtp-rs reset` / `PtpDevice::reset_device()` (SIC 0x66, untested on the full freeze) | #12 |
+| PTP cameras (SIC-compliant)  | Unusable after a cancel unless the host polls GET_DEVICE_STATUS until not Device_Busy | Step 4 in `cancel_transfer` (post-drain polling + halt clearing) | #12 (2026-06-07) |
+| PTP cameras (SIC-compliant)  | STALL bulk endpoint for unsupported operations/properties; halt persists across processes | `clear_halt` at every bulk completion site on STALL | #12 (2026-06-07) |
+| Panasonic Lumix DMC-TZ61     | Pads serial number to fixed width with multiple NULs | `unpack_string` truncates at first NUL | #12 (2026-06-06) |
 
 ## Recurring contributors
 
