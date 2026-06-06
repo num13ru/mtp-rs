@@ -712,8 +712,10 @@ mod tests {
     // --- Fuzz tests ---
 
     fn valid_property_string() -> impl Strategy<Value = String> {
+        // NUL is excluded: PTP strings are null-terminated, so a NUL can
+        // never appear inside one (unpack_string truncates at the first NUL).
         prop::collection::vec(
-            prop::char::range('\u{0000}', '\u{D7FF}')
+            prop::char::range('\u{0001}', '\u{D7FF}')
                 .prop_union(prop::char::range('\u{E000}', '\u{FFFF}')),
             0..50,
         )

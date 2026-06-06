@@ -28,6 +28,18 @@
 //! ```
 //!
 //! When no match is found, destructive tests skip with a clear log line.
+//!
+//! ## Picking a file for download tests
+//!
+//! Download tests search for a file in a size range: common folders first,
+//! then a recursive streaming search that stops at the first match. The find
+//! is cached across tests in the run. On devices where even that is slow, or
+//! to pin a specific file, set `MTP_TEST_READFILE` to a `/`-separated path
+//! from the storage root and no searching happens at all:
+//!
+//! ```sh
+//! MTP_TEST_READFILE=/DCIM/111_PANA/P1110001.JPG cargo test --test integration -- --ignored ...
+//! ```
 
 use mtp_rs::mtp::Storage;
 use mtp_rs::ptp::ObjectHandle;
@@ -158,30 +170,161 @@ async fn find_file_in_common_folders(
     None
 }
 
-/// Find a suitable file, falling back to recursive listing if needed.
+/// Cache of the last file found by [`find_suitable_file`], shared across
+/// tests in one suite run. Searching can take 10+ minutes on devices with
+/// slow per-object metadata fetches (PTP cameras), so doing it once is a big
+/// win. The handle is re-verified against the device before reuse, since
+/// every test opens its own session.
+static FOUND_FILE_CACHE: std::sync::Mutex<Option<(ObjectHandle, u64, String)>> =
+    std::sync::Mutex::new(None);
+
+/// Resolve the `MTP_TEST_READFILE` override: a `/`-separated path from the
+/// storage root, for example `/DCIM/111_PANA/P1110001.JPG`. Skips all
+/// searching. Returns `None` (with a log line) when the path doesn't resolve.
+async fn resolve_readfile_override(
+    storage: &Storage,
+    path: &str,
+) -> Option<(ObjectHandle, u64, String)> {
+    let mut parent: Option<ObjectHandle> = None;
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let (last, folders) = segments.split_last()?;
+
+    for segment in folders {
+        let objects = match storage.list_objects(parent).await {
+            Ok(o) => o,
+            Err(e) => {
+                tlog!("MTP_TEST_READFILE: listing '{}' failed: {:?}", segment, e);
+                return None;
+            }
+        };
+        let Some(folder) = objects
+            .iter()
+            .find(|o| o.is_folder() && o.filename == *segment)
+        else {
+            tlog!("MTP_TEST_READFILE: folder '{}' not found", segment);
+            return None;
+        };
+        parent = Some(folder.handle);
+    }
+
+    // Stream the final folder so we can stop at the name match instead of
+    // fetching metadata for every sibling.
+    let mut listing = match storage.list_objects_stream(parent).await {
+        Ok(l) => l,
+        Err(e) => {
+            tlog!("MTP_TEST_READFILE: listing final folder failed: {:?}", e);
+            return None;
+        }
+    };
+    while let Some(result) = listing.next().await {
+        match result {
+            Ok(obj) if obj.is_file() && obj.filename == *last => {
+                return Some((obj.handle, obj.size, obj.filename));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tlog!("MTP_TEST_READFILE: object fetch failed: {:?}", e);
+                return None;
+            }
+        }
+    }
+    tlog!("MTP_TEST_READFILE: file '{}' not found", last);
+    None
+}
+
+/// Breadth-first streaming search with early exit: returns the first file in
+/// the size range, checking objects as their metadata arrives instead of
+/// listing the whole storage first. On cameras with hundreds of photos this
+/// returns in seconds where a full recursive listing takes 10+ minutes.
+async fn find_file_recursive_early_exit(
+    storage: &Storage,
+    min_size: u64,
+    max_size: u64,
+) -> Option<(ObjectHandle, u64, String)> {
+    let mut to_visit: std::collections::VecDeque<Option<ObjectHandle>> =
+        std::collections::VecDeque::from([None]);
+
+    while let Some(parent) = to_visit.pop_front() {
+        let mut listing = match storage.list_objects_stream(parent).await {
+            Ok(l) => l,
+            Err(e) => {
+                tlog!("Listing folder failed: {:?}", e);
+                continue;
+            }
+        };
+        while let Some(result) = listing.next().await {
+            match result {
+                Ok(obj) => {
+                    if obj.is_file() && obj.size > min_size && obj.size < max_size {
+                        return Some((obj.handle, obj.size, obj.filename));
+                    }
+                    if obj.is_folder() {
+                        to_visit.push_back(Some(obj.handle));
+                    }
+                }
+                Err(e) => {
+                    tlog!("Object fetch failed: {:?}", e);
+                    return None;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find a suitable file for download tests.
+///
+/// Resolution order:
+/// 1. `MTP_TEST_READFILE` env override (exact path, no searching)
+/// 2. Cache from an earlier test in this run (re-verified against the device)
+/// 3. Common folders (fast)
+/// 4. Recursive streaming search with early exit (slow, but stops at the
+///    first match)
 async fn find_suitable_file(
     storage: &Storage,
     min_size: u64,
     max_size: u64,
 ) -> Option<(ObjectHandle, u64, String)> {
-    // Try common folders first (fast)
-    if let Some(result) = find_file_in_common_folders(storage, min_size, max_size).await {
-        return Some(result);
+    if let Ok(path) = std::env::var("MTP_TEST_READFILE") {
+        tlog!("Using MTP_TEST_READFILE={}", path);
+        let found = resolve_readfile_override(storage, &path).await?;
+        if found.1 > min_size && found.1 < max_size {
+            return Some(found);
+        }
+        tlog!(
+            "MTP_TEST_READFILE file is {} bytes, outside the {}-{} range, skipping",
+            found.1,
+            min_size,
+            max_size
+        );
+        return None;
     }
 
-    // Fall back to recursive listing (slow)
-    tlog!("No file in common folders, trying recursive listing...");
-    let objects = match storage.list_objects_recursive(None).await {
-        Ok(objects) => objects,
-        Err(e) => {
-            tlog!("Recursive listing failed: {:?}", e);
-            return None;
+    // Reuse an earlier find if it fits this test's range and still resolves.
+    let cached = FOUND_FILE_CACHE.lock().unwrap().clone();
+    if let Some((handle, size, name)) = cached {
+        if size > min_size && size < max_size {
+            if let Ok(info) = storage.get_object_info(handle).await {
+                if info.size == size && info.filename == name {
+                    tlog!("Reusing cached file: {} ({} bytes)", name, size);
+                    return Some((handle, size, name));
+                }
+            }
         }
+    }
+
+    let found = if let Some(result) = find_file_in_common_folders(storage, min_size, max_size).await
+    {
+        Some(result)
+    } else {
+        tlog!("No file in common folders, trying recursive search (early-exit)...");
+        find_file_recursive_early_exit(storage, min_size, max_size).await
     };
-    objects
-        .iter()
-        .find(|o| o.is_file() && o.size > min_size && o.size < max_size)
-        .map(|f| (f.handle, f.size, f.filename.clone()))
+
+    if let Some(f) = &found {
+        *FOUND_FILE_CACHE.lock().unwrap() = Some(f.clone());
+    }
+    found
 }
 
 /// Find a writable folder at storage root for destructive tests.

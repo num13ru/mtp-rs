@@ -213,17 +213,19 @@ pub fn unpack_string(buf: &[u8]) -> Result<(String, usize), crate::Error> {
         )));
     }
 
-    // Decode UTF-16LE code units
+    // Decode UTF-16LE code units, stopping at the first NUL. PTP strings are
+    // null-terminated, so anything after the first NUL is padding garbage.
+    // Some devices (Panasonic Lumix DMC-TZ61, issue #12) pad fixed-width
+    // fields like the serial number with multiple NULs; keeping them would
+    // embed control characters in the decoded String.
     let mut code_units = Vec::with_capacity(len);
     for i in 0..len {
         let offset = 1 + i * 2;
         let code_unit = u16::from_le_bytes([buf[offset], buf[offset + 1]]);
+        if code_unit == 0 {
+            break;
+        }
         code_units.push(code_unit);
-    }
-
-    // Remove null terminator if present
-    if code_units.last() == Some(&0) {
-        code_units.pop();
     }
 
     // Decode UTF-16 to String
@@ -401,6 +403,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unpack_string_truncates_at_first_null() {
+        // Panasonic Lumix DMC-TZ61 (issue #12) pads its serial number to a
+        // fixed width with multiple NULs. Anything from the first NUL on is
+        // padding per the PTP spec (strings are null-terminated), so it must
+        // not leak into the decoded String. Buffer: len=5, "AB\0C\0".
+        let buf: &[u8] = &[
+            0x05, b'A', 0x00, b'B', 0x00, 0x00, 0x00, b'C', 0x00, 0x00, 0x00,
+        ];
+        let (s, consumed) = unpack_string(buf).unwrap();
+        assert_eq!(s, "AB");
+        // The whole declared length is still consumed, so following fields
+        // stay aligned.
+        assert_eq!(consumed, 11);
+    }
+
     // --- Array tests ---
 
     #[test]
@@ -440,8 +458,10 @@ mod tests {
     // --- Property-based tests ---
 
     fn valid_utf16_string() -> impl Strategy<Value = String> {
+        // NUL is excluded: PTP strings are null-terminated, so a NUL can
+        // never appear inside one (unpack_string truncates at the first NUL).
         prop::collection::vec(
-            prop::char::range('\u{0000}', '\u{D7FF}')
+            prop::char::range('\u{0001}', '\u{D7FF}')
                 .prop_union(prop::char::range('\u{E000}', '\u{FFFF}')),
             0..100,
         )
