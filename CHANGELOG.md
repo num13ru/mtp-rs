@@ -17,6 +17,11 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 ### Added
 
 - **[lib] `MtpDevice::supports_upload()` and `DeviceInfo::supports_upload()`.** Returns true when the device advertises both `SendObjectInfo` (0x100C) and `SendObject` (0x100D), the two-phase object creation flow. Read-only devices (PTP cameras like the Panasonic Lumix DMC-TZ61 from [#12](https://github.com/vdavid/mtp-rs/issues/12)) typically don't advertise these, so consumers can skip write attempts up front. Mirrors the existing `supports_rename()`. Note the result means "worth attempting", not "guaranteed": Fuji cameras advertise write support yet reject writes per-operation.
+- **[lib] 13 new `OperationCode` variants** covering the rest of the standard PTP set (`FormatStore`, `ResetDevice`, `SelfTest`, `SetObjectProtection`, `PowerDown`, `TerminateOpenCapture`, `InitiateOpenCapture`) and the common MTP object-property extensions (`GetObjectPropsSupported`, `GetObjectPropDesc`, `GetObjectPropList`, `SetObjectPropList`, `GetObjectReferences`, `SetObjectReferences`). These previously decoded as `Unknown(...)`, which made diagnostic output (the `ptp_diagnose` example, the CLI's `doctor`) harder to read. Spotted on the Lumix DMC-TZ61's operations list in [#12](https://github.com/vdavid/mtp-rs/issues/12). Technically breaking for exhaustive matches on `OperationCode`, but matches realistically end in an `Unknown(_)` or `_` arm.
+
+### Fixed
+
+- **[lib] Unparseable datetimes in `ObjectInfo` no longer fail the whole listing.** The Panasonic Lumix DMC-TZ61 ([#12](https://github.com/vdavid/mtp-rs/issues/12)) reports `20480000T000000` (month 0, day 0) as its "no date" sentinel in `DateCreated`/`DateModified`. `unpack_datetime` treated that as a hard error, which failed the `ObjectInfo` parse, which failed the entire (recursive) listing: hundreds of photos invisible because of one metadata field. Receive-side parsing is now lenient: an unparseable datetime becomes `None` (the length-prefixed string is still consumed correctly, so the fields after it stay aligned). Send-side packing stays strict.
 
 ### Changed
 

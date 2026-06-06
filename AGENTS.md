@@ -59,6 +59,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 - **Android**: Uploads to the storage root are rejected with `InvalidObjectHandle`. Upload into an existing folder (for example, `Download`) instead.
 - **Fujifilm cameras**: Report `AccessCapability::ReadWrite` but return `StoreReadOnly` on writes. Advertised ops lie.
 - **Samsung**: Returns `InvalidObjectHandle` for root listing; needs recursive traversal with filtering
+- **Panasonic Lumix DMC-TZ61** (and likely other PTP cameras): Reports `20480000T000000` (month 0, day 0) as "no date" in ObjectInfo datetimes. Receive-side datetime parsing is lenient for this reason: unparseable datetimes become `None` instead of failing the dataset parse. Send-side packing stays strict.
 
 ## Testing
 

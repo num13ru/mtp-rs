@@ -164,18 +164,19 @@ pub fn pack_datetime(dt: &DateTime) -> Result<Vec<u8>, crate::Error> {
 
 /// Unpack a DateTime from a buffer.
 ///
-/// Returns the datetime (or None for empty string) and the number of bytes consumed.
+/// Returns the datetime (or None for an empty or unparseable string) and the
+/// number of bytes consumed.
+///
+/// Unparseable datetimes are treated as absent rather than as an error:
+/// datetime fields are informational metadata, and real devices put
+/// non-spec values in them. The Panasonic Lumix DMC-TZ61 reports
+/// `20480000T000000` (month 0, day 0) as its "no date" sentinel, and a hard
+/// error here would fail the whole `ObjectInfo` parse and with it the whole
+/// listing (issue #12). The string itself was already length-prefixed and
+/// consumed correctly, so only its interpretation is skipped.
 pub fn unpack_datetime(buf: &[u8]) -> Result<(Option<DateTime>, usize), crate::Error> {
     let (s, consumed) = unpack_string(buf)?;
-
-    if s.is_empty() {
-        return Ok((None, consumed));
-    }
-
-    let dt = DateTime::parse(&s)
-        .ok_or_else(|| crate::Error::invalid_data(format!("invalid datetime format: {}", s)))?;
-
-    Ok((Some(dt), consumed))
+    Ok((DateTime::parse(&s), consumed))
 }
 
 #[cfg(test)]
@@ -345,8 +346,24 @@ mod tests {
     }
 
     #[test]
-    fn unpack_datetime_invalid_format() {
-        assert!(unpack_datetime(&pack_string("not a date")).is_err());
+    fn unpack_datetime_unparseable_string_returns_none() {
+        // Receive-side leniency: garbage in a datetime field must not fail the
+        // surrounding dataset parse (it's informational metadata).
+        let packed = pack_string("not a date");
+        let (dt, consumed) = unpack_datetime(&packed).unwrap();
+        assert_eq!(dt, None);
+        assert_eq!(consumed, packed.len());
+    }
+
+    #[test]
+    fn unpack_datetime_panasonic_no_date_sentinel_returns_none() {
+        // Panasonic Lumix DMC-TZ61 reports "20480000T000000" (month 0, day 0)
+        // as its "no date" value. Seen in the wild (issue #12); must parse as
+        // None, not error.
+        let packed = pack_string("20480000T000000");
+        let (dt, consumed) = unpack_datetime(&packed).unwrap();
+        assert_eq!(dt, None);
+        assert_eq!(consumed, packed.len());
     }
 
     #[test]

@@ -42,6 +42,16 @@ pub enum OperationCode {
     SendObject = 0x100D,
     /// Initiate image capture on a camera.
     InitiateCapture = 0x100E,
+    /// Format (erase) a storage.
+    FormatStore = 0x100F,
+    /// Reset the device to its default state, closing all sessions.
+    ResetDevice = 0x1010,
+    /// Run a device self-test.
+    SelfTest = 0x1011,
+    /// Set the write/delete protection status of an object.
+    SetObjectProtection = 0x1012,
+    /// Power down the device.
+    PowerDown = 0x1013,
     /// Get device property descriptor.
     GetDevicePropDesc = 0x1014,
     /// Get current device property value.
@@ -50,16 +60,32 @@ pub enum OperationCode {
     SetDevicePropValue = 0x1016,
     /// Reset device property to default value.
     ResetDevicePropValue = 0x1017,
+    /// Terminate an open capture session.
+    TerminateOpenCapture = 0x1018,
     /// Move an object to a different location.
     MoveObject = 0x1019,
     /// Copy an object.
     CopyObject = 0x101A,
     /// Get partial object data (range request). Offset is u32, so capped at 4 GB.
     GetPartialObject = 0x101B,
+    /// Initiate an open-ended capture session.
+    InitiateOpenCapture = 0x101C,
+    /// Get the object properties the device supports for a format (MTP extension).
+    GetObjectPropsSupported = 0x9801,
+    /// Get an object property descriptor (MTP extension).
+    GetObjectPropDesc = 0x9802,
     /// Get the value of an object property (MTP extension).
     GetObjectPropValue = 0x9803,
     /// Set the value of an object property (MTP extension).
     SetObjectPropValue = 0x9804,
+    /// Get a list of object properties in one call (MTP extension).
+    GetObjectPropList = 0x9805,
+    /// Set a list of object properties in one call (MTP extension).
+    SetObjectPropList = 0x9806,
+    /// Get the references (associations) of an object (MTP extension).
+    GetObjectReferences = 0x9810,
+    /// Set the references (associations) of an object (MTP extension).
+    SetObjectReferences = 0x9811,
     /// Get partial object data with 64-bit offset (Android/MTP extension).
     /// Supports files larger than 4 GB. Parameters: handle, offset_lo, offset_hi, max_bytes.
     GetPartialObject64 = 0x95C1,
@@ -486,6 +512,31 @@ pub enum DevicePropertyCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operation_code_standard_ptp_and_mtp_codes() {
+        // The exact codes the Panasonic Lumix DMC-TZ61 advertised as
+        // Unknown(...) in issue #12, plus the rest of the standard sets.
+        let cases: [(u16, OperationCode); 13] = [
+            (0x100F, OperationCode::FormatStore),
+            (0x1010, OperationCode::ResetDevice),
+            (0x1011, OperationCode::SelfTest),
+            (0x1012, OperationCode::SetObjectProtection),
+            (0x1013, OperationCode::PowerDown),
+            (0x1018, OperationCode::TerminateOpenCapture),
+            (0x101C, OperationCode::InitiateOpenCapture),
+            (0x9801, OperationCode::GetObjectPropsSupported),
+            (0x9802, OperationCode::GetObjectPropDesc),
+            (0x9805, OperationCode::GetObjectPropList),
+            (0x9806, OperationCode::SetObjectPropList),
+            (0x9810, OperationCode::GetObjectReferences),
+            (0x9811, OperationCode::SetObjectReferences),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(OperationCode::from(raw), expected);
+            assert_eq!(u16::from(expected), raw);
+        }
+    }
 
     #[test]
     fn from_extension_detection() {

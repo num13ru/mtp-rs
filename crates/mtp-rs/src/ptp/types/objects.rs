@@ -378,6 +378,41 @@ mod tests {
         assert!(!info.is_folder());
     }
 
+    #[test]
+    fn object_info_parse_with_unparseable_datetime() {
+        // Panasonic Lumix DMC-TZ61 (issue #12) reports "20480000T000000"
+        // (month 0, day 0) as its "no date" sentinel in DateCreated and
+        // DateModified. The whole ObjectInfo must still parse; the dates
+        // become None and the fields after them (Keywords) stay aligned.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&pack_u32(0x00010001)); // StorageID
+        buf.extend_from_slice(&pack_u16(0x3801)); // ObjectFormat: JPEG
+        buf.extend_from_slice(&pack_u16(0)); // ProtectionStatus
+        buf.extend_from_slice(&pack_u32(5_000_000)); // ObjectCompressedSize
+        buf.extend_from_slice(&pack_u16(0x3801)); // ThumbFormat
+        buf.extend_from_slice(&pack_u32(512)); // ThumbCompressedSize
+        buf.extend_from_slice(&pack_u32(160)); // ThumbPixWidth
+        buf.extend_from_slice(&pack_u32(120)); // ThumbPixHeight
+        buf.extend_from_slice(&pack_u32(4896)); // ImagePixWidth
+        buf.extend_from_slice(&pack_u32(3672)); // ImagePixHeight
+        buf.extend_from_slice(&pack_u32(24)); // ImageBitDepth
+        buf.extend_from_slice(&pack_u32(5)); // ParentObject
+        buf.extend_from_slice(&pack_u16(0)); // AssociationType
+        buf.extend_from_slice(&pack_u32(0)); // AssociationDesc
+        buf.extend_from_slice(&pack_u32(1)); // SequenceNumber
+        buf.extend_from_slice(&pack_string("P1040001.JPG")); // Filename
+        buf.extend_from_slice(&pack_string("20480000T000000")); // DateCreated (sentinel)
+        buf.extend_from_slice(&pack_string("20480000T000000")); // DateModified (sentinel)
+        buf.extend_from_slice(&pack_string("kw")); // Keywords
+
+        let info = ObjectInfo::from_bytes(&buf).unwrap();
+        assert_eq!(info.filename, "P1040001.JPG");
+        assert_eq!(info.created, None);
+        assert_eq!(info.modified, None);
+        assert_eq!(info.keywords, "kw");
+        assert!(info.is_file());
+    }
+
     fn build_folder_object_info_bytes() -> Vec<u8> {
         let mut buf = Vec::new();
 
