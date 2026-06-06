@@ -77,6 +77,22 @@ impl PtpDevice {
         })
     }
 
+    /// Reset the device's USB transport state without opening a session.
+    ///
+    /// Sends the USB Still Image Class Device Reset request (`bRequest=0x66`),
+    /// clears halted bulk endpoints, and drains stale bulk data. Use this to
+    /// recover a device whose PTP state machine is stuck — for example after
+    /// a host process died mid-transfer, when every operation fails with
+    /// "Transaction ID mismatch" or "expected Response container type"
+    /// errors.
+    ///
+    /// This is the USB transport-level reset, not the in-session
+    /// `ResetDevice` (0x1010) PTP operation: it works precisely when the
+    /// device is too confused for PTP traffic.
+    pub async fn reset_device(&self) -> Result<(), Error> {
+        self.transport.reset_device().await
+    }
+
     /// Get device info without opening a session.
     ///
     /// This is the only operation that can be performed without a session.

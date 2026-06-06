@@ -45,6 +45,9 @@ mtp-rs cp /Archive/new.bin /Archive/new-copy.bin
 
 # Diagnose access, storage, and common USB ownership issues.
 mtp-rs doctor
+
+# Recover a stuck device after an interrupted transfer (no replug needed).
+mtp-rs reset
 ```
 
 Remote paths are POSIX-like and absolute: `/`, `/Music/song.mp3`, `/GARMIN/APPS/app.prg`. Device-specific workflows are just normal file operations. For example, Garmin Connect IQ sideloading is:

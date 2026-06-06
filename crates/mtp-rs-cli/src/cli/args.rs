@@ -74,6 +74,9 @@ pub enum Command {
 
     /// Diagnose device visibility and basic MTP access.
     Doctor,
+
+    /// Reset a stuck device's USB transport state (no PTP session needed).
+    Reset,
 }
 
 #[derive(Debug, Args)]

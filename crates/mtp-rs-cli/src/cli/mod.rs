@@ -38,6 +38,7 @@ pub async fn run() -> Result<(), CliError> {
         Command::Mv(args) => commands::mv::run(&cli, args).await,
         Command::Cp(args) => commands::cp::run(&cli, args).await,
         Command::Doctor => commands::doctor::run(&cli).await,
+        Command::Reset => commands::reset::run(&cli).await,
     }
 }
 

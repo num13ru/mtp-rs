@@ -69,4 +69,20 @@ pub trait Transport: Send + Sync {
         transaction_id: u32,
         idle_timeout: Duration,
     ) -> Result<(), crate::Error>;
+
+    /// Reset the device to its idle state using the USB Still Image Class
+    /// Device Reset request (`bRequest=0x66`), then clear stale transport
+    /// state (halted endpoints, leftover bulk IN data).
+    ///
+    /// This is the recovery tool for a device whose PTP state machine is
+    /// stuck: a host process died mid-transfer and leftover data poisons the
+    /// next session ("Transaction ID mismatch", "expected Response container
+    /// type (3), got 2"), or the device stopped answering after an
+    /// interrupted listing. No PTP session is needed.
+    ///
+    /// The default implementation is a no-op success for transports that
+    /// have no USB-level state (mock, virtual device).
+    async fn reset_device(&self) -> Result<(), crate::Error> {
+        Ok(())
+    }
 }

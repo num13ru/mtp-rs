@@ -240,6 +240,27 @@ common writable-folder hints such as `Download`, `Documents`, `Music`, and
 `GARMIN`. In JSON mode it keeps the visible device rows, including
 `match_reason`, even when opening the selected device fails.
 
+### `reset`
+
+Reset a stuck device's USB transport state. No PTP session needed, so it
+works when every other command fails.
+
+```sh
+mtp-rs reset
+mtp-rs reset --device SERIAL --json
+```
+
+Use this when a device stops responding after an interrupted transfer:
+typical symptoms are every command failing with "Transaction ID mismatch" or
+"expected Response container type" errors. `reset` sends the USB Still Image
+Class Device Reset request (the same recovery Windows uses), clears halted
+endpoints, and drains stale data. It then verifies the device responds again
+with a session-less GetDeviceInfo.
+
+Works on real USB devices only (virtual devices have no USB transport).
+Some devices with hard-wedged firmware still need a power cycle; `reset`
+covers everything short of that.
+
 ## JSON Output
 
 Pass `--json` to any command for machine-readable output:
@@ -372,4 +393,15 @@ and increase timeout for large files:
 
 ```sh
 mtp-rs --timeout 120 put ./large-video.mp4 /Movies/large-video.mp4
+```
+
+### Device Stuck After An Interrupted Transfer
+
+When a transfer or listing gets interrupted (Ctrl+C, crash, sleep), some
+devices keep waiting for the rest of the transaction. Symptoms: every command
+fails with "Transaction ID mismatch" or "expected Response container type"
+errors. Run [`reset`](#reset) to recover without replugging:
+
+```sh
+mtp-rs reset
 ```

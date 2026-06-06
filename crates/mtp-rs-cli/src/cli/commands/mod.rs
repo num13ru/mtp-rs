@@ -15,4 +15,5 @@ pub mod mkdir;
 pub mod mv;
 pub mod put;
 pub mod rename;
+pub mod reset;
 pub mod rm;

@@ -25,6 +25,9 @@ const MTP_PROTOCOL: u8 = 0x01;
 const SIC_CANCEL_REQUEST: u8 = 0x64;
 /// CancelTransaction event code for the cancel payload.
 const SIC_CANCEL_EVENT_CODE: u16 = 0x4001;
+/// SIC Device Reset Request bRequest code. Returns the device to the Idle
+/// state without re-enumerating, clearing a stuck transaction.
+const SIC_DEVICE_RESET_REQUEST: u8 = 0x66;
 /// SIC Get Device Status Request bRequest code.
 const SIC_GET_DEVICE_STATUS_REQUEST: u8 = 0x67;
 /// PTP response code Device_Busy, reported in a device status response while
@@ -914,6 +917,89 @@ impl Transport for NusbTransport {
         // cancelling, clearing any endpoint halts it reports. Cameras need
         // this to accept new operations after a cancel; Android ignores it.
         self.settle_after_cancel().await;
+
+        Ok(())
+    }
+
+    /// USB Still Image Class device reset.
+    ///
+    /// Sequence:
+    /// 1. Send DEVICE_RESET control request (bRequest=0x66, no payload). The
+    ///    device returns to the Idle state and abandons any half-finished
+    ///    transaction.
+    /// 2. Clear halts on both bulk endpoints. The reset resets the device's
+    ///    data toggles, so the host side must resync or the next transfers
+    ///    silently drop.
+    /// 3. Drain stale bulk IN data. Leftover containers from an aborted
+    ///    transfer otherwise surface in the next session as "Transaction ID
+    ///    mismatch" or "expected Response container type (3), got 2"
+    ///    (observed on the Panasonic Lumix DMC-TZ61, issue #12, after a
+    ///    Ctrl-C'd listing).
+    async fn reset_device(&self) -> Result<(), crate::Error> {
+        // Step 1: DEVICE_RESET control request.
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Class,
+                    recipient: Recipient::Interface,
+                    request: SIC_DEVICE_RESET_REQUEST,
+                    value: 0,
+                    index: self.interface_number as u16,
+                    data: &[],
+                },
+                Duration::from_secs(1),
+            )
+            .await
+            .map_err(Self::convert_transfer_error)?;
+
+        // Step 2: Resync both bulk endpoints (consume pending, clear halt).
+        {
+            let mut ep = self.bulk_out.lock().await;
+            if ep.pending() > 0 {
+                ep.cancel_all();
+                while ep.pending() > 0 {
+                    let _ = ep.next_complete().await;
+                }
+            }
+            let _ = ep.clear_halt().await;
+        }
+        {
+            let mut ep = self.bulk_in.lock().await;
+            if ep.pending() > 0 {
+                ep.cancel_all();
+                while ep.pending() > 0 {
+                    let _ = ep.next_complete().await;
+                }
+            }
+            let _ = ep.clear_halt().await;
+
+            // Step 3: Drain stale bulk IN data until the pipe is idle.
+            let max_packet_size = ep.max_packet_size();
+            loop {
+                if ep.pending() == 0 {
+                    ep.submit(Buffer::new(align_to_packet_size(
+                        max_packet_size,
+                        max_packet_size,
+                    )));
+                }
+                let got_data = {
+                    let complete_fut = ep.next_complete();
+                    let timeout_fut = Delay::new(Duration::from_millis(300));
+                    futures::pin_mut!(complete_fut, timeout_fut);
+                    match futures::future::select(complete_fut, timeout_fut).await {
+                        futures::future::Either::Left((completion, _)) => completion.status.is_ok(),
+                        futures::future::Either::Right((_, _)) => false,
+                    }
+                };
+                if !got_data {
+                    ep.cancel_all();
+                    while ep.pending() > 0 {
+                        let _ = ep.next_complete().await;
+                    }
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }
