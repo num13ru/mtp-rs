@@ -33,8 +33,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         root_objects.len()
     );
 
-    // Test 2: List recursive (smart - auto-detects Android)
-    println!("=== Test 2: Recursive listing (smart) ===");
+    // Test 2: Recursive traversal, bounded.
+    //
+    // Capped at MAX_OBJECTS: per-object metadata fetches take ~1s each on
+    // some PTP cameras, so a full recursive listing can run 10+ minutes.
+    // Diagnosis needs to know whether recursion works, not the exact totals.
+    // The cap also removes the temptation to Ctrl+C mid-traversal, which
+    // leaves some devices (Panasonic Lumix DMC-TZ61, issue #12) stuck until
+    // a reset.
+    const MAX_OBJECTS: usize = 200;
+    println!(
+        "=== Test 2: Recursive listing (bounded to {} objects) ===",
+        MAX_OBJECTS
+    );
     println!(
         "Device is Android: {}",
         device
@@ -43,15 +54,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .contains("android.com")
     );
     let start = std::time::Instant::now();
-    let recursive_objects = storage.list_objects_recursive(None).await?;
+    let mut rec_folders = 0usize;
+    let mut rec_files = 0usize;
+    let mut rec_total = 0usize;
+    let mut capped = false;
+    let mut to_visit = std::collections::VecDeque::from([None]);
+    'traversal: while let Some(parent) = to_visit.pop_front() {
+        let mut listing = storage.list_objects_stream(parent).await?;
+        while let Some(result) = listing.next().await {
+            let obj = result?;
+            rec_total += 1;
+            if obj.is_folder() {
+                rec_folders += 1;
+                to_visit.push_back(Some(obj.handle));
+            } else {
+                rec_files += 1;
+            }
+            if rec_total >= MAX_OBJECTS {
+                capped = true;
+                break 'traversal;
+            }
+        }
+    }
     let elapsed = start.elapsed();
-    let rec_folders = recursive_objects.iter().filter(|o| o.is_folder()).count();
-    let rec_files = recursive_objects.iter().filter(|o| o.is_file()).count();
     println!(
-        "Recursive contains: {} folders, {} files, {} total",
+        "Recursive traversal saw: {} folders, {} files, {} total{}",
         rec_folders,
         rec_files,
-        recursive_objects.len()
+        rec_total,
+        if capped {
+            " (stopped at cap, more exist)"
+        } else {
+            ""
+        }
     );
     println!("Time taken: {:.2}s\n", elapsed.as_secs_f64());
 
