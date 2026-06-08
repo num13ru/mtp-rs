@@ -6,13 +6,11 @@ This repo is a Cargo workspace. The library lives in `crates/mtp-rs/` and is pub
 
 ## Quick commands
 
-| Command                                | Description                                          |
-|----------------------------------------|------------------------------------------------------|
-| `just`                                 | Run all checks: format, lint, test, doc              |
-| `just fix`                             | Auto-fix formatting and clippy warnings              |
-| `just check-all`                       | Include MSRV check, security audit, license check    |
-| `just release-dry`                     | `cargo publish --dry-run` for both crates            |
-| `cargo test --workspace --all-features`| Run with proptest fuzzing across the workspace       |
+- `just`: Run all checks: format, lint, test, doc
+- `just fix`: Auto-fix formatting and clippy warnings
+- `just check-all`: Include MSRV check, security audit, license check
+- `just release-dry`: `cargo publish --dry-run` for both crates
+- `cargo test --workspace --all-features`: Run with proptest fuzzing across the workspace
 
 ## Project structure
 
