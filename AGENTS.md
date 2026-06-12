@@ -127,6 +127,15 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   unsupported operations); the halt persists until cleared, even across
   process restarts. Every bulk completion site clears the halt via
   `clear_halt` on STALL.
+- **`clear_halt` (and `claim_interface`) must be `.wait()`-ed, never
+  `.await`-ed.** nusb implements them as blocking syscalls wrapped in
+  `MaybeFuture`; awaiting one panics at runtime ("Awaiting blocking syscall
+  without an async runtime") unless the consumer enables nusb's `tokio`/`smol`
+  feature, which we don't (runtime-agnostic). `control_in`/`control_out` are
+  the exception — genuinely async via nusb's URB event loop, so those stay
+  `.await`. This only bites on real hardware (a STALL never fires against the
+  mock/virtual transport), so it slips through CI; #12 hit it on the first
+  camera stall.
 - `Transport::reset_device()` / `PtpDevice::reset_device()` / the CLI's
   `mtp-rs reset` send the SIC DEVICE_RESET request (0x66), clear halts, and
   drain stale bulk data — without a PTP session, so they work on a device too
