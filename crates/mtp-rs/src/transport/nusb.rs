@@ -76,16 +76,20 @@ fn parse_device_status(data: &[u8]) -> Option<(u16, Vec<u8>)> {
 /// subsequent transfer on the endpoint (observed on the Panasonic Lumix
 /// DMC-TZ61, issue #12: a re-run of `ptp_diagnose` failed at `GetDeviceInfo`
 /// with "endpoint stalled" from the previous run's property probing).
-async fn clear_halt_if_stalled<T, D>(
-    ep: &mut nusb::Endpoint<T, D>,
-    err: TransferError,
-) -> crate::Error
+fn clear_halt_if_stalled<T, D>(ep: &mut nusb::Endpoint<T, D>, err: TransferError) -> crate::Error
 where
     T: nusb::transfer::BulkOrInterrupt,
     D: nusb::transfer::EndpointDirection,
 {
     if matches!(err, TransferError::Stall) {
-        let _ = ep.clear_halt().await;
+        // `.wait()`, not `.await`: nusb implements `clear_halt` as a blocking
+        // syscall (the CLEAR_FEATURE ioctl), and awaiting it panics unless the
+        // consumer enables nusb's `tokio`/`smol` feature. We stay
+        // runtime-agnostic, so we run it synchronously — the same pattern
+        // `NusbTransport::open` uses for `claim_interface().wait()`. The
+        // transfer has already completed (with a stall), so the endpoint is
+        // idle, which is what `clear_halt` requires.
+        let _ = ep.clear_halt().wait();
     }
     NusbTransport::convert_transfer_error(err)
 }
@@ -574,7 +578,7 @@ impl NusbTransport {
                         let _ = ep.next_complete().await;
                     }
                 }
-                let _ = ep.clear_halt().await;
+                let _ = ep.clear_halt().wait();
                 return;
             }
         }
@@ -586,7 +590,7 @@ impl NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
-            let _ = ep.clear_halt().await;
+            let _ = ep.clear_halt().wait();
         }
     }
 }
@@ -598,7 +602,7 @@ impl Transport for NusbTransport {
         let buf: Buffer = data.to_vec().into();
         let completion = ep.transfer_blocking(buf, self.timeout);
         if let Err(e) = completion.status {
-            return Err(clear_halt_if_stalled(&mut ep, e).await);
+            return Err(clear_halt_if_stalled(&mut ep, e));
         }
         Ok(())
     }
@@ -632,7 +636,7 @@ impl Transport for NusbTransport {
                         .wait_next_complete(self.timeout)
                         .ok_or(crate::Error::Timeout)?;
                     if let Err(e) = completion.status {
-                        return Err(clear_halt_if_stalled(&mut ep, e).await);
+                        return Err(clear_halt_if_stalled(&mut ep, e));
                     }
                     total_sent += transfer_size;
                     current_buf = ep.allocate(transfer_size);
@@ -648,7 +652,7 @@ impl Transport for NusbTransport {
                 .wait_next_complete(self.timeout)
                 .ok_or(crate::Error::Timeout)?;
             if let Err(e) = completion.status {
-                return Err(clear_halt_if_stalled(&mut ep, e).await);
+                return Err(clear_halt_if_stalled(&mut ep, e));
             }
 
             // If the final transfer was a multiple of max_packet_size, send ZLP
@@ -659,7 +663,7 @@ impl Transport for NusbTransport {
                     .wait_next_complete(self.timeout)
                     .ok_or(crate::Error::Timeout)?;
                 if let Err(e) = completion.status {
-                    return Err(clear_halt_if_stalled(&mut ep, e).await);
+                    return Err(clear_halt_if_stalled(&mut ep, e));
                 }
             }
         } else if total_sent > 0 && total_sent % max_packet_size == 0 {
@@ -669,7 +673,7 @@ impl Transport for NusbTransport {
                 .wait_next_complete(self.timeout)
                 .ok_or(crate::Error::Timeout)?;
             if let Err(e) = completion.status {
-                return Err(clear_halt_if_stalled(&mut ep, e).await);
+                return Err(clear_halt_if_stalled(&mut ep, e));
             }
         }
 
@@ -711,7 +715,7 @@ impl Transport for NusbTransport {
         match completed {
             Some(comp) => {
                 if let Err(e) = comp.status {
-                    return Err(clear_halt_if_stalled(&mut ep, e).await);
+                    return Err(clear_halt_if_stalled(&mut ep, e));
                 }
                 Ok(comp.buffer[..comp.actual_len].to_vec())
             }
@@ -738,7 +742,7 @@ impl Transport for NusbTransport {
         // cancellation (e.g. tokio::time::timeout or select!).
         let completion = ep.next_complete().await;
         if let Err(e) = completion.status {
-            return Err(clear_halt_if_stalled(&mut ep, e).await);
+            return Err(clear_halt_if_stalled(&mut ep, e));
         }
         Ok(completion.buffer[..completion.actual_len].to_vec())
     }
@@ -961,7 +965,7 @@ impl Transport for NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
-            let _ = ep.clear_halt().await;
+            let _ = ep.clear_halt().wait();
         }
         {
             let mut ep = self.bulk_in.lock().await;
@@ -971,7 +975,7 @@ impl Transport for NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
-            let _ = ep.clear_halt().await;
+            let _ = ep.clear_halt().wait();
 
             // Step 3: Drain stale bulk IN data until the pipe is idle.
             let max_packet_size = ep.max_packet_size();
