@@ -55,6 +55,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 
 - **Android**: `ObjectHandle::ALL` recursive listing broken; library auto-detects via `"android.com"` in vendor extension
 - **Android**: Uploads to the storage root are rejected with `InvalidObjectHandle`. Upload into an existing folder (for example, `Download`) instead.
+- **Android**: Object handles are NOT stable. MediaProvider re-keys object IDs across a media rescan, so a handle a host cached when it last listed a folder can be silently invalidated before a later operation (upload, delete) into that folder — the device then returns `InvalidObjectHandle`/`InvalidParentObject`, not for a missing object but for a stale ID. Hosts should treat those codes on a previously-valid handle as "re-list the parent and re-resolve, then retry once", not as a hard not-found. (A downstream, Cmdr, hit this as a 307 MB upload failing at `SendObjectInfo` and surfacing as "Path not found" on the intact *source* file.) Reproducible against the virtual device with `rekey_virtual_object` (see Testing).
 - **Fujifilm cameras**: Report `AccessCapability::ReadWrite` but return `StoreReadOnly` on writes. Advertised ops lie.
 - **Samsung**: Returns `InvalidObjectHandle` for root listing; needs recursive traversal with filtering
 - **Panasonic Lumix DMC-TZ61** (and likely other PTP cameras): Reports `20480000T000000` (month 0, day 0) as "no date" in ObjectInfo datetimes. Receive-side datetime parsing is lenient for this reason: unparseable datetimes become `None` instead of failing the dataset parse. Send-side packing stays strict.
@@ -241,6 +242,10 @@ The current API supports an event-driven drain:
 **Composing your own pattern**: any test harness that doesn't fit sentinel-file (counting events under a subdir, declaring quiet when the count hasn't grown for N polls) should call `dropped_paths_since_pause` directly. `was_path_dropped` exists for the common case only.
 
 Unit tests for the API live in `transport/virtual_device/registry.rs` (`pause_refcount_composes_across_concurrent_guards`, `dropped_paths_observation_round_trip`, `dropped_paths_ring_evicts_oldest_past_cap`, and the unknown-serial defensive paths).
+
+## Simulating stale handles (virtual-device only)
+
+`rekey_virtual_object(serial, rel_path)` reassigns a tracked object's handle while leaving the object and its on-disk contents in place: the old handle then returns `InvalidObjectHandle`/`InvalidParentObject`, a fresh listing of the parent surfaces the new handle, and direct children are re-parented. It queues no events (it models the device moving on before the host observes the change), so it reproduces the Android handle re-keying quirk above — the exact precondition for a stale-cached-handle upload/delete failure. The stable-handle virtual device can't otherwise produce it. Drive it with a list → `rekey_virtual_object` → operate sequence to exercise a host's stale-handle recovery path; see `rekey_object_invalidates_old_handle_then_relist_and_upload_recover` in `transport/virtual_device/mod.rs`.
 
 ## Things to avoid
 
