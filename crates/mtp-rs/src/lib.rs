@@ -68,7 +68,8 @@ pub use transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageC
 #[cfg(feature = "virtual-device")]
 pub use transport::virtual_device::registry::{
     clear_dropped_paths, dropped_paths_since_pause, pause_watcher, register_virtual_device,
-    rescan_virtual_device, unregister_virtual_device, was_path_dropped, WatcherGuard,
+    rekey_virtual_object, rescan_virtual_device, unregister_virtual_device, was_path_dropped,
+    WatcherGuard,
 };
 #[cfg(feature = "virtual-device")]
 pub use transport::virtual_device::RescanSummary;

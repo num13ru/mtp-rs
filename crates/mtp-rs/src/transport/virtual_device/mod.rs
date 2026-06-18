@@ -671,6 +671,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rekey_object_invalidates_old_handle_then_relist_and_upload_recover() {
+        // Reproduces the Android "stale cached handle" quirk end-to-end: a host
+        // lists a folder and caches its handle, the device re-keys that handle
+        // across a (simulated) media rescan, and the host's NEXT upload into the
+        // cached handle is rejected — but a re-list surfaces the new handle and
+        // an upload against it lands. This is the device-side behavior cmdr's
+        // upload self-heal/retry depends on; before `rekey_virtual_object` there
+        // was no way to produce it against the virtual device.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Download")).unwrap();
+
+        let config = test_config_with_serial(dir.path(), "rekey-test-001");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        // Host lists root and caches the Download handle.
+        let items = storages[0].list_objects(None).await.unwrap();
+        let cached_handle = items
+            .iter()
+            .find(|i| i.filename == "Download")
+            .unwrap()
+            .handle;
+
+        // Device re-keys Download out from under the host.
+        let (reported_old, new_handle) =
+            crate::rekey_virtual_object("rekey-test-001", std::path::Path::new("Download"))
+                .expect("a listed object must be re-keyable");
+        assert_eq!(
+            reported_old, cached_handle,
+            "rekey should report the handle the host had cached"
+        );
+        assert_ne!(
+            new_handle, cached_handle,
+            "rekey must assign a fresh handle"
+        );
+
+        // Uploading into the now-stale cached handle is rejected exactly like a
+        // real device: InvalidParentObject at SendObjectInfo, no partial created.
+        let err = storages[0]
+            .upload(
+                Some(cached_handle),
+                crate::mtp::NewObjectInfo::file("after.txt", 5),
+                bytes_stream(b"hello"),
+            )
+            .await
+            .expect_err("uploading into a re-keyed (stale) parent handle must fail");
+        assert!(
+            matches!(
+                err.source,
+                crate::Error::Protocol {
+                    code: crate::ptp::ResponseCode::InvalidParentObject,
+                    ..
+                }
+            ),
+            "expected an InvalidParentObject rejection, got {:?}",
+            err.source
+        );
+        assert!(
+            err.partial.is_none(),
+            "SendObjectInfo was rejected, so no partial object exists"
+        );
+
+        // A fresh listing surfaces the NEW handle for the same folder...
+        let items = storages[0].list_objects(None).await.unwrap();
+        let relisted_handle = items
+            .iter()
+            .find(|i| i.filename == "Download")
+            .unwrap()
+            .handle;
+        assert_eq!(
+            relisted_handle, new_handle,
+            "re-listing the parent must surface the re-keyed handle"
+        );
+
+        // ...and uploading into the refreshed handle lands in the same folder.
+        let handle = storages[0]
+            .upload(
+                Some(new_handle),
+                crate::mtp::NewObjectInfo::file("after.txt", 5),
+                bytes_stream(b"hello"),
+            )
+            .await
+            .expect("upload into the refreshed handle should succeed");
+        assert_eq!(
+            storages[0].download(handle).await.unwrap().as_slice(),
+            b"hello"
+        );
+        assert!(
+            dir.path().join("Download/after.txt").exists(),
+            "the recovered upload must land inside the (still-present) Download folder"
+        );
+    }
+
+    #[tokio::test]
+    async fn rekey_unknown_path_or_serial_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Download")).unwrap();
+        let config = test_config_with_serial(dir.path(), "rekey-test-none");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        storages[0].list_objects(None).await.unwrap();
+
+        // Unknown serial -> None.
+        assert!(
+            crate::rekey_virtual_object("no-such-serial", std::path::Path::new("Download"))
+                .is_none()
+        );
+        // Known device, untracked path -> None.
+        assert!(
+            crate::rekey_virtual_object("rekey-test-none", std::path::Path::new("Nope")).is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn delete_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("doomed.txt"), "goodbye").unwrap();

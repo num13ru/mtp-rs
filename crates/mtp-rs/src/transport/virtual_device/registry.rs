@@ -6,7 +6,8 @@
 use super::config::VirtualDeviceConfig;
 use super::state::{RescanSummary, VirtualDeviceState};
 use crate::mtp::MtpDeviceInfo;
-use std::path::PathBuf;
+use crate::ptp::ObjectHandle;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Base for synthetic location IDs (high range, won't collide with real USB).
@@ -292,6 +293,50 @@ pub fn rescan_virtual_device(serial: &str) -> Option<RescanSummary> {
     drop(active); // Release the registry lock before acquiring the state lock.
     let mut state = state_arc.lock().unwrap();
     Some(state.rescan_backing_dirs())
+}
+
+/// Re-key the object at `rel_path` on a virtual device, identified by serial:
+/// reassign its object handle while keeping the object (and its on-disk
+/// contents) in place. The OLD handle is invalidated (the device answers
+/// `InvalidObjectHandle` / `InvalidParentObject` for it); a fresh listing of the
+/// parent returns the NEW handle.
+///
+/// Returns `(old_handle, new_handle)`, or `None` if no active device with that
+/// serial exists or no tracked object matches `rel_path` (the object must have
+/// been listed at least once so it's tracked).
+///
+/// # When to use
+///
+/// To reproduce the **stale cached handle** quirk: Android's MediaProvider
+/// re-keys object IDs across a media rescan, so a handle a host cached when it
+/// last listed a folder can be silently invalidated before a later operation
+/// (upload, delete) into that folder. Unlike [`rescan_virtual_device`] this
+/// queues no events — it models the device moving on before the host has
+/// observed the change, which is the exact window the bug lives in. Pair it with
+/// a list-then-rekey-then-operate sequence to drive a host's stale-handle
+/// recovery path.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use mtp_rs::rekey_virtual_object;
+/// use std::path::Path;
+///
+/// // The host listed "Documents" earlier and cached its handle. Simulate the
+/// // device re-keying it out from under the host:
+/// if let Some((old, new)) = rekey_virtual_object("my-device-serial", Path::new("Documents")) {
+///     println!("Documents re-keyed: {old:?} -> {new:?}");
+/// }
+/// ```
+pub fn rekey_virtual_object(serial: &str, rel_path: &Path) -> Option<(ObjectHandle, ObjectHandle)> {
+    let active = active_states().lock().unwrap();
+    let state_arc = active
+        .iter()
+        .find(|(s, _)| s == serial)
+        .map(|(_, state)| Arc::clone(state))?;
+    drop(active); // Release the registry lock before acquiring the state lock.
+    let mut state = state_arc.lock().unwrap();
+    state.rekey_object(rel_path)
 }
 
 #[cfg(test)]

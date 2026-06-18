@@ -4,7 +4,7 @@ use super::builders::build_event;
 use super::config::{VirtualDeviceConfig, VirtualStorageConfig};
 use crate::ptp::{EventCode, ObjectHandle, StorageId};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Per-storage state.
 #[derive(Debug)]
@@ -130,6 +130,45 @@ impl VirtualDeviceState {
         let h = self.next_handle;
         self.next_handle += 1;
         ObjectHandle(h)
+    }
+
+    /// Reassign the object handle of the object at `rel_path`, keeping the object
+    /// (and its on-disk contents) in place. The OLD handle becomes invalid — the
+    /// device answers `InvalidObjectHandle` / `InvalidParentObject` for it — while
+    /// a fresh listing of the parent returns the NEW handle. Direct children are
+    /// re-parented to the new handle so `GetObjectInfo` keeps reporting a live
+    /// parent.
+    ///
+    /// This simulates Android MediaProvider re-keying object IDs across a media
+    /// rescan: the folder still exists, but a handle the host cached before the
+    /// rescan is now stale. Unlike
+    /// [`rescan_backing_dirs`](Self::rescan_backing_dirs) it queues no events —
+    /// it models the device moving on silently, before the host has observed
+    /// anything, which is exactly the window where a cached parent handle goes
+    /// stale under a host's upload.
+    ///
+    /// Returns `(old_handle, new_handle)`, or `None` if no tracked object matches
+    /// `rel_path`. Matching is by `rel_path` across all storages, so pass a path
+    /// unique enough to disambiguate if the same relative path exists on two
+    /// storages. The object must have been listed at least once (so it's tracked)
+    /// before it can be re-keyed.
+    pub fn rekey_object(&mut self, rel_path: &Path) -> Option<(ObjectHandle, ObjectHandle)> {
+        let old_key = self
+            .objects
+            .iter()
+            .find(|(_, obj)| obj.rel_path.as_path() == rel_path)
+            .map(|(handle, _)| *handle)?;
+        let new_handle = self.alloc_handle();
+        let obj = self.objects.remove(&old_key)?;
+        self.objects.insert(new_handle.0, obj);
+
+        let old_handle = ObjectHandle(old_key);
+        for child in self.objects.values_mut() {
+            if child.parent == old_handle {
+                child.parent = new_handle;
+            }
+        }
+        Some((old_handle, new_handle))
     }
 
     /// Find a storage state by ID.
