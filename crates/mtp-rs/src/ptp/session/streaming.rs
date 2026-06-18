@@ -16,7 +16,7 @@ use futures::Stream;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{PtpSession, HEADER_SIZE};
+use super::{PtpSession, RecoveryState, TransactionScope, HEADER_SIZE};
 
 impl PtpSession {
     // =========================================================================
@@ -50,8 +50,13 @@ impl PtpSession {
         // Clone the Arc for the lock
         let lock = Arc::clone(&self.operation_lock);
         let guard = lock.lock_owned().await;
+        self.recover_if_needed().await?;
 
         let tx_id = self.next_transaction_id();
+
+        // Armed until the stream is constructed, so a failed send flags
+        // recovery. Once the stream exists, its own `Drop` owns that duty.
+        let mut scope = TransactionScope::arm(&self.recovery, tx_id);
 
         // Send command
         let cmd = CommandContainer {
@@ -60,9 +65,11 @@ impl PtpSession {
             params: params.to_vec(),
         };
         self.transport.send_bulk(&cmd.to_bytes()).await?;
+        scope.disarm();
 
         Ok(ReceiveStream {
             transport: Arc::clone(&self.transport),
+            recovery: Arc::clone(&self.recovery),
             _guard: guard,
             transaction_id: tx_id,
             operation,
@@ -109,7 +116,9 @@ impl PtpSession {
         use std::sync::atomic::Ordering;
 
         let _guard = self.operation_lock.lock().await;
+        self.recover_if_needed().await?;
         let tx_id = self.next_transaction_id();
+        let mut scope = TransactionScope::arm(&self.recovery, tx_id);
 
         // Send command
         let cmd = CommandContainer {
@@ -165,6 +174,7 @@ impl PtpSession {
             )));
         }
 
+        scope.disarm();
         Ok(response)
     }
 
@@ -213,15 +223,19 @@ impl PtpSession {
 ///
 /// # Important
 ///
-/// The MTP session is locked while this stream exists. You must either
-/// consume the entire stream or call [`cancel()`](Self::cancel) before
-/// dropping it. Dropping mid-stream without cancelling corrupts the USB
-/// session (a `debug_assert` catches this in debug builds).
-#[must_use = "dropping a ReceiveStream mid-transfer corrupts the USB session; \
-               consume it fully or call cancel()"]
+/// The MTP session is locked while this stream exists. Prefer to consume the
+/// entire stream or call [`cancel()`](Self::cancel) before dropping it:
+/// `cancel()` drains the pipe right away. Dropping mid-stream without that is
+/// still safe — it flags the session, and the next operation drains the pipe
+/// before it runs — but the drain then happens lazily rather than promptly.
+#[must_use = "consume a ReceiveStream fully or call cancel() to drain the pipe promptly; \
+               dropping it mid-transfer defers the drain to the next operation"]
 pub struct ReceiveStream {
     /// The transport layer for USB communication.
     transport: Arc<dyn Transport>,
+    /// Shared session recovery state. On a mid-transfer drop, flags the pipe
+    /// for draining before the next operation.
+    recovery: Arc<RecoveryState>,
     /// Guard that holds the operation lock for the duration of streaming.
     _guard: OwnedMutexGuard<()>,
     /// Transaction ID for this operation.
@@ -401,12 +415,13 @@ impl ReceiveStream {
 
 impl Drop for ReceiveStream {
     fn drop(&mut self) {
-        debug_assert!(
-            self.done,
-            "ReceiveStream dropped without consuming all data or calling cancel(). \
-             This corrupts the USB session. Call cancel() before dropping, \
-             or consume the stream to completion."
-        );
+        if !self.done {
+            // Abandoned mid-transfer without consuming the stream or calling
+            // cancel(): the device's data/response is still in the bulk pipe.
+            // Flag the session so the next operation drains it before sending,
+            // instead of inheriting it and desyncing the transaction-ID stream.
+            self.recovery.flag(self.transaction_id);
+        }
     }
 }
 

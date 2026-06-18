@@ -4,6 +4,7 @@ use super::Transport;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Mock transport for testing MTP protocol logic without USB.
@@ -25,6 +26,10 @@ pub struct MockTransport {
     actual_sends: Mutex<Vec<Vec<u8>>>,
     cancel_calls: Mutex<Vec<u32>>,
     cancel_results: Mutex<VecDeque<Result<(), crate::Error>>>,
+    /// When set, the next `receive_bulk` call never resolves (until the caller's
+    /// future is dropped). Models a transaction abandoned mid-receive: the
+    /// command went out, but the host never reads the device's response.
+    block_receive: AtomicBool,
 }
 
 impl MockTransport {
@@ -38,7 +43,21 @@ impl MockTransport {
             actual_sends: Mutex::new(Vec::new()),
             cancel_calls: Mutex::new(Vec::new()),
             cancel_results: Mutex::new(VecDeque::new()),
+            block_receive: AtomicBool::new(false),
         }
+    }
+
+    /// Make the next (and every subsequent) `receive_bulk` call hang forever,
+    /// until [`unblock_receive`](Self::unblock_receive) is called. Use this to
+    /// suspend an operation between sending its command and draining the
+    /// response, then drop its future to model a mid-transaction abandonment.
+    pub fn block_receive(&self) {
+        self.block_receive.store(true, Ordering::SeqCst);
+    }
+
+    /// Stop blocking `receive_bulk` (see [`block_receive`](Self::block_receive)).
+    pub fn unblock_receive(&self) {
+        self.block_receive.store(false, Ordering::SeqCst);
     }
 
     /// Expect a specific byte sequence to be sent.
@@ -154,6 +173,12 @@ impl Transport for MockTransport {
     }
 
     async fn receive_bulk(&self, _max_size: usize) -> Result<Vec<u8>, crate::Error> {
+        // Models a transaction abandoned mid-receive: hang until the caller's
+        // future is dropped. `pending()` never resolves, so dropping the
+        // outer future is the only way out (exactly what cancellation does).
+        if self.block_receive.load(Ordering::SeqCst) {
+            futures::future::pending::<()>().await;
+        }
         // Return next queued response or error if none
         self.queued_responses
             .lock()
@@ -175,6 +200,11 @@ impl Transport for MockTransport {
         _idle_timeout: Duration,
     ) -> Result<(), crate::Error> {
         self.cancel_calls.lock().push(transaction_id);
+        // Real transports drain the bulk IN and interrupt pipes here, leaving
+        // the session clean for the next operation. Model that by discarding
+        // any responses still sitting in the pipe.
+        self.queued_responses.lock().clear();
+        self.queued_interrupts.lock().clear();
         self.cancel_results.lock().pop_front().unwrap_or(Ok(()))
     }
 }

@@ -142,6 +142,38 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   wedged for `OpenSession` ("Transaction ID mismatch" / "expected Response
   container type" on every command).
 
+## In-session desync self-healing (abandoned transactions)
+
+A PTP transaction is command → (data) → response over one bulk pipe, and the
+host's transaction-ID counter must track the device's. If an operation's future
+is **dropped** after its command goes out but before the response is drained — a
+superseded listing, a cancelled task, a `timeout` racing the future — or it
+returns early on an I/O error, the device's reply is left in the pipe. Every
+later operation then reads the *previous* reply, so the IDs desync by one
+("Transaction ID mismatch: expected N, got N-1") and stay desynced: the session
+is dead until reset. This is the in-session cousin of the cross-process poison
+`reset_device()` fixes, and it's how a dropped Android/Xiaomi listing made a live
+device look disconnected.
+
+`PtpSession` heals this automatically and transparently:
+
+- Every operation (`execute`, `execute_with_receive`, `execute_with_send`, the
+  streaming send, and a `ReceiveStream`) is **armed** across its command→response
+  cycle via a `TransactionScope` guard. A clean completion disarms; any other
+  exit (drop, `?`, ID mismatch) flags shared `RecoveryState` with the in-flight
+  transaction ID.
+- The next operation, under the `operation_lock`, calls `recover_if_needed()`
+  first: if flagged, it drains the bulk pipe via `cancel_transfer` (the validated
+  CLASS_CANCEL + read-until-idle path) before sending, realigning the stream.
+- Recovery is **lazy** (next-op, not in `Drop`) because `Drop` can't run an async
+  drain in a runtime-agnostic crate. `ReceiveStream::drop` flags recovery when
+  abandoned mid-stream; `cancel()` is still preferred (drains promptly, vs. on
+  the next op). Consumers need no code changes.
+- Tested against the mock with a controllable mid-receive suspension
+  (`MockTransport::block_receive`) in `ptp/session/mod.rs`
+  (`abandoned_receive_*`). The mock's `cancel_transfer` drains its queued
+  responses to mirror a real pipe drain.
+
 ## Streaming uploads (USB bulk transfer details)
 
 Uploads use `Transport::send_bulk_streaming()` to avoid buffering the entire

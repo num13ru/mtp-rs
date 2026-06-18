@@ -22,6 +22,96 @@ use std::sync::Arc;
 /// Container header size in bytes.
 pub(crate) const HEADER_SIZE: usize = 12;
 
+/// Idle timeout for the bulk-pipe drain performed during desync recovery.
+/// Matches [`DEFAULT_CANCEL_TIMEOUT`](crate::mtp::DEFAULT_CANCEL_TIMEOUT) (the
+/// value libmtp and Windows use); defined here so the `ptp` layer doesn't
+/// depend on the higher-level `mtp` module.
+const RECOVERY_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Shared state that tracks whether the bulk IN pipe may hold an undrained
+/// response from a transaction that was abandoned mid-flight.
+///
+/// MTP/PTP is a strictly serial request→(data)→response protocol over one
+/// pair of bulk endpoints. If an operation sends its command but its future
+/// is dropped (a superseded listing, a cancelled task, a timeout that races
+/// the future) or it returns early before reading the response, the device's
+/// reply stays in the pipe. Every later operation then reads the *previous*
+/// transaction's reply, so the transaction-ID stream is permanently off by
+/// one ("Transaction ID mismatch: expected N, got N-1") and the session is
+/// dead until reset.
+///
+/// `Drop` can't run an async drain (this crate is runtime-agnostic), so
+/// recovery is lazy: a dropped/early-exited operation flags the state here,
+/// and the next operation drains the pipe under the operation lock before it
+/// sends, healing the desync transparently. Shared via `Arc` so a
+/// [`ReceiveStream`] dropped mid-download can flag it too.
+#[derive(Debug, Default)]
+pub(crate) struct RecoveryState {
+    /// Whether the pipe needs draining before the next operation.
+    needed: AtomicBool,
+    /// The transaction ID that was in flight when the pipe was poisoned,
+    /// passed to `cancel_transfer` so the drain targets the right transaction.
+    poisoned_tx_id: AtomicU32,
+}
+
+impl RecoveryState {
+    /// Flag the pipe as needing a drain before the next operation, recording
+    /// the transaction ID that was in flight.
+    fn flag(&self, tx_id: u32) {
+        self.poisoned_tx_id.store(tx_id, Ordering::SeqCst);
+        self.needed.store(true, Ordering::SeqCst);
+    }
+
+    /// If recovery is pending, clear the flag and return the poisoned
+    /// transaction ID. Callers hold the operation lock, so this is race-free.
+    fn take(&self) -> Option<u32> {
+        if self.needed.swap(false, Ordering::SeqCst) {
+            Some(self.poisoned_tx_id.load(Ordering::SeqCst))
+        } else {
+            None
+        }
+    }
+
+    /// Whether a drain is currently pending.
+    fn is_needed(&self) -> bool {
+        self.needed.load(Ordering::SeqCst)
+    }
+}
+
+/// RAII guard armed around an operation's command→response cycle. While armed,
+/// dropping it (the operation's future was cancelled, or it returned early via
+/// `?` before the response was fully drained and verified) flags the session
+/// for recovery. A clean completion calls [`disarm`](Self::disarm) first.
+struct TransactionScope<'a> {
+    recovery: &'a RecoveryState,
+    tx_id: u32,
+    armed: bool,
+}
+
+impl<'a> TransactionScope<'a> {
+    fn arm(recovery: &'a RecoveryState, tx_id: u32) -> Self {
+        Self {
+            recovery,
+            tx_id,
+            armed: true,
+        }
+    }
+
+    /// Mark the transaction as cleanly completed (response fully drained and
+    /// transaction ID verified), so dropping the guard won't flag recovery.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TransactionScope<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.recovery.flag(self.tx_id);
+        }
+    }
+}
+
 /// A PTP session with a device.
 ///
 /// PtpSession manages the lifecycle of a PTP/MTP session, including:
@@ -64,6 +154,10 @@ pub struct PtpSession {
     /// Some devices require the 12-byte PTP header and data payload to arrive
     /// as separate USB bulk transfers.
     split_header_data: AtomicBool,
+    /// Tracks whether the bulk pipe needs draining before the next operation
+    /// because a prior transaction was abandoned mid-flight. Shared via `Arc`
+    /// with [`ReceiveStream`] so a dropped download flags it too.
+    recovery: Arc<RecoveryState>,
 }
 
 impl PtpSession {
@@ -75,7 +169,16 @@ impl PtpSession {
             transaction_id: AtomicU32::new(TransactionId::FIRST.0),
             operation_lock: Arc::new(Mutex::new(())),
             split_header_data: AtomicBool::new(false),
+            recovery: Arc::new(RecoveryState::default()),
         }
+    }
+
+    /// Whether the bulk pipe is currently flagged for a drain before the next
+    /// operation (a prior transaction was abandoned mid-flight). The next
+    /// operation heals this transparently.
+    #[must_use]
+    pub fn needs_recovery(&self) -> bool {
+        self.recovery.is_needed()
     }
 
     /// Enable or disable split header/data mode for sending data containers.
@@ -194,6 +297,31 @@ impl PtpSession {
         }
     }
 
+    /// Drain the bulk pipe if a prior transaction was abandoned mid-flight,
+    /// leaving the session clean before the next command goes out. The caller
+    /// must hold the operation lock (so the flag check is race-free). A cheap
+    /// no-op when nothing is pending.
+    async fn recover_if_needed(&self) -> Result<(), Error> {
+        let Some(tx_id) = self.recovery.take() else {
+            return Ok(());
+        };
+        // Drain via the validated SIC cancel path (CLASS_CANCEL, then read the
+        // bulk IN and interrupt pipes until idle). After this the session is
+        // clean and the transaction-ID stream realigns on the next command.
+        if let Err(e) = self
+            .transport
+            .cancel_transfer(tx_id, RECOVERY_DRAIN_TIMEOUT)
+            .await
+        {
+            // Drain failed, so the pipe is still dirty. Re-flag so the next
+            // operation retries recovery rather than sending into a poisoned
+            // pipe and desyncing.
+            self.recovery.flag(tx_id);
+            return Err(e);
+        }
+        Ok(())
+    }
+
     // =========================================================================
     // Core operation execution
     // =========================================================================
@@ -209,8 +337,13 @@ impl PtpSession {
         params: &[u32],
     ) -> Result<ResponseContainer, Error> {
         let _guard = self.operation_lock.lock().await;
+        self.recover_if_needed().await?;
 
         let tx_id = self.next_transaction_id();
+        // Armed across the whole command→response cycle: any early exit (a
+        // dropped future, an I/O error, a transaction-ID mismatch) leaves the
+        // pipe potentially dirty and flags the session for recovery.
+        let mut scope = TransactionScope::arm(&self.recovery, tx_id);
 
         // Build and send command
         let cmd = CommandContainer {
@@ -232,6 +365,7 @@ impl PtpSession {
             )));
         }
 
+        scope.disarm();
         Ok(response)
     }
 
@@ -266,8 +400,10 @@ impl PtpSession {
         params: &[u32],
     ) -> Result<(ResponseContainer, Vec<u8>), Error> {
         let _guard = self.operation_lock.lock().await;
+        self.recover_if_needed().await?;
 
         let tx_id = self.next_transaction_id();
+        let mut scope = TransactionScope::arm(&self.recovery, tx_id);
 
         // Send command
         let cmd = CommandContainer {
@@ -318,6 +454,7 @@ impl PtpSession {
                             tx_id, response.transaction_id
                         )));
                     }
+                    scope.disarm();
                     return Ok((response, data));
                 }
                 _ => {
@@ -345,8 +482,10 @@ impl PtpSession {
         data: &[u8],
     ) -> Result<ResponseContainer, Error> {
         let _guard = self.operation_lock.lock().await;
+        self.recover_if_needed().await?;
 
         let tx_id = self.next_transaction_id();
+        let mut scope = TransactionScope::arm(&self.recovery, tx_id);
 
         // Send command
         let cmd = CommandContainer {
@@ -390,6 +529,7 @@ impl PtpSession {
             )));
         }
 
+        scope.disarm();
         Ok(response)
     }
 
@@ -469,6 +609,75 @@ mod tests {
 
         let session = PtpSession::open(transport, 1).await.unwrap();
         assert_eq!(session.session_id(), SessionId(1));
+    }
+
+    /// Dropping an operation's future after it sent its command but before it
+    /// drained the response must flag the session for recovery. Without this,
+    /// the device's reply stays in the bulk pipe and desyncs every later op.
+    #[tokio::test]
+    async fn abandoned_receive_flags_session_for_recovery() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        let session = PtpSession::open(transport, 1).await.unwrap();
+
+        // The device's reply is queued, but the op is abandoned before reading
+        // it — modeling a superseded/cancelled listing.
+        mock.queue_response(data_container(1, OperationCode::GetObjectInfo, &[0u8; 4]));
+        mock.queue_response(ok_response(1));
+        mock.block_receive();
+
+        let mut fut = Box::pin(session.execute_with_receive(OperationCode::GetObjectInfo, &[42]));
+        assert!(
+            matches!(futures::poll!(fut.as_mut()), std::task::Poll::Pending),
+            "op should suspend at receive_bulk after sending its command",
+        );
+        drop(fut);
+
+        assert!(
+            session.needs_recovery(),
+            "abandoning an op mid-receive must flag the session for recovery",
+        );
+    }
+
+    /// The real-world bug: after an abandoned op leaves its reply in the pipe,
+    /// the next op must not inherit it (a permanent transaction-ID desync).
+    /// The session drains the pipe first, so the next op starts clean.
+    #[tokio::test]
+    async fn abandoned_receive_does_not_poison_next_operation() {
+        let (transport, mock) = mock_transport();
+        mock.queue_response(ok_response(0)); // OpenSession
+        let session = PtpSession::open(transport, 1).await.unwrap();
+
+        // Op A (tx=1): queue its reply, then abandon it mid-receive so the
+        // reply is left sitting in the pipe.
+        mock.queue_response(data_container(1, OperationCode::GetObjectInfo, &[0u8; 4]));
+        mock.queue_response(ok_response(1));
+        mock.block_receive();
+        let mut op_a = Box::pin(session.execute_with_receive(OperationCode::GetObjectInfo, &[1]));
+        assert!(matches!(
+            futures::poll!(op_a.as_mut()),
+            std::task::Poll::Pending
+        ));
+        drop(op_a);
+        mock.unblock_receive();
+
+        // Op B (tx=2). Before the fix it reads op A's leftover tx=1 reply and
+        // dies with a transaction-ID mismatch. After the fix, the session
+        // drains the pipe first (one cancel_transfer for tx=1), so op B sends
+        // into a clean pipe and finds it empty (NoDevice) — never a desync.
+        let result = session
+            .execute_with_receive(OperationCode::GetObjectInfo, &[2])
+            .await;
+
+        assert!(
+            matches!(result, Err(Error::NoDevice)),
+            "op B must not inherit op A's response; got {result:?}",
+        );
+        assert_eq!(
+            mock.get_cancel_calls(),
+            vec![1],
+            "recovery must drain the pipe for the poisoned transaction (tx=1)",
+        );
     }
 
     #[tokio::test]
