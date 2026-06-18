@@ -14,6 +14,10 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-19
+
+Library `0.20.0`, CLI `0.4.0`. First substantive release since `0.18.0` (`0.19.0` was an inadvertent no-op re-release, see below).
+
 ### Added
 
 - **[lib] `MtpDevice::supports_upload()` and `DeviceInfo::supports_upload()`.** Returns true when the device advertises both `SendObjectInfo` (0x100C) and `SendObject` (0x100D), the two-phase object creation flow. Read-only devices (PTP cameras like the Panasonic Lumix DMC-TZ61 from [#12](https://github.com/vdavid/mtp-rs/issues/12)) typically don't advertise these, so consumers can skip write attempts up front. Mirrors the existing `supports_rename()`. Note the result means "worth attempting", not "guaranteed": Fuji cameras advertise write support yet reject writes per-operation.
