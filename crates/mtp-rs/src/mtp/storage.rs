@@ -518,6 +518,134 @@ impl Storage {
         Ok(FileDownload::new(size, stream))
     }
 
+    /// Download a file as a stream, starting at a byte offset (resumable download).
+    ///
+    /// Like [`download_stream()`](Self::download_stream), but begins reading at
+    /// `offset` and streams the remaining `[offset, size)` bytes to end-of-file.
+    /// This is what makes a download *resumable*: a consumer can abort an
+    /// in-flight download (via [`FileDownload::cancel()`], which releases the
+    /// one-per-device MTP session so listings work again), remember how many
+    /// bytes it kept, and later reopen from exactly that offset to fetch the
+    /// rest.
+    ///
+    /// Internally this drives the same streaming-receive machinery as
+    /// `download_stream`, but with `GetPartialObject64` (64-bit offset, so files
+    /// larger than 4 GB resume correctly) instead of `GetObject`. The returned
+    /// [`FileDownload`] reports the **full** object `size()` (not the segment
+    /// length), so progress and ETA stay correct across a resume:
+    /// [`bytes_received()`](FileDownload::bytes_received) starts at 0 for this
+    /// segment, but the consumer knows it already holds `offset` bytes.
+    ///
+    /// # Offset semantics
+    ///
+    /// - `offset == 0` is equivalent to [`download_stream()`](Self::download_stream)
+    ///   (the whole file), just routed through `GetPartialObject64`.
+    /// - `offset == size` yields an empty stream that completes cleanly at EOF
+    ///   (zero chunks), so "resume a file that's already complete" is a no-op,
+    ///   not an error.
+    /// - `offset > size` is a precondition violation and returns
+    ///   [`Error::InvalidData`] immediately, before any USB I/O — it never hangs
+    ///   waiting for bytes the device can't supply.
+    ///
+    /// # Per-call length cap
+    ///
+    /// `GetPartialObject64` carries a 32-bit `max_bytes` count, so a single call
+    /// requests at most `u32::MAX` (~4 GiB) bytes from the offset. When the
+    /// remaining tail is larger than that, this call streams only the first
+    /// `u32::MAX` bytes of it; resume again from the new offset to continue. (For
+    /// the typical resume-a-paused-copy use case the consumer reopens per
+    /// pause/resume cycle anyway, so each segment is well under the cap.)
+    ///
+    /// # Device support
+    ///
+    /// Requires the device to advertise `GetPartialObject64` (`0x95C1`); most
+    /// modern Android devices do. Devices that don't return
+    /// [`Error::Protocol`] with `OperationNotSupported` on the first chunk.
+    ///
+    /// # Important
+    ///
+    /// Same session-locking contract as [`download_stream()`](Self::download_stream):
+    /// the MTP session is locked while the download is active, so you must either
+    /// consume the entire stream or call [`FileDownload::cancel()`] before
+    /// dropping it. Cancelling mid-stream drains the pipe and frees the session
+    /// (the whole point of a resumable download), leaving the device usable for
+    /// the next operation.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::{MtpDevice, DEFAULT_CANCEL_TIMEOUT};
+    /// use mtp_rs::ObjectHandle;
+    /// use tokio::io::AsyncWriteExt;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let device = MtpDevice::open_first().await?;
+    /// # let storages = device.storages().await?;
+    /// # let storage = &storages[0];
+    /// # let handle = ObjectHandle(1);
+    /// // Download the first half, then stop to free the session.
+    /// let mut download = storage.download_stream(handle).await?;
+    /// let mut file = tokio::fs::File::create("output.bin").await?;
+    /// let mut kept: u64 = 0;
+    /// while kept < download.size() / 2 {
+    ///     let Some(chunk) = download.next_chunk().await else { break };
+    ///     let bytes = chunk?;
+    ///     file.write_all(&bytes).await?;
+    ///     kept += bytes.len() as u64;
+    /// }
+    /// download.cancel(DEFAULT_CANCEL_TIMEOUT).await?; // releases the MTP session
+    ///
+    /// // ... navigate the device, do other listings ...
+    ///
+    /// // Resume from where we stopped and append the rest.
+    /// let mut resumed = storage.download_stream_from_offset(handle, kept).await?;
+    /// while let Some(chunk) = resumed.next_chunk().await {
+    ///     file.write_all(&chunk?).await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn download_stream_from_offset(
+        &self,
+        handle: ObjectHandle,
+        offset: u64,
+    ) -> Result<FileDownload, Error> {
+        let info = self.get_object_info(handle).await?;
+        let size = info.size;
+
+        if offset > size {
+            return Err(Error::invalid_data(format!(
+                "resume offset {offset} is past the object size {size}"
+            )));
+        }
+
+        // offset == 0 is the whole file; offset == size is an empty tail. Both
+        // fall through to the same GetPartialObject64 request — the device
+        // returns the right number of bytes (all, or none) and the stream ends
+        // cleanly at the response container.
+        let remaining = size - offset;
+        // GetPartialObject64's max_bytes is a u32. A single call can ask for at
+        // most u32::MAX bytes; a larger tail is fetched across multiple resumes
+        // (documented above). Clamp so the wire value never overflows.
+        let max_bytes = u32::try_from(remaining).unwrap_or(u32::MAX);
+
+        let offset_lo = offset as u32;
+        let offset_hi = (offset >> 32) as u32;
+
+        let stream = self
+            .inner
+            .session
+            .execute_with_receive_stream(
+                crate::ptp::OperationCode::GetPartialObject64,
+                &[handle.0, offset_lo, offset_hi, max_bytes],
+            )
+            .await?;
+
+        // Report the full object size so a resumed download's progress/ETA stays
+        // anchored to the whole file, not just this segment.
+        Ok(FileDownload::new(size, stream))
+    }
+
     // =========================================================================
     // Upload operations
     // =========================================================================

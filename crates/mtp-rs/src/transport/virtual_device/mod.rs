@@ -479,6 +479,167 @@ mod tests {
         );
     }
 
+    /// Drain a `FileDownload` to a `Vec<u8>`, asserting no chunk errors.
+    async fn collect_download(mut dl: crate::mtp::FileDownload) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Some(chunk) = dl.next_chunk().await {
+            out.extend_from_slice(&chunk.expect("chunk should not error"));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn download_stream_from_offset_returns_correct_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        // 5000 bytes so the data container spans the streaming receive buffer
+        // logic, with a recognizable byte pattern.
+        let content: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        for offset in [0u64, 1, 100, 2500, 4999] {
+            let dl = storages[0]
+                .download_stream_from_offset(obj.handle, offset)
+                .await
+                .unwrap();
+            assert_eq!(
+                dl.size(),
+                content.len() as u64,
+                "size() must report the full object size, not the segment, at offset {offset}"
+            );
+            let got = collect_download(dl).await;
+            assert_eq!(
+                got,
+                content[offset as usize..],
+                "tail bytes wrong for offset {offset}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn download_stream_from_offset_zero_matches_full_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..3333).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let full = collect_download(storages[0].download_stream(obj.handle).await.unwrap()).await;
+        let from_zero = collect_download(
+            storages[0]
+                .download_stream_from_offset(obj.handle, 0)
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(from_zero, full);
+        assert_eq!(from_zero, content);
+    }
+
+    #[tokio::test]
+    async fn download_stream_from_offset_at_size_is_empty_clean_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"exactly this many bytes".to_vec();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let mut dl = storages[0]
+            .download_stream_from_offset(obj.handle, content.len() as u64)
+            .await
+            .unwrap();
+        // Empty tail: the very first poll must be a clean EOF (None), not a hang
+        // and not an error.
+        assert!(
+            dl.next_chunk().await.is_none(),
+            "offset == size must yield zero chunks"
+        );
+        // The download holds the session lock until dropped (same contract as a
+        // full download), so drop it before the follow-up op.
+        drop(dl);
+
+        // The session is still usable afterwards.
+        let again = storages[0].list_objects(None).await.unwrap();
+        assert_eq!(again.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn download_stream_from_offset_past_size_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"small".to_vec();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // `FileDownload` isn't `Debug`, so match the result directly instead of
+        // `expect_err`.
+        match storages[0]
+            .download_stream_from_offset(obj.handle, content.len() as u64 + 1)
+            .await
+        {
+            Err(crate::Error::InvalidData { .. }) => {}
+            Err(other) => panic!("expected InvalidData for offset past size, got {other:?}"),
+            Ok(_) => panic!("offset past size must error, not return a stream (it would hang)"),
+        }
+
+        // No USB transaction was issued, so the session stays usable.
+        assert_eq!(storages[0].list_objects(None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_mid_partial_stream_leaves_session_usable() {
+        use crate::mtp::DEFAULT_CANCEL_TIMEOUT;
+
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..8000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let mut dl = storages[0]
+            .download_stream_from_offset(obj.handle, 1000)
+            .await
+            .unwrap();
+        // Pull one chunk, then cancel mid-stream (the resume use case: stop to
+        // free the session).
+        let first = dl.next_chunk().await.expect("first chunk").unwrap();
+        assert!(!first.is_empty());
+        dl.cancel(DEFAULT_CANCEL_TIMEOUT).await.unwrap();
+        drop(dl);
+
+        // A follow-up operation must work on the same session (cancel drained /
+        // recovery realigned the pipe).
+        let listed = storages[0].list_objects(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+
+        // And a fresh full resume from offset 0 still returns the whole file.
+        let full = collect_download(
+            storages[0]
+                .download_stream_from_offset(obj.handle, 0)
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(full, content);
+    }
+
     #[tokio::test]
     async fn upload_file() {
         let dir = tempfile::tempdir().unwrap();

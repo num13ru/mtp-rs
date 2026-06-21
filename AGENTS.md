@@ -122,6 +122,48 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
 - See `NusbTransport::cancel_transfer()` for the full implementation with
   detailed comments.
 
+## Resumable (offset) streaming downloads
+
+`Storage::download_stream_from_offset(handle, offset)` is a streaming download
+that starts at a byte offset and streams `[offset, size)` to EOF. It reuses the
+exact `download_stream` machinery (the `execute_with_receive_stream` →
+`ReceiveStream` → `FileDownload` path, SIC class-cancel, multi-transfer data
+container accumulation, `TransactionScope`/recovery), just driven by
+`GetPartialObject64(handle, offset, max_bytes)` instead of `GetObject`.
+
+The use case is **releasing the one-per-device PTP session**. An in-flight
+`GetObject` owns the session until it finishes or aborts, so a host can't list
+folders while a download is open (even a "paused" one that parked in place). With
+this API a consumer can `cancel()` the in-flight download (drains the pipe via
+the validated CLASS_CANCEL path, frees the session so navigation works again),
+remember the bytes it kept, and reopen from exactly that offset to fetch the rest
+— a true suspend/resume.
+
+Contract:
+
+- `offset == 0` is equivalent to `download_stream` (whole file), routed through
+  `GetPartialObject64`.
+- `offset == size` yields an empty stream that ends at a clean EOF (zero chunks).
+  Resuming an already-complete file is a no-op, not an error.
+- `offset > size` returns `Error::InvalidData` immediately, before any USB I/O,
+  so it never hangs waiting for bytes the device can't supply.
+- The returned `FileDownload` reports the **full** object `size()` (not the
+  segment length), so a resumed download's progress/ETA stays anchored to the
+  whole file.
+- `GetPartialObject64`'s `max_bytes` is a u32, so a single call requests at most
+  `u32::MAX` (~4 GiB) bytes from the offset; a larger tail is fetched across
+  multiple resumes. The 64-bit *offset* is what lets a resume start past 4 GB.
+- Cancellation mid-partial-stream drains/recovers exactly like the full streaming
+  download (see "Transfer cancellation" and "In-session desync self-healing"
+  above): a follow-up operation on the same session works.
+- Requires the device to advertise `GetPartialObject64` (`0x95C1`); most modern
+  Android devices do.
+
+Tested against the virtual device in `transport/virtual_device/mod.rs`
+(`download_stream_from_offset_*`, `cancel_mid_partial_stream_leaves_session_usable`).
+`examples/resume_download.rs` demonstrates the full half-download → pause → list →
+resume → verify cycle with no hardware.
+
 ## Stall recovery and device reset
 
 - Devices STALL a bulk endpoint to signal errors (cameras do this for
