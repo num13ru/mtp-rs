@@ -14,6 +14,10 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+### Changed
+
+- **[workspace] `test_drop_mid_stream_then_software_reconnect` now cleans up after itself.** It intentionally poisons the session (drops a download without cancel/drain), and on PTP cameras a plain close+reopen can't clear the device's stuck transaction, so the abandoned data used to cascade into a hard failure on the next test and timeouts on every test after. The test now recovers with a transport-level `reset_device()` (and a short settle), which both demonstrates the real recovery path and keeps the rest of the suite clean. Confirmed against the Panasonic Lumix DMC-TZ61 in [#12](https://github.com/vdavid/mtp-rs/issues/12).
+
 ## [0.20.0] - 2026-06-19
 
 Library `0.20.0`, CLI `0.4.0`. First substantive release since `0.18.0` (`0.19.0` was an inadvertent no-op re-release, see below).

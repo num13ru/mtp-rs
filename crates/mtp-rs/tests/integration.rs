@@ -672,8 +672,13 @@ mod readonly {
         }
         tlog!("Dropped mid-stream (no cancel, no drain)");
 
-        // Phase 2: Try software reconnect
-        tlog!("Attempting software reconnect...");
+        // Phase 2: Try a plain software reconnect (close + reopen the handle).
+        // This is informative, not asserted: on Android a reopen often
+        // recovers, but on PTP cameras (Panasonic Lumix DMC-TZ61, #12) it does
+        // NOT — the device still has the abandoned transaction's data queued,
+        // so the fresh session reads it as a desync ("expected Response
+        // container type (3), got ..."). Either outcome is fine to observe.
+        tlog!("Attempting software reconnect (plain reopen)...");
         match MtpDevice::open_first().await {
             Ok(device2) => {
                 tlog!("Reconnected: {}", device2.device_info().model);
@@ -682,25 +687,51 @@ mod readonly {
                         let storage2 = &storages2[0];
                         match storage2.list_objects(None).await {
                             Ok(objects) => {
-                                tlog!(
-                                    "Software reconnect WORKS: listed {} root objects",
-                                    objects.len()
-                                );
+                                tlog!("Plain reopen WORKS: listed {} root objects", objects.len());
                             }
                             Err(e) => {
-                                tlog!("Software reconnect FAILED at list: {:?}", e);
+                                tlog!("Plain reopen FAILED at list: {:?}", e);
                             }
                         }
                     }
                     Err(e) => {
-                        tlog!("Software reconnect FAILED at storages: {:?}", e);
+                        tlog!("Plain reopen FAILED at storages: {:?}", e);
                     }
                 }
             }
             Err(e) => {
-                tlog!("Software reconnect FAILED at open: {:?}", e);
+                tlog!("Plain reopen FAILED at open: {:?}", e);
             }
         }
+
+        // Phase 3: Guaranteed recovery via a transport-level reset.
+        //
+        // This is the real point of the test and the reason it can't leak a
+        // poisoned session into the rest of the suite: when a plain reopen
+        // can't clear the device's stuck transaction, the SIC DEVICE_RESET
+        // does. PtpDevice opens without a session (a poisoned device can't
+        // answer OpenSession), so this works precisely when MtpDevice::open
+        // can't. Without it, the abandoned transaction cascades into a hard
+        // failure on the next test and timeouts on every test after that.
+        tlog!("Recovering with a transport-level reset...");
+        match PtpDevice::open_first().await {
+            Ok(ptp) => match ptp.reset_device().await {
+                Ok(()) => match ptp.get_device_info().await {
+                    Ok(info) => tlog!("Reset recovered the device: {}", info.model),
+                    Err(e) => tlog!(
+                        "Reset sent; device not answering yet (it may need a moment): {:?}",
+                        e
+                    ),
+                },
+                Err(e) => tlog!("Reset failed: {:?}", e),
+            },
+            Err(e) => tlog!("Could not open device to reset: {:?}", e),
+        }
+
+        // Some cameras need a beat of idle time between USB sessions (the Lumix
+        // returns Timeout on an immediately-following open). Give the device
+        // breathing room so the next test starts from a clean slate.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
     #[tokio::test]

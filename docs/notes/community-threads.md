@@ -4,7 +4,7 @@ Catch-up reading for any agent that picks up issue or PR work, so you don't have
 start. Read this first when triaging a new issue or PR, and update it after work that affects community-facing context
 (see [Updating this doc](#updating-this-doc) at the bottom).
 
-Last updated: 2026-06-07.
+Last updated: 2026-06-22.
 
 ## Intentionally / continuously open threads
 
@@ -49,8 +49,8 @@ camera as promised in #6. Two failure classes, both root-caused via the reporter
    (An earlier hypothesis blamed `ParentFilter::Exact` dropping objects on mismatched parent handles — that was
    wrong, don't chase it.)
 
-Second test batch (2026-06-06, logs on the issue) surfaced four more problems; all addressed 2026-06-07, hardware
-confirmation pending:
+Second test batch (2026-06-06, logs on the issue) surfaced four more problems; all addressed 2026-06-07, and
+**confirmed on hardware 2026-06-20** (cancel survives, `ptp_diagnose` no longer panics, `reset` recovers the device):
 
 3. **Camera dead after a "successful" cancel.** `Cancel succeeded` was followed by `list root after cancel - Timeout`
    and every subsequent test timing out until power-cycle, identically in two runs. Root cause: our cancel flow
@@ -71,8 +71,28 @@ confirmation pending:
 
 On the hard freeze (Ctrl+C mid-listing → no power-button response → battery pull): that's camera firmware, but the
 state it gets stuck in is now addressable. New `mtp-rs reset` CLI command / `PtpDevice::reset_device()` sends the SIC
-DEVICE_RESET control request (0x66) without needing a PTP session, clears halts, and drains stale data. Whether it
-rescues the Lumix's full freeze is untested; it should at least fix the softer "Transaction ID mismatch" wedge.
+DEVICE_RESET control request (0x66) without needing a PTP session, clears halts, and drains stale data.
+
+The 2026-06-06 batch had a regression: the new STALL-recovery / reset paths called `clear_halt().await`, which panics
+on real hardware ("Awaiting blocking syscall without an async runtime"). nusb implements `clear_halt` as a blocking
+syscall; it must be `.wait()`-ed, not `.await`-ed (`control_in`/`control_out` are genuinely async and stay `.await`).
+Fixed 2026-06-13, **confirmed on hardware 2026-06-20**. See the `clear_halt` gotcha in `AGENTS.md`.
+
+Third batch (2026-06-20, on commit `3b01ed8`) confirmed all the above and surfaced two more, both camera-firmware
+behaviors rather than library bugs:
+
+7. **Plain reopen does NOT recover a poisoned PTP-camera session; `reset_device()` does.** The integration test
+   `test_drop_mid_stream_then_software_reconnect` drops a download without cancel/drain (poisoning the session), then
+   tried only a close+reopen. On this camera reopen reads the abandoned transaction's queued data as a desync
+   ("expected Response container type (3), got 255"). The test merely logged that, so it left the device wedged and
+   **the next test hard-panicked, then everything after timed out**. Fixed 2026-06-20: the test now recovers with a
+   transport-level `reset_device()` (via session-less `PtpDevice`) and a short settle, so it both demonstrates the real
+   recovery path and stops cascading into the rest of the suite. Lesson for consumers: a dropped-without-cancel session
+   is healed within the same session by `recover_if_needed`, but a *fresh handle* on a still-poisoned device needs
+   `reset_device()`.
+8. **Camera needs idle time between USB sessions.** An immediately-following `ptp_diagnose` or `reset` (sub-5s after the
+   previous one finished) returns `Timeout` / "device didn't answer yet". Firmware behavior, not actionable in the
+   library beyond the graceful messaging `reset` already prints; give the camera a beat.
 
 Note: the reporter's retest cycles can take weeks ("days/weeks/months"), so bundle asks into single well-aimed
 comments.
