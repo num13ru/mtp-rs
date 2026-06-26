@@ -14,6 +14,10 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+### Changed
+
+- **[workspace] `test_drop_mid_stream_then_software_reconnect` is now opt-in** behind `MTP_RUN_DROP_RECOVERY=1`. Some camera firmware (Panasonic Lumix DMC-TZ61, [#12](https://github.com/vdavid/mtp-rs/issues/12)) wedges so hard on a mid-stream drop that no software recovery reaches it — a reopen desyncs and even the session-less SIC `reset_device()` times out (libgphoto2 times out too); only a physical USB replug recovers it. The test left such a device poisoned, cascading failures into the rest of the suite, so it's excluded from default runs and, when reset fails, prints a "unplug and replug the USB cable" hint. `reset_device()` is unchanged and still recovers the common poisoned-but-responsive case.
+
 ## [0.21.0] - 2026-06-22
 
 Library `0.21.0`, CLI `0.4.1`. Adds resumable streaming downloads (lib). The CLI is a dependency-bump rebuild against the new lib, with no CLI-facing change.
@@ -24,7 +28,7 @@ Library `0.21.0`, CLI `0.4.1`. Adds resumable streaming downloads (lib). The CLI
 
 ### Changed
 
-- **[workspace] `test_drop_mid_stream_then_software_reconnect` now cleans up after itself.** It intentionally poisons the session (drops a download without cancel/drain), and on PTP cameras a plain close+reopen can't clear the device's stuck transaction, so the abandoned data used to cascade into a hard failure on the next test and timeouts on every test after. The test now recovers with a transport-level `reset_device()` (and a short settle), which both demonstrates the real recovery path and keeps the rest of the suite clean. Confirmed against the Panasonic Lumix DMC-TZ61 in [#12](https://github.com/vdavid/mtp-rs/issues/12).
+- **[workspace] `test_drop_mid_stream_then_software_reconnect` attempts recovery with `reset_device()`.** It intentionally poisons the session (drops a download without cancel/drain), and on PTP cameras a plain close+reopen can't clear the device's stuck transaction, so the abandoned data cascades into a hard failure on the next test. The test now follows the failed reopen with a transport-level `reset_device()`, which recovers the common poisoned-but-responsive case. (Follow-up in the next version, see the Unreleased section above: on firmware that wedges past all software recovery, even this reset times out, so the test was made opt-in. Reported against the Panasonic Lumix DMC-TZ61 in [#12](https://github.com/vdavid/mtp-rs/issues/12).)
 
 ## [0.20.0] - 2026-06-19
 

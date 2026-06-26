@@ -426,14 +426,15 @@ storage.upload(Some(download.handle), file_info, data).await?;
 
 "Full support" really means "Full support, except for general Android quirks listed above".
 
-| Device                                          | Android | Notes           |
-|--------------------------------------------------|---------|-----------------|
-| Google Pixel 9 Pro XL                            | 15      | Full support    |
-| Samsung Galaxy S23 Ultra (SM-S918B)              | 14      | No root listing |
-| [Amazon Kindle Paperwhite 12th Generation (2024)](https://github.com/vdavid/mtp-rs/pull/2#issuecomment-4264713119) | -       | Full support    |
-| [Fairphone 5](https://github.com/vdavid/mtp-rs/issues/6#issuecomment-4234861708) (e/OS 3.0.4, LineageOS-derived) | 13 | Full support |
-| [Garmin Forerunner 955](https://github.com/vdavid/mtp-rs/pull/10) | - | Works for app use; integration suite has one failing test under investigation |
-| Garmin Venu 2/2S | - | Detected via `MTP` interface string (no standard MTP class) |
+| Device                                                                                                             | Android | Notes                                                                                                         |
+|--------------------------------------------------------------------------------------------------------------------|---------|---------------------------------------------------------------------------------------------------------------|
+| Google Pixel 9 Pro XL                                                                                              | 15      | Full support                                                                                                  |
+| Samsung Galaxy S23 Ultra (SM-S918B)                                                                                | 14      | No root listing                                                                                               |
+| [Amazon Kindle Paperwhite 12th Generation (2024)](https://github.com/vdavid/mtp-rs/pull/2#issuecomment-4264713119) | -       | Full support                                                                                                  |
+| [Fairphone 5](https://github.com/vdavid/mtp-rs/issues/6#issuecomment-4234861708) (e/OS 3.0.4, LineageOS-derived)   | 13      | Full support                                                                                                  |
+| [Garmin Forerunner 955](https://github.com/vdavid/mtp-rs/pull/10)                                                  | -       | Works for app use; integration suite has one failing test under investigation                                 |
+| Garmin Venu 2/2S                                                                                                   | -       | Detected via `MTP` interface string (no standard MTP class)                                                   |
+| [Panasonic Lumix DMC-TZ61](https://github.com/vdavid/mtp-rs/issues/12)                                             | -       | Read-only PTP camera; reads, streaming download, cancel, and reset all work, writes unsupported by the device |
 
 **Samsung quirk**: Samsung devices return `InvalidObjectHandle` when listing the root folder with handle 0.
 The library automatically detects this and falls back to recursive listing with filtering. This is transparent to users.

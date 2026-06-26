@@ -15,6 +15,10 @@
 //! cargo test --test integration -- --ignored --nocapture --test-threads=1 --skip slow
 //! ```
 //!
+//! One test is opt-in: `test_drop_mid_stream_then_software_reconnect` poisons
+//! the session on purpose and can wedge some camera firmware until a USB
+//! replug, so it only runs with `MTP_RUN_DROP_RECOVERY=1` (and `--release`).
+//!
 //! ## Picking a writable folder
 //!
 //! Destructive tests need a folder they can write into. By default they walk a
@@ -620,19 +624,36 @@ mod readonly {
         );
     }
 
-    /// Test whether software reconnect recovers after dropping a stream mid-transfer.
+    /// Test whether a session poisoned by a mid-stream drop can be recovered.
     /// This intentionally corrupts the session by dropping without cancel/drain,
-    /// then tries to close + reopen the device to see if it recovers.
+    /// then tries a plain reopen and a transport-level `reset_device()`.
     ///
-    /// Must be run with `--release` to avoid the debug_assert panic in
-    /// ReceiveStream::Drop (which is the exact scenario we're testing).
+    /// **Opt-in only — this test can wedge the device.** Some camera firmware
+    /// (Panasonic Lumix DMC-TZ61, #12) gets so stuck by a mid-stream drop that
+    /// *no* software recovery reaches it: a reopen desyncs, and even the
+    /// session-less SIC reset times out (libgphoto2 times out on it too). The
+    /// only cure is physically unplugging and replugging the USB cable. On such
+    /// a device this test leaves the session poisoned, which cascades into the
+    /// rest of the suite. It is therefore excluded from default runs and only
+    /// runs when `MTP_RUN_DROP_RECOVERY=1` is set, so you opt in knowing you may
+    /// have to replug afterward.
+    ///
+    /// Run it with `--release` (the debug_assert in `ReceiveStream::Drop` is the
+    /// exact scenario under test) and the opt-in flag:
     /// ```sh
-    /// cargo test --release --test integration test_drop_mid_stream -- --ignored --nocapture --test-threads=1
+    /// MTP_RUN_DROP_RECOVERY=1 cargo test --release --test integration test_drop_mid_stream -- --ignored --nocapture --test-threads=1
     /// ```
     #[tokio::test]
     #[ignore]
     #[serial]
     async fn test_drop_mid_stream_then_software_reconnect() {
+        // Opt-in: this test can wedge the device past software recovery on some
+        // firmware (see the doc comment), so it stays out of default runs.
+        if std::env::var("MTP_RUN_DROP_RECOVERY").is_err() {
+            tlog!("SKIPPING: set MTP_RUN_DROP_RECOVERY=1 to run (can wedge the device until a USB replug)");
+            return;
+        }
+
         // This test intentionally drops mid-stream, which fires the debug_assert
         // in ReceiveStream::Drop. Skip in debug builds to avoid panicking.
         if cfg!(debug_assertions) {
@@ -704,20 +725,25 @@ mod readonly {
             }
         }
 
-        // Phase 3: Guaranteed recovery via a transport-level reset.
+        // Phase 3: Attempt recovery via a transport-level reset.
         //
-        // This is the real point of the test and the reason it can't leak a
-        // poisoned session into the rest of the suite: when a plain reopen
-        // can't clear the device's stuck transaction, the SIC DEVICE_RESET
-        // does. PtpDevice opens without a session (a poisoned device can't
-        // answer OpenSession), so this works precisely when MtpDevice::open
-        // can't. Without it, the abandoned transaction cascades into a hard
-        // failure on the next test and timeouts on every test after that.
+        // When a plain reopen can't clear the device's stuck transaction, the
+        // session-less SIC DEVICE_RESET usually can (PtpDevice opens without a
+        // session, so it works precisely when MtpDevice::open can't). On most
+        // devices this cleans up the poisoned session so the rest of the suite
+        // runs. But on firmware that wedges hard on a mid-stream drop (Lumix
+        // DMC-TZ61, #12), even this reset times out — at that point only a
+        // physical USB replug recovers the device, which is why the test is
+        // opt-in.
+        let mut recovered = false;
         tlog!("Recovering with a transport-level reset...");
         match PtpDevice::open_first().await {
             Ok(ptp) => match ptp.reset_device().await {
                 Ok(()) => match ptp.get_device_info().await {
-                    Ok(info) => tlog!("Reset recovered the device: {}", info.model),
+                    Ok(info) => {
+                        recovered = true;
+                        tlog!("Reset recovered the device: {}", info.model);
+                    }
                     Err(e) => tlog!(
                         "Reset sent; device not answering yet (it may need a moment): {:?}",
                         e
@@ -726,6 +752,14 @@ mod readonly {
                 Err(e) => tlog!("Reset failed: {:?}", e),
             },
             Err(e) => tlog!("Could not open device to reset: {:?}", e),
+        }
+
+        if !recovered {
+            tlog!(
+                "Device is still wedged: this firmware can't recover a mid-stream drop in \
+                 software. Unplug and replug the USB cable to reset it; later tests in this \
+                 run will fail until you do."
+            );
         }
 
         // Some cameras need a beat of idle time between USB sessions (the Lumix

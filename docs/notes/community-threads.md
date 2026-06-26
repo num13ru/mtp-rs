@@ -48,10 +48,10 @@ camera as promised in #6. Two failure classes, both root-caused via the reporter
    **Confirmed by the reporter 2026-06-06**: the recursive search found a photo and ran the cancel test.
    (An earlier hypothesis blamed `ParentFilter::Exact` dropping objects on mismatched parent handles — that was
    wrong, don't chase it.)
-
-Second test batch (2026-06-06, logs on the issue) surfaced four more problems; all addressed 2026-06-07, and
-**confirmed on hardware 2026-06-20** (cancel survives, `ptp_diagnose` no longer panics, `reset` recovers the device):
-
+   
+   Second test batch (2026-06-06, logs on the issue) surfaced four more problems; all addressed 2026-06-07, and
+   **confirmed on hardware 2026-06-20** (cancel survives, `ptp_diagnose` no longer panics, `reset` recovers the device):
+   
 3. **Camera dead after a "successful" cancel.** `Cancel succeeded` was followed by `list root after cancel - Timeout`
    and every subsequent test timing out until power-cycle, identically in two runs. Root cause: our cancel flow
    skipped the SIC spec's post-cancel step. Fixed: `cancel_transfer` now polls GET_DEVICE_STATUS (0x67) after the
@@ -68,31 +68,40 @@ Second test batch (2026-06-06, logs on the issue) surfaced four more problems; a
    breadth-first streaming search with early exit, cross-test caching of the find, and an `MTP_TEST_READFILE` env
    override (the reporter's suggestion). The `diagnose` example's recursion is bounded to 200 objects for the same
    reason.
-
-On the hard freeze (Ctrl+C mid-listing → no power-button response → battery pull): that's camera firmware, but the
-state it gets stuck in is now addressable. New `mtp-rs reset` CLI command / `PtpDevice::reset_device()` sends the SIC
-DEVICE_RESET control request (0x66) without needing a PTP session, clears halts, and drains stale data.
-
-The 2026-06-06 batch had a regression: the new STALL-recovery / reset paths called `clear_halt().await`, which panics
-on real hardware ("Awaiting blocking syscall without an async runtime"). nusb implements `clear_halt` as a blocking
-syscall; it must be `.wait()`-ed, not `.await`-ed (`control_in`/`control_out` are genuinely async and stay `.await`).
-Fixed 2026-06-13, **confirmed on hardware 2026-06-20**. See the `clear_halt` gotcha in `AGENTS.md`.
-
-Third batch (2026-06-20, on commit `3b01ed8`) confirmed all the above and surfaced two more, both camera-firmware
-behaviors rather than library bugs:
-
-7. **Plain reopen does NOT recover a poisoned PTP-camera session; `reset_device()` does.** The integration test
-   `test_drop_mid_stream_then_software_reconnect` drops a download without cancel/drain (poisoning the session), then
-   tried only a close+reopen. On this camera reopen reads the abandoned transaction's queued data as a desync
-   ("expected Response container type (3), got 255"). The test merely logged that, so it left the device wedged and
-   **the next test hard-panicked, then everything after timed out**. Fixed 2026-06-20: the test now recovers with a
-   transport-level `reset_device()` (via session-less `PtpDevice`) and a short settle, so it both demonstrates the real
-   recovery path and stops cascading into the rest of the suite. Lesson for consumers: a dropped-without-cancel session
-   is healed within the same session by `recover_if_needed`, but a *fresh handle* on a still-poisoned device needs
-   `reset_device()`.
+   
+   On the hard freeze (Ctrl+C mid-listing → no power-button response → battery pull): that's camera firmware, but the
+   state it gets stuck in is now addressable. New `mtp-rs reset` CLI command / `PtpDevice::reset_device()` sends the SIC
+   DEVICE_RESET control request (0x66) without needing a PTP session, clears halts, and drains stale data.
+   
+   The 2026-06-06 batch had a regression: the new STALL-recovery / reset paths called `clear_halt().await`, which panics
+   on real hardware ("Awaiting blocking syscall without an async runtime"). nusb implements `clear_halt` as a blocking
+   syscall; it must be `.wait()`-ed, not `.await`-ed (`control_in`/`control_out` are genuinely async and stay `.await`).
+   Fixed 2026-06-13, **confirmed on hardware 2026-06-20**. See the `clear_halt` gotcha in `AGENTS.md`.
+   
+   Third batch (2026-06-20, on commit `3b01ed8`) confirmed all the above and surfaced two more, both camera-firmware
+   behaviors rather than library bugs:
+   
+7. **Plain reopen does NOT recover a poisoned PTP-camera session; `reset_device()` does — except on firmware that
+   wedges past all software recovery.** The integration test `test_drop_mid_stream_then_software_reconnect` drops a
+   download without cancel/drain (poisoning the session), then tried only a close+reopen. On this camera reopen reads
+   the abandoned transaction's queued data as a desync ("expected Response container type (3), got 255"). The test
+   merely logged that, so it left the device wedged and **the next test hard-panicked, then everything after timed
+   out**. First fix (2026-06-20) had the test recover with a transport-level `reset_device()`. **But the 2026-06-25
+   retest showed this camera wedges so hard on a mid-stream drop that even the session-less SIC reset times out**
+   (libgphoto2 times out on it too); only a physical USB replug recovers it. So `reset_device()` is the right tool for
+   the *common* poisoned-session case (a host that died between transactions), but it can't reach a device whose USB
+   stack is fully stuck. Final fix (2026-06-26): the test is now **opt-in** behind `MTP_RUN_DROP_RECOVERY=1` and
+   excluded from default runs (Jules confirmed skipping it makes the whole suite pass 16/16), and when reset fails it
+   prints a "unplug and replug the USB cable" hint. Lesson for consumers: a dropped-without-cancel session is healed
+   within the same session by `recover_if_needed`; a *fresh handle* on a poisoned-but-responsive device needs
+   `reset_device()`; a fully-wedged device needs a physical replug, full stop.
 8. **Camera needs idle time between USB sessions.** An immediately-following `ptp_diagnose` or `reset` (sub-5s after the
    previous one finished) returns `Timeout` / "device didn't answer yet". Firmware behavior, not actionable in the
    library beyond the graceful messaging `reset` already prints; give the camera a beat.
+
+Upstream: @juleskers filed [nusb#212](https://github.com/kevinmehall/nusb/issues/212) for the `.await`-vs-`.wait`
+footgun (awaiting a blocking nusb `MaybeFuture` panics at runtime instead of failing to compile). Our side is handled
+(see the `clear_halt` gotcha in `AGENTS.md`); the upstream issue may make it a compile error eventually.
 
 Note: the reporter's retest cycles can take weeks ("days/weeks/months"), so bundle asks into single well-aimed
 comments.
@@ -101,14 +110,14 @@ comments.
 
 Chronological order, oldest first.
 
-### #1 — 11th gen Kindle not detected (closed 2026-03-24)
+### #1: 11th gen Kindle not detected (closed 2026-03-24)
 
 Reporter: [@jannikac](https://github.com/jannikac). The Kindle exposed a vendor-class interface (`class=ff subclass=ff`)
 instead of a standard MTP class, so `is_mtp_device` returned false. Fixed in v0.4.1 with a broader detection heuristic.
 The "permissive interface scan" pattern that grew out of this was later formalized in #4. Case study:
 [veszelovszki.com/a/mtp-rs-bugfix](https://www.veszelovszki.com/a/mtp-rs-bugfix/).
 
-### #2 — OpenSession transaction-id fix (merged 2026-04-01)
+### #2: OpenSession transaction-id fix (merged 2026-04-01)
 
 Reporter and fixer: [@num13ru](https://github.com/num13ru). OpenSession is a session-less PTP operation and must be sent
 with `transaction_id = 0`. The old code routed it through the general `execute()` path, which assigned the first
@@ -117,7 +126,7 @@ Android tolerated it. Tested on @num13ru's Kindle Paperwhite. Their Kindle test 
 [this comment](https://github.com/vdavid/mtp-rs/pull/2#issuecomment-4264713119), linked from the README's tested devices
 row.
 
-### #3 / #4 — Low-level primitives for non-standard MTP devices (merged 2026-04-09)
+### #3 / #4: Low-level primitives for non-standard MTP devices (merged 2026-04-09)
 
 Reporter and contributor: [@kelchm](https://github.com/kelchm) (Matthew Kelch). Started as a design discussion in #3
 about whether the crate should grow a device-quirks registry. Outcome: no registry, but expose enough primitives so
@@ -140,19 +149,19 @@ and `split_header_data` flags plus a `detect_quirks()` callback. We deliberately
 existed, and both could be set directly on the session. Premature abstraction. The current expose-the-primitive approach
 keeps device knowledge out of the crate.
 
-### #5 — RUSTSEC-2026-0097: rand unsoundness (closed 2026-04-13)
+### #5: RUSTSEC-2026-0097: rand unsoundness (closed 2026-04-13)
 
 Source: github-actions advisory. Not affected — `rand` is pulled in only transitively via `proptest` (dev-dependency),
 so it never reaches downstream consumers. The trigger conditions (custom logger calling `rand::rng()` during reseed)
 don't apply to our test builds either. Closed as not-affected.
 
-### #7 — Python bindings request (closed 2026-04-14)
+### #7: Python bindings request (closed 2026-04-14)
 
 Requester: [@dragon-Elec](https://github.com/dragon-Elec). Out of scope for this crate. The crate is MIT-licensed, so
 anyone can build a `mtp-py` wrapper on top. Pointed to [mtp-mount](https://www.veszelovszki.com/a/mtp-mount/) as a
 working consumer that exercises the full API.
 
-### #8 / #9 — Slow root listing on Kindle and other non-Android devices (merged 2026-04-26, shipped in v0.13.2 on 2026-04-27)
+### #8 / #9: Slow root listing on Kindle and other non-Android devices (merged 2026-04-26, shipped in v0.13.2 on 2026-04-27)
 
 Reporter and fixer: [@num13ru](https://github.com/num13ru).
 `GetObjectHandles(parent=0)` on the Kindle Paperwhite (12th gen) returned all 2541 objects on the storage instead of the
@@ -167,7 +176,7 @@ not a fallback trigger. The
 `is_android()` check inside `list_objects_recursive_auto` remains and gates a different workaround. 110× reduction in
 USB round-trips for root listing on the Kindle (2541 → 23). Tested end-to-end on the Kindle and on Pixel 9 Pro XL.
 
-### #10 — Garmin Forerunner 955 quirk and split-receive bug fix (merged 2026-05-02)
+### #10: Garmin Forerunner 955 quirk and split-receive bug fix (merged 2026-05-02)
 
 Reporter and contributor: [@dasJ](https://github.com/dasJ). PR added two things:
 
@@ -194,27 +203,27 @@ when no match is found.
 
 Cross-cutting summary of every quirk currently handled or known. Sorted by device family.
 
-| Device                       | Quirk                                                                 | Workaround                                        | First spotted in       |
-|------------------------------|-----------------------------------------------------------------------|---------------------------------------------------|------------------------|
-| Android (general)            | `parent=0` returns all objects on storage                             | `parent=0xFFFFFFFF` for root listing              | Pre-public             |
-| Android (general)            | Uploads to storage root rejected with `InvalidObjectHandle`           | Upload into a folder, for example `Download`      | Pre-public             |
-| Android (general)            | `ObjectHandle::ALL` recursive listing broken                          | Manual traversal in `list_objects_recursive_auto` | Pre-public             |
-| Samsung Galaxy               | `InvalidObjectHandle` on root listing with handle 0                   | Recursive traversal with filtering                | Pre-public             |
-| Kindle Paperwhite (12th gen) | `parent=0` returns all objects (same as Android, no `android.com` ID) | Universal fast path with fallback (post v0.13.2)  | #8 / #9                |
-| Kindle (11th gen)            | Vendor-class USB interface, missed by class-code match                | Permissive interface scan + custom VID/PID list   | #1, generalized in #4  |
-| Kindle (general)             | Rejects OpenSession with non-zero transaction id                      | Send OpenSession with TID=0                       | #2                     |
-| Fuji cameras                 | Returns all objects for root listing                                  | Filter by exact parent handle                     | Pre-public             |
-| Fuji cameras                 | Reports `AccessCapability::ReadWrite` but errors on writes            | Trust the per-operation `StoreReadOnly` response  | Pre-public             |
-| Zune-era hardware (MTPZ)     | Won't accept combined header+payload bulk transfers                   | `set_split_header_data(true)`                     | #3 / #4                |
-| Garmin Forerunner 955        | Same as Zune on send (uploads need split mode)                        | Auto-applied via manufacturer-string match (#10)  | #6 (@dasJ, 2026-04-26) |
-| Garmin Forerunner 955        | Sends container header and payload as separate bulk transfers on receive | Multi-transfer accumulation in session-less `GetDeviceInfo` | #10 (protocol bug, fixed 2026-05-02) |
-| Vendor-class macOS devices   | IOKit doesn't publish interfaces until config is set                  | `SetConfiguration(1)` retry on `claim_interface`  | #4                     |
-| Panasonic Lumix DMC-TZ61     | Firmware-filtered read-only PTP view; doesn't advertise `SendObjectInfo`/`SendObject`; rejects `SendObjectInfo` with `InvalidObjectFormatCode` | Gate writes on `supports_upload()` (confirmed working) | #12 (@juleskers, 2026-06-03) |
-| Panasonic Lumix DMC-TZ61     | Reports `20480000T000000` (month 0, day 0) as "no date" in ObjectInfo datetimes | Lenient receive-side datetime parsing (unparseable → `None`) | #12 (root-caused 2026-06-05) |
-| Panasonic Lumix DMC-TZ61     | Freezes hard (battery-pull-level) if the host aborts mid-listing | `mtp-rs reset` / `PtpDevice::reset_device()` (SIC 0x66, untested on the full freeze) | #12 |
-| PTP cameras (SIC-compliant)  | Unusable after a cancel unless the host polls GET_DEVICE_STATUS until not Device_Busy | Step 4 in `cancel_transfer` (post-drain polling + halt clearing) | #12 (2026-06-07) |
-| PTP cameras (SIC-compliant)  | STALL bulk endpoint for unsupported operations/properties; halt persists across processes | `clear_halt` at every bulk completion site on STALL | #12 (2026-06-07) |
-| Panasonic Lumix DMC-TZ61     | Pads serial number to fixed width with multiple NULs | `unpack_string` truncates at first NUL | #12 (2026-06-06) |
+| Device                       | Quirk                                                                                                                                          | Workaround                                                                           | First spotted in                     |
+|------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|--------------------------------------|
+| Android (general)            | `parent=0` returns all objects on storage                                                                                                      | `parent=0xFFFFFFFF` for root listing                                                 | Pre-public                           |
+| Android (general)            | Uploads to storage root rejected with `InvalidObjectHandle`                                                                                    | Upload into a folder, for example `Download`                                         | Pre-public                           |
+| Android (general)            | `ObjectHandle::ALL` recursive listing broken                                                                                                   | Manual traversal in `list_objects_recursive_auto`                                    | Pre-public                           |
+| Samsung Galaxy               | `InvalidObjectHandle` on root listing with handle 0                                                                                            | Recursive traversal with filtering                                                   | Pre-public                           |
+| Kindle Paperwhite (12th gen) | `parent=0` returns all objects (same as Android, no `android.com` ID)                                                                          | Universal fast path with fallback (post v0.13.2)                                     | #8 / #9                              |
+| Kindle (11th gen)            | Vendor-class USB interface, missed by class-code match                                                                                         | Permissive interface scan + custom VID/PID list                                      | #1, generalized in #4                |
+| Kindle (general)             | Rejects OpenSession with non-zero transaction id                                                                                               | Send OpenSession with TID=0                                                          | #2                                   |
+| Fuji cameras                 | Returns all objects for root listing                                                                                                           | Filter by exact parent handle                                                        | Pre-public                           |
+| Fuji cameras                 | Reports `AccessCapability::ReadWrite` but errors on writes                                                                                     | Trust the per-operation `StoreReadOnly` response                                     | Pre-public                           |
+| Zune-era hardware (MTPZ)     | Won't accept combined header+payload bulk transfers                                                                                            | `set_split_header_data(true)`                                                        | #3 / #4                              |
+| Garmin Forerunner 955        | Same as Zune on send (uploads need split mode)                                                                                                 | Auto-applied via manufacturer-string match (#10)                                     | #6 (@dasJ, 2026-04-26)               |
+| Garmin Forerunner 955        | Sends container header and payload as separate bulk transfers on receive                                                                       | Multi-transfer accumulation in session-less `GetDeviceInfo`                          | #10 (protocol bug, fixed 2026-05-02) |
+| Vendor-class macOS devices   | IOKit doesn't publish interfaces until config is set                                                                                           | `SetConfiguration(1)` retry on `claim_interface`                                     | #4                                   |
+| Panasonic Lumix DMC-TZ61     | Firmware-filtered read-only PTP view; doesn't advertise `SendObjectInfo`/`SendObject`; rejects `SendObjectInfo` with `InvalidObjectFormatCode` | Gate writes on `supports_upload()` (confirmed working)                               | #12 (@juleskers, 2026-06-03)         |
+| Panasonic Lumix DMC-TZ61     | Reports `20480000T000000` (month 0, day 0) as "no date" in ObjectInfo datetimes                                                                | Lenient receive-side datetime parsing (unparseable → `None`)                         | #12 (root-caused 2026-06-05)         |
+| Panasonic Lumix DMC-TZ61     | Freezes hard (battery-pull-level) if the host aborts mid-listing                                                                               | `mtp-rs reset` / `PtpDevice::reset_device()` (SIC 0x66, untested on the full freeze) | #12                                  |
+| PTP cameras (SIC-compliant)  | Unusable after a cancel unless the host polls GET_DEVICE_STATUS until not Device_Busy                                                          | Step 4 in `cancel_transfer` (post-drain polling + halt clearing)                     | #12 (2026-06-07)                     |
+| PTP cameras (SIC-compliant)  | STALL bulk endpoint for unsupported operations/properties; halt persists across processes                                                      | `clear_halt` at every bulk completion site on STALL                                  | #12 (2026-06-07)                     |
+| Panasonic Lumix DMC-TZ61     | Pads serial number to fixed width with multiple NULs                                                                                           | `unpack_string` truncates at first NUL                                               | #12 (2026-06-06)                     |
 
 ## Recurring contributors
 
