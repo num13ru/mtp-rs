@@ -33,6 +33,7 @@
 //! ```
 
 mod device;
+mod error;
 mod event;
 mod object;
 mod storage;
@@ -40,6 +41,7 @@ mod stream;
 mod types;
 
 pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
+pub use error::{Error, UploadError};
 pub use event::DeviceEvent;
 // Backend-neutral high-level types (see types.rs). Not yet wired into the public method signatures
 // — that happens in the façade step; defined first so the backend trait can speak this vocabulary.
