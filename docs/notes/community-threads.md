@@ -199,6 +199,19 @@ Android-specific. Refactored `tests/integration.rs` to walk a priority list of w
 Android, Kindle, and Garmin, with `MTP_TEST_FOLDER` env var as override. Tests now skip cleanly with a helpful log
 when no match is found.
 
+### #13: "It cannot be used in Windows" (closed by reporter 2026-06-25; resolved via the WPD backend)
+
+@klwaaa hit `Usb(Unsupported, "incompatible driver is installed for this interface")` opening a Redmi
+Turbo 3 on Windows. Not a bug: nusb can only claim WinUSB-bound interfaces, but Windows binds phones
+to its native WPD/MTP driver, so the raw-USB path can't open them (closing adb doesn't help — that's a
+separate interface). The reporter closed it "not planned," but it motivated a real fix: a native
+**Windows WPD-over-COM backend** behind the new backend-neutral `mtp::` API (pure Rust via the
+`windows` crate, `cfg(windows)`). On Windows the high-level `mtp::` API now auto-selects WPD and works
+out of the box — no Zadig, no extra deps — hardware-verified on a Pixel 9 Pro XL (read, write,
+streaming up/download, thumbnails, capabilities; events deferred). Landed on `feat/windows-wpd-backend`;
+ships in the next release. The low-level `ptp::` USB API stays WinUSB-only on Windows. When released,
+reply to #13 so @klwaaa knows it's fixed.
+
 ## Device quirks reference
 
 Cross-cutting summary of every quirk currently handled or known. Sorted by device family.

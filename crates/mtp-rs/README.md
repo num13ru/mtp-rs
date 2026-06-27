@@ -176,7 +176,14 @@ honestly, any) library.
 
 ### Windows
 
-Should work, and no dependencies needed, but we haven't tested it.
+Works out of the box via the native Windows Portable Devices (WPD) COM backend — no driver install
+(no Zadig), no extra dependencies. mtp-rs uses Windows' own MTP stack, so the high-level `mtp::` API
+auto-selects the WPD backend and you write the same code as on Linux and macOS. Verified on a
+Pixel 9 Pro XL.
+
+The low-level `ptp::` USB API is WinUSB-only on Windows: it reaches a device only when that device's
+interface is bound to WinUSB (a camera, or a device you've bound with Zadig). Phones are bound to the
+WPD driver, so reach them through `mtp::` (WPD), not `ptp::`.
 
 ## Examples
 
@@ -499,8 +506,9 @@ Note that `libptp` is much more mature, though!
 
 ### vs winmtp
 
-[winmtp](https://crates.io/crates/winmtp) wraps the Windows COM API, which is Windows only. `mtp-rs` works on Linux,
-macOS, and Windows.
+[winmtp](https://crates.io/crates/winmtp) wraps the Windows WPD COM API and is Windows-only. `mtp-rs`
+runs on Linux, macOS, and Windows behind one cross-platform API — raw USB on Linux/macOS, and the same
+WPD COM stack winmtp uses on Windows.
 
 ## Implementation notes
 

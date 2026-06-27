@@ -72,6 +72,12 @@ This document describes the internal architecture and design decisions for `mtp-
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> The diagram shows the PTP-over-USB stack. As of the backend-neutral refactor, `mtp::` no longer
+> sits directly on `ptp::`: it dispatches through an `MtpBackend` seam (`Box<dyn MtpBackend>`) with two
+> implementations — `UsbBackend` (the stack above) and `WpdBackend` (Windows WPD-over-COM,
+> `cfg(windows)`, which bypasses `ptp::`/`transport::` entirely). `ptp::PtpDevice`/`PtpSession` remain a
+> separate low-level, USB-only public API for cameras. See "Backend seam" below.
+
 ## Module organization
 
 ```
@@ -89,17 +95,24 @@ src/
 │   ├── session.rs         # PTP session management
 │   └── device.rs          # PtpDevice (public low-level API)
 │
-├── mtp/                   # MTP high-level API
+├── mtp/                   # High-level, backend-neutral API
 │   ├── mod.rs             # Module exports
-│   ├── device.rs          # MtpDevice, MtpDeviceBuilder
-│   ├── storage.rs         # Storage
-│   ├── object.rs          # ObjectInfo, NewObjectInfo, ObjectFormat
-│   ├── event.rs           # DeviceEvent, event stream
-│   └── stream.rs          # FileDownload, upload helpers
+│   ├── device.rs          # MtpDevice, MtpDeviceBuilder, backend selection
+│   ├── storage.rs         # Storage (façade over the active backend)
+│   ├── types.rs           # Neutral ObjectHandle/StorageId/ObjectInfo/DeviceInfo/Capabilities/…
+│   ├── error.rs           # Neutral mtp::Error + UploadError
+│   ├── object.rs          # NewObjectInfo, ObjectFormat
+│   ├── event.rs           # DeviceEvent
+│   ├── stream.rs          # FileDownload, WindowedDownload, Progress
+│   └── backend/           # The MtpBackend seam
+│       ├── mod.rs         # MtpBackend trait, Backend selector, ByteRange
+│       ├── usb.rs         # UsbBackend (PTP over Transport)
+│       └── wpd/           # WpdBackend (Windows WPD-over-COM, cfg(windows))
 │
 └── transport/             # USB transport abstraction
     ├── mod.rs             # Transport trait, exports
     ├── nusb.rs            # nusb implementation
+    ├── virtual_device/    # Filesystem-backed virtual device (feature = "virtual-device")
     └── mock.rs            # Mock for testing
 ```
 
@@ -121,7 +134,9 @@ src/
 └─────────────┘
 ```
 
-- **mtp** depends on: `ptp`, `error`
+- **mtp** (incl. `mtp::backend`) depends on: `ptp`, `transport`, `error`
+- **mtp::backend::usb** drives `ptp` over `transport`; **mtp::backend::wpd** drives Windows WPD COM
+  directly (`cfg(windows)`, no `ptp`/`transport`)
 - **ptp** depends on: `transport`, `error`
 - **transport** depends on: `error`, external `nusb`
 - **error** depends on: nothing internal
