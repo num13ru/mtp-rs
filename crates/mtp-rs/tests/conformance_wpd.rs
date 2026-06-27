@@ -56,6 +56,18 @@ async fn open_scoped(folder: &str) -> (MtpDevice, Storage, ObjectHandle) {
         .expect("a Download folder in the storage root")
         .handle;
 
+    // A prior aborted run (e.g. a mid-test disconnect, which prevents the normal cleanup) can leave
+    // this scoped folder behind, and WPD `create_folder` fails on a duplicate name. Remove any
+    // leftover first so the suite stays re-runnable.
+    if let Ok(existing) = storage.list_objects(Some(download)).await {
+        for stale in existing
+            .iter()
+            .filter(|o| o.is_folder() && o.filename == folder)
+        {
+            let _ = storage.delete(stale.handle).await;
+        }
+    }
+
     let test_dir = storage
         .create_folder(Some(download), folder)
         .await
@@ -201,9 +213,9 @@ async fn wpd_object_added_event() {
         }
 
         match observed {
-            Some(ev) => println!(
-                "FINDING: the device DID emit an event for a host create_folder: {ev:?}"
-            ),
+            Some(ev) => {
+                println!("FINDING: the device DID emit an event for a host create_folder: {ev:?}")
+            }
             None => println!(
                 "FINDING: the device did NOT emit an event for a host create_folder within 5s \
                  (tolerated — event delivery for host-initiated changes is device-dependent)"
