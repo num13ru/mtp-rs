@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read in 32 KiB windows. Each next_window() is one bounded transaction that
     // releases the session on return; pick a window size to taste (the
     // DEFAULT_DOWNLOAD_WINDOW of 8 MiB is the documented suggestion for real
-    // hardware — here a small window just makes the loop visibly iterate).
+    // hardware; here a small window just makes the loop visibly iterate).
     let window_size = 32 * 1024;
     let mut download = storage.download_windowed(obj.handle, window_size).await?;
     // size() reports the FULL object size, so progress stays anchored.
@@ -85,13 +85,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             obj.size
         );
 
-        // The session is FREE right here. Run a real device op BETWEEN windows —
-        // a held-open download_stream couldn't do this. The consumer interposes
+        // The session is FREE right here. Run a real device op BETWEEN windows.
+        // A held-open download_stream couldn't do this. The consumer interposes
         // whatever policy it wants here; the library holds no session lock.
         let listed = storage.list_objects(None).await?;
         listings_between += 1;
         println!(
-            "  ...listed {} object(s) on the device between windows — session is free.",
+            "  ...listed {} object(s) on the device between windows. Session is free.",
             listed.len()
         );
     }

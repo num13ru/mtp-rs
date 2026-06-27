@@ -81,7 +81,7 @@ impl PtpDevice {
     ///
     /// Sends the USB Still Image Class Device Reset request (`bRequest=0x66`),
     /// clears halted bulk endpoints, and drains stale bulk data. Use this to
-    /// recover a device whose PTP state machine is stuck — for example after
+    /// recover a device whose PTP state machine is stuck, for example after
     /// a host process died mid-transfer, when every operation fails with
     /// "Transaction ID mismatch" or "expected Response container type"
     /// errors.

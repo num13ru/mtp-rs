@@ -210,7 +210,7 @@ impl FileDownload {
 ///
 /// Each window is one bounded `GetPartialObject64` transaction that **releases**
 /// the one-per-device PTP session the moment it returns. On a Pixel 9 Pro XL an
-/// 8 MiB window completes in roughly 80 ms — small enough that a concurrent
+/// 8 MiB window completes in roughly 80 ms: small enough that a concurrent
 /// folder listing or navigation slips in between windows at its natural cost,
 /// yet large enough to keep throughput high. (For contrast: aborting a
 /// held-open multi-GB [`download_stream`](crate::mtp::Storage::download_stream)
@@ -226,7 +226,7 @@ pub const DEFAULT_DOWNLOAD_WINDOW: u32 = 8 * 1024 * 1024;
 /// **releasing the PTP session between every window**.
 ///
 /// MTP allows exactly one PTP session per device, and a streaming
-/// [`FileDownload`] holds that session open for the *entire* file — so while a
+/// [`FileDownload`] holds that session open for the *entire* file, so while a
 /// big [`download_stream`](crate::mtp::Storage::download_stream) is in flight, no
 /// other operation (a folder listing, navigation) can touch the device until the
 /// read finishes or is cancelled (and cancelling a multi-GB read costs ~35 s to
@@ -238,10 +238,10 @@ pub const DEFAULT_DOWNLOAD_WINDOW: u32 = 8 * 1024 * 1024;
 /// # The consumer owns the policy
 ///
 /// `WindowedDownload` owns the *bookkeeping* (total size, current offset, window
-/// sizing, EOF detection) — that's the reusable value. It deliberately owns **no
+/// sizing, EOF detection). That's the reusable value. It deliberately owns **no
 /// policy**: there's no pause, debounce, rate-limit, or priority gate baked in.
-/// Whatever a consumer wants to do "while the session is free" — service a
-/// pending listing, check a cancel flag, throttle — it does *between*
+/// Whatever a consumer wants to do "while the session is free" (service a
+/// pending listing, check a cancel flag, throttle) it does *between*
 /// `next_window()` calls. That separation is the whole design: the library keeps
 /// the mechanism unopinionated, the consumer interposes its own logic.
 ///
@@ -250,7 +250,7 @@ pub const DEFAULT_DOWNLOAD_WINDOW: u32 = 8 * 1024 * 1024;
 /// Unlike [`FileDownload`] (which holds the session open and **must** be
 /// consumed fully or [`cancel()`](FileDownload::cancel)led before drop, or it
 /// corrupts the USB session), a `WindowedDownload` holds nothing between windows.
-/// To stop early, just stop calling `next_window()` and drop it — there's no
+/// To stop early, just stop calling `next_window()` and drop it: there's no
 /// in-flight transfer to drain, so [`Drop`] is a no-op. (If a `next_window()`
 /// future is itself dropped mid-call, the session self-heals: the abandoned
 /// transaction is drained by the next operation via the crate's
@@ -276,7 +276,7 @@ pub const DEFAULT_DOWNLOAD_WINDOW: u32 = 8 * 1024 * 1024;
 ///     let bytes = window?;
 ///     file.write_all(&bytes).await?;
 ///
-///     // The session is FREE right here — do other device work between windows.
+///     // The session is FREE right here, so do other device work between windows.
 ///     // e.g. service a pending folder listing, or check a cancel flag and stop.
 /// }
 /// # Ok(())
@@ -335,15 +335,15 @@ impl WindowedDownload {
     /// **releasing the PTP session on return**.
     ///
     /// Returns:
-    /// - `Some(Ok(bytes))` — the next window. It's clamped to the bytes
+    /// - `Some(Ok(bytes))`: the next window. It's clamped to the bytes
     ///   remaining, so the final window is exactly the short tail. A device may
-    ///   legally return *fewer* bytes than requested mid-file; that's honored —
-    ///   the offset advances by the bytes actually returned, so the next call
+    ///   legally return *fewer* bytes than requested mid-file; that's honored.
+    ///   The offset advances by the bytes actually returned, so the next call
     ///   continues from the right place.
-    /// - `None` — clean end of file: the offset has reached the full size (this
+    /// - `None`: clean end of file, the offset has reached the full size (this
     ///   is also the first result for an empty file, or for a download started
     ///   at `offset == size`). No USB transaction is issued in that case.
-    /// - `Some(Err(_))` — a transfer error, **or** a device stall: a 0-byte read
+    /// - `Some(Err(_))` is a transfer error, **or** a device stall: a 0-byte read
     ///   while bytes still remain (`offset < size`) is reported as
     ///   [`Error::InvalidData`], not silently treated as EOF and not spun on, so
     ///   a misbehaving device surfaces instead of looping forever.
@@ -370,7 +370,7 @@ impl WindowedDownload {
             Ok(bytes) => {
                 if bytes.is_empty() {
                     // We asked for >0 bytes (offset < total_size) but the device
-                    // returned none. That's a device stall, not EOF — surface it
+                    // returned none. That's a device stall, not EOF: surface it
                     // rather than returning None (which a caller would read as a
                     // clean, complete file) or spinning forever on empty windows.
                     return Some(Err(Error::invalid_data(format!(

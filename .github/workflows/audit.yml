@@ -55,7 +55,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # derivative is unmaintained but only used transitively by libmtp-rs
-          # in the benchmarks workspace member — not a security issue
+          # in the benchmarks workspace member, not a security issue
           ignore: RUSTSEC-2024-0388
 
   # =============================================================================
@@ -116,7 +116,7 @@ jobs:
         # Default-members (in root Cargo.toml) scopes to lib + CLI, skipping
         # the C-library-bound mtp-bench. `--all-features` is required so udeps
         # sees code gated behind feature flags (virtual-device tests in the
-        # CLI crate, etc.) — without it, dev-deps used only inside those
+        # CLI crate, etc.): without it, dev-deps used only inside those
         # cfg-gated blocks look unused.
         run: cargo +nightly udeps --all-features --all-targets
         env:

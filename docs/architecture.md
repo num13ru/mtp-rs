@@ -237,7 +237,7 @@ impl PtpSession {
 
 ### Cancellation and cleanup
 
-**Download cancellation**: Call `FileDownload::cancel(idle_timeout)` (or `ReceiveStream::cancel()`) to safely abort a mid-stream download. This sends a USB Still Image Class cancel control request (bRequest=0x64) to the device, then drains remaining data from the USB pipes. The session remains healthy for subsequent operations. Dropping without calling `cancel()` corrupts the session (`debug_assert` catches this in debug builds). The implementation follows libmtp's proven approach — see `NusbTransport::cancel_transfer()` for details.
+**Download cancellation**: Call `FileDownload::cancel(idle_timeout)` (or `ReceiveStream::cancel()`) to safely abort a mid-stream download. This sends a USB Still Image Class cancel control request (bRequest=0x64) to the device, then drains remaining data from the USB pipes. The session remains healthy for subsequent operations. Dropping without calling `cancel()` corrupts the session (`debug_assert` catches this in debug builds). The implementation follows libmtp's proven approach; see `NusbTransport::cancel_transfer()` for details.
 
 **Upload cancellation**: If an upload future is dropped after `SendObjectInfo` succeeds but before `SendObject` completes, a partial/empty object may remain on the device. The protocol has no abort mechanism. Callers should track the handle and delete incomplete objects if needed.
 

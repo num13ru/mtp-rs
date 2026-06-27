@@ -72,7 +72,7 @@ fn parse_device_status(data: &[u8]) -> Option<(u16, Vec<u8>)> {
 ///
 /// Devices STALL a bulk endpoint to signal errors (PTP cameras do this for
 /// unsupported operations and properties). The halt persists until the host
-/// clears it — even across process restarts — so skipping this wedges every
+/// clears it (even across process restarts), so skipping this wedges every
 /// subsequent transfer on the endpoint (observed on the Panasonic Lumix
 /// DMC-TZ61, issue #12: a re-run of `ptp_diagnose` failed at `GetDeviceInfo`
 /// with "endpoint stalled" from the previous run's property probing).
@@ -85,7 +85,7 @@ where
         // `.wait()`, not `.await`: nusb implements `clear_halt` as a blocking
         // syscall (the CLEAR_FEATURE ioctl), and awaiting it panics unless the
         // consumer enables nusb's `tokio`/`smol` feature. We stay
-        // runtime-agnostic, so we run it synchronously — the same pattern
+        // runtime-agnostic, so we run it synchronously, the same pattern
         // `NusbTransport::open` uses for `claim_interface().wait()`. The
         // transfer has already completed (with a stall), so the endpoint is
         // idle, which is what `clear_halt` requires.
@@ -361,8 +361,8 @@ impl NusbTransport {
     /// On macOS, vendor-class or class-0 devices that IOKit doesn't
     /// auto-configure end up with no `IOUSBHostInterface` services published,
     /// even when the device's configuration descriptor reports otherwise.
-    /// The resulting `claim_interface` error is `NotFound` — there's nothing
-    /// for nusb to claim — and the fix is to issue `SetConfiguration(1)`,
+    /// The resulting `claim_interface` error is `NotFound` (there's nothing
+    /// for nusb to claim), and the fix is to issue `SetConfiguration(1)`,
     /// which makes IOKit publish the interface objects.
     #[cfg(target_os = "macos")]
     fn is_interface_unpublished(e: &nusb::Error) -> bool {
@@ -379,7 +379,7 @@ impl NusbTransport {
     /// The interface scan first looks for a strict MTP-class interface; if none
     /// is found, it falls back to any interface with the MTP endpoint layout
     /// (bulk IN + bulk OUT + interrupt IN). This relaxed fallback supports
-    /// legacy devices that report a non-standard interface class — the caller
+    /// legacy devices that report a non-standard interface class. The caller
     /// has already hand-picked the device, so the scan can be permissive at
     /// this point.
     pub async fn open_with_timeout(
@@ -526,7 +526,7 @@ impl NusbTransport {
     ///
     /// This must run AFTER the bulk/interrupt drains (see `cancel_transfer`):
     /// inserting it between CLASS_CANCEL and the drain breaks Android.
-    /// Android doesn't implement this control request at all — any error is
+    /// Android doesn't implement this control request at all, so any error is
     /// treated as "nothing to wait for" and ignored.
     async fn settle_after_cancel(&self) {
         const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -720,7 +720,7 @@ impl Transport for NusbTransport {
                 Ok(comp.buffer[..comp.actual_len].to_vec())
             }
             None => {
-                // Don't cancel the transfer — it stays pending in the endpoint.
+                // Don't cancel the transfer; it stays pending in the endpoint.
                 // next_complete() is cancel-safe, so dropping its future is fine.
                 // On retry, the next call will find pending() > 0 and pick it up.
                 Err(crate::Error::Timeout)
@@ -738,7 +738,7 @@ impl Transport for NusbTransport {
             ep.submit(Buffer::new(aligned_size));
         }
 
-        // Await indefinitely — callers handle cancellation via async
+        // Await indefinitely; callers handle cancellation via async
         // cancellation (e.g. tokio::time::timeout or select!).
         let completion = ep.next_complete().await;
         if let Err(e) = completion.status {
@@ -864,7 +864,7 @@ impl Transport for NusbTransport {
                             }
                         }
                         futures::future::Either::Right((_, _)) => {
-                            // Idle timeout — no more data arriving, pipe is clear.
+                            // Idle timeout: no more data arriving, pipe is clear.
                             Ok(true)
                         }
                     }
@@ -887,7 +887,7 @@ impl Transport for NusbTransport {
         // Step 3: Drain interrupt pipe.
         //
         // Consume the CancelTransaction event if the device sent one. This is
-        // critical for some devices — GoPro Hero 5 stops responding entirely
+        // critical for some devices: GoPro Hero 5 stops responding entirely
         // if this event is left unread on the interrupt pipe.
         {
             let mut ep = self.interrupt_in.lock().await;

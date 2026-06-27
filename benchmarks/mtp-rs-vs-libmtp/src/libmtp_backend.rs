@@ -112,7 +112,7 @@ impl LibmtpBackend {
 
     /// Clean up the benchmark folder (deletes children first, then the folder).
     pub fn cleanup(self) -> Result<(), Box<dyn std::error::Error>> {
-        // Delete children first — some devices don't support recursive folder deletion.
+        // Delete children first: some devices don't support recursive folder deletion.
         let pool = self.device.storage_pool();
         let children = pool.files_and_folders(Parent::Folder(self.bench_folder_id));
         for child in children {

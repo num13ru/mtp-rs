@@ -628,7 +628,7 @@ mod readonly {
     /// This intentionally corrupts the session by dropping without cancel/drain,
     /// then tries a plain reopen and a transport-level `reset_device()`.
     ///
-    /// **Opt-in only — this test can wedge the device.** Some camera firmware
+    /// **Opt-in only: this test can wedge the device.** Some camera firmware
     /// (Panasonic Lumix DMC-TZ61, #12) gets so stuck by a mid-stream drop that
     /// *no* software recovery reaches it: a reopen desyncs, and even the
     /// session-less SIC reset times out (libgphoto2 times out on it too). The
@@ -687,7 +687,7 @@ mod readonly {
                 download.progress() * 100.0
             );
 
-            // download drops here — in release mode the debug_assert is a no-op,
+            // download drops here; in release mode the debug_assert is a no-op,
             // so Drop just releases the session lock and USB interface normally.
             // The USB pipe is left with stale data (intentionally).
         }
@@ -696,7 +696,7 @@ mod readonly {
         // Phase 2: Try a plain software reconnect (close + reopen the handle).
         // This is informative, not asserted: on Android a reopen often
         // recovers, but on PTP cameras (Panasonic Lumix DMC-TZ61, #12) it does
-        // NOT — the device still has the abandoned transaction's data queued,
+        // NOT: the device still has the abandoned transaction's data queued,
         // so the fresh session reads it as a desync ("expected Response
         // container type (3), got ..."). Either outcome is fine to observe.
         tlog!("Attempting software reconnect (plain reopen)...");
@@ -732,7 +732,7 @@ mod readonly {
         // session, so it works precisely when MtpDevice::open can't). On most
         // devices this cleans up the poisoned session so the rest of the suite
         // runs. But on firmware that wedges hard on a mid-stream drop (Lumix
-        // DMC-TZ61, #12), even this reset times out — at that point only a
+        // DMC-TZ61, #12), even this reset times out: at that point only a
         // physical USB replug recovers the device, which is why the test is
         // opt-in.
         let mut recovered = false;
@@ -888,7 +888,7 @@ mod readonly {
                 );
                 listings_between += 1;
                 tlog!(
-                    "Between windows: listed {} root object(s) — session is free.",
+                    "Between windows: listed {} root object(s). Session is free.",
                     listed.len()
                 );
             }

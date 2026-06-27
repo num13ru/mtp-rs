@@ -214,7 +214,7 @@ println!("Uploaded with handle {:?}", handle);
 Uploads are two-phase: the device creates the object, then receives the data. If
 the data phase fails or is cancelled, the device is left holding a partial
 object. `upload()` returns an `UploadError` whose `partial` field carries that
-object's handle so you decide what to do — the library never auto-deletes it,
+object's handle so you decide what to do. The library never auto-deletes it,
 which keeps resume (retrying the data phase against the same handle) possible:
 
 ```rust

@@ -16,7 +16,7 @@
 //! - **Removes**: the handle has already been removed from `state.objects` → watcher
 //!   finds no handle for the path → nothing to emit.
 //!
-//! No TTL, no extra tracking structure — the state itself is the dedup mechanism.
+//! No TTL, no extra tracking structure: the state itself is the dedup mechanism.
 //!
 //! ## Pause/resume
 //!
@@ -167,7 +167,7 @@ fn handle_notify_event(
 
         if is_create {
             // Check if a handle already exists for this path. If so, the MTP handler
-            // already created it and emitted events — skip to avoid duplicates.
+            // already created it and emitted events, so skip to avoid duplicates.
             let already_known = state
                 .objects
                 .iter()
@@ -214,7 +214,7 @@ fn handle_notify_event(
         } else {
             // Remove: find the handle for this path and remove it.
             // If the handle is already gone, the MTP handler already processed
-            // the removal — skip to avoid duplicates.
+            // the removal, so skip to avoid duplicates.
             let handle = state
                 .objects
                 .iter()

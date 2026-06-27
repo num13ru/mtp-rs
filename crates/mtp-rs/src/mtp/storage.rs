@@ -204,7 +204,7 @@ impl Storage {
     /// is then known via [`ObjectListing::total()`], and each call to
     /// [`ObjectListing::next()`] fetches one object's metadata from USB.
     ///
-    /// For root listings (`parent=None`), tries `parent=0xFFFFFFFF` first — this
+    /// For root listings (`parent=None`), tries `parent=0xFFFFFFFF` first: this
     /// returns only root-level handles on Android, Kindle, and many other devices.
     /// Falls back to `parent=0` only when the device rejects `0xFFFFFFFF` with an
     /// error. An empty result from `0xFFFFFFFF` is treated as an empty storage,
@@ -434,7 +434,7 @@ impl Storage {
     /// Download a partial file (byte range).
     ///
     /// Uses the standard `GetPartialObject` operation, which has a 32-bit offset.
-    /// Offsets beyond 4 GB will be silently truncated — for files larger than 4 GB,
+    /// Offsets beyond 4 GB will be silently truncated. For files larger than 4 GB,
     /// use [`download_partial_64()`](Self::download_partial_64) instead.
     pub async fn download_partial(
         &self,
@@ -491,7 +491,7 @@ impl Storage {
     ///
     /// MTP allows exactly one PTP session per device, and this download holds it
     /// open for the **whole file**. While it's in flight the device can't service
-    /// any other operation — a folder listing, navigation, metadata read — until
+    /// any other operation (a folder listing, navigation, metadata read) until
     /// the download finishes or is cancelled (and cancelling a multi-GB in-flight
     /// read costs ~35 s, since the USB cancel must drain the backlog). For a long
     /// read where the device must stay responsive to other work, use
@@ -562,7 +562,7 @@ impl Storage {
     ///   (zero chunks), so "resume a file that's already complete" is a no-op,
     ///   not an error.
     /// - `offset > size` is a precondition violation and returns
-    ///   [`Error::InvalidData`] immediately, before any USB I/O — it never hangs
+    ///   [`Error::InvalidData`] immediately, before any USB I/O: it never hangs
     ///   waiting for bytes the device can't supply.
     ///
     /// # Per-call length cap
@@ -650,7 +650,7 @@ impl Storage {
         }
 
         // offset == 0 is the whole file; offset == size is an empty tail. Both
-        // fall through to the same GetPartialObject64 request — the device
+        // fall through to the same GetPartialObject64 request; the device
         // returns the right number of bytes (all, or none) and the stream ends
         // cleanly at the response container.
         let remaining = size - offset;
@@ -685,22 +685,22 @@ impl Storage {
     /// [`next_window()`](WindowedDownload::next_window) reads the file one bounded
     /// `GetPartialObject64` transaction at a time and **releases the session on
     /// each return**. Between two `next_window()` calls the session is free, so a
-    /// consumer can interleave other device work — service a pending folder
-    /// listing, navigate, check a cancel flag — without aborting the read. This
+    /// consumer can interleave other device work (service a pending folder
+    /// listing, navigate, check a cancel flag) without aborting the read. This
     /// makes "stay responsive to listings/navigation during a long read" easy:
     /// a listing issued between windows just works, at its natural cost.
     ///
     /// `window_size` is the maximum bytes per window (the `GetPartialObject64`
-    /// `max_bytes`, a u32). It's a real, open parameter — mtp-rs stays
+    /// `max_bytes`, a u32). It's a real, open parameter: mtp-rs stays
     /// unopinionated. [`DEFAULT_DOWNLOAD_WINDOW`] (8 MiB) is a documented
-    /// suggestion (~80 ms/window on a Pixel 9 Pro XL — small enough to interleave,
+    /// suggestion (~80 ms/window on a Pixel 9 Pro XL: small enough to interleave,
     /// large enough for throughput); [`download_windowed_default()`](Self::download_windowed_default)
     /// uses it. A `window_size` of 0 is clamped to 1.
     ///
     /// # The consumer owns the policy
     ///
     /// [`WindowedDownload`] owns only the bookkeeping (total size, offset, window
-    /// sizing, EOF). It owns **no** policy — no pause, debounce, or gate. The
+    /// sizing, EOF). It owns **no** policy: no pause, debounce, or gate. The
     /// consumer interposes whatever it wants *between* `next_window()` calls.
     /// That boundary is intentional: the library provides the mechanism, the
     /// consumer provides the policy.
@@ -708,7 +708,7 @@ impl Storage {
     /// # No `cancel()` needed
     ///
     /// To stop early, just stop calling `next_window()` and drop the
-    /// [`WindowedDownload`] — nothing is held between windows, so there's no
+    /// [`WindowedDownload`]: nothing is held between windows, so there's no
     /// session to drain and [`Drop`] is a no-op. Contrast
     /// [`FileDownload`], which holds the session open and **must** be consumed or
     /// [`cancel()`](FileDownload::cancel)led before drop.
@@ -741,7 +741,7 @@ impl Storage {
     /// while let Some(window) = download.next_window().await {
     ///     let bytes = window?;
     ///     file.write_all(&bytes).await?;
-    ///     // The session is FREE here — do other device work between windows.
+    ///     // The session is FREE here, so do other device work between windows.
     /// }
     /// # Ok(())
     /// # }

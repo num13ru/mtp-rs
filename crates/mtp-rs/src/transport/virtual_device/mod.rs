@@ -211,7 +211,7 @@ impl Transport for VirtualTransport {
                 return Ok(event);
             }
         }
-        // No events — wait, then return Timeout
+        // No events: wait, then return Timeout
         futures_timer::Delay::new(self.event_poll_interval).await;
         Err(crate::Error::Timeout)
     }
@@ -221,7 +221,7 @@ impl Transport for VirtualTransport {
         _transaction_id: u32,
         _idle_timeout: std::time::Duration,
     ) -> Result<(), crate::Error> {
-        // Virtual device has no USB pipe to drain — just clear any pending state.
+        // Virtual device has no USB pipe to drain, so just clear any pending state.
         let mut state = self.state.lock().unwrap();
         state.pending_command = None;
         state.response_queue.clear();
@@ -474,7 +474,7 @@ mod tests {
             .unwrap();
         assert!(
             data.is_empty(),
-            "offset past EOF should return empty, got {} bytes — high offset bits may be getting dropped",
+            "offset past EOF should return empty, got {} bytes; high offset bits may be getting dropped",
             data.len()
         );
     }
@@ -706,7 +706,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         // The default 8 MiB window dwarfs this file, so it comes back in one
-        // window — still byte-exact.
+        // window, still byte-exact.
         let dl = storages[0]
             .download_windowed_default(obj.handle)
             .await
@@ -870,7 +870,7 @@ mod tests {
         );
 
         // Prove no read was issued: the armed cap is still pending. Issue one real
-        // partial read now — it pops the still-armed cap and comes back empty,
+        // partial read now: it pops the still-armed cap and comes back empty,
         // which only holds if next_window() left the cap untouched.
         let probe = storages[0]
             .download_partial_64(obj.handle, 0, 64)
@@ -923,7 +923,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         // Force the first two reads to come back short (100, then 50 real bytes)
-        // even though the window asks for 512 — a legal partial read. The download
+        // even though the window asks for 512, a legal partial read. The download
         // must advance by what actually arrived, so the result stays byte-exact.
         assert!(crate::force_partial_read_caps(
             "windowed-short-001",
@@ -1188,7 +1188,7 @@ mod tests {
         // Reproduces the Android "stale cached handle" quirk end-to-end: a host
         // lists a folder and caches its handle, the device re-keys that handle
         // across a (simulated) media rescan, and the host's NEXT upload into the
-        // cached handle is rejected — but a re-list surfaces the new handle and
+        // cached handle is rejected, but a re-list surfaces the new handle and
         // an upload against it lands. This is the device-side behavior cmdr's
         // upload self-heal/retry depends on; before `rekey_virtual_object` there
         // was no way to produce it against the virtual device.
@@ -1629,7 +1629,7 @@ mod tests {
         // Write a file directly to the backing dir (bypassing MTP)
         std::fs::write(backing_dir.join("external.txt"), "hello from outside").unwrap();
 
-        // Poll for events — the watcher should detect the file creation.
+        // Poll for events: the watcher should detect the file creation.
         let event = poll_event_with_retry(&device, Duration::from_secs(5)).await;
         assert!(
             event.is_some(),
@@ -1860,7 +1860,7 @@ mod tests {
         let device = MtpDevice::builder().open_virtual(config).await.unwrap();
         let storages = device.storages().await.unwrap();
 
-        // Upload via MTP — should produce exactly the MTP-generated events
+        // Upload via MTP: should produce exactly the MTP-generated events
         let info = crate::mtp::NewObjectInfo::file("dedup_test.txt", 5);
         storages[0]
             .upload(None, info, bytes_stream(b"hello"))
@@ -1871,7 +1871,7 @@ mod tests {
         // MTP upload produces 1 ObjectAdded + 1 StorageInfoChanged.
         // The watcher sees the file creation but finds the handle already exists
         // in state.objects (inserted by the MTP handler under the mutex), so it
-        // skips the event — no duplicate ObjectAdded.
+        // skips the event, so no duplicate ObjectAdded.
         // We count ObjectAdded specifically because some platforms (Linux inotify)
         // may generate additional filesystem events (StorageInfoChanged etc.).
         let mut object_added_count = 0;

@@ -226,8 +226,8 @@ impl PtpSession {
 /// The MTP session is locked while this stream exists. Prefer to consume the
 /// entire stream or call [`cancel()`](Self::cancel) before dropping it:
 /// `cancel()` drains the pipe right away. Dropping mid-stream without that is
-/// still safe — it flags the session, and the next operation drains the pipe
-/// before it runs — but the drain then happens lazily rather than promptly.
+/// still safe (it flags the session, and the next operation drains the pipe
+/// before it runs), but the drain then happens lazily rather than promptly.
 #[must_use = "consume a ReceiveStream fully or call cancel() to drain the pipe promptly; \
                dropping it mid-transfer defers the drain to the next operation"]
 pub struct ReceiveStream {
@@ -612,7 +612,7 @@ mod tests {
         // Read one chunk
         stream.next_chunk().await.unwrap().unwrap();
 
-        // Cancel mid-stream — should delegate to transport.cancel_transfer()
+        // Cancel mid-stream, should delegate to transport.cancel_transfer()
         stream.cancel(Duration::from_secs(2)).await.unwrap();
 
         // Verify cancel_transfer was called with the correct transaction ID
@@ -662,7 +662,7 @@ mod tests {
         // Cancel
         stream.cancel(Duration::from_secs(2)).await.unwrap();
 
-        // Stream should be done — next_chunk returns None
+        // Stream should be done, next_chunk returns None
         assert!(stream.next_chunk().await.is_none());
 
         // Second cancel is a no-op (no additional cancel_transfer call)

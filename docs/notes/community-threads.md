@@ -8,17 +8,17 @@ Last updated: 2026-06-22.
 
 ## Intentionally / continuously open threads
 
-### #6 — Tested devices feedback tracker (open since 2026-04-13)
+### #6: Tested devices feedback tracker (open since 2026-04-13)
 
 Reporter: [@juleskers](https://github.com/juleskers). Long-running tracker for
 "device XYZ works" reports, intentionally kept open as a single thread instead of one issue per device.
 
 Confirmed working from this thread:
 
-- **Fairphone 5** (Android 13, e/OS 3.0.4, LineageOS-derived) — full integration suite passed on 2026-04-13. Added to
+- **Fairphone 5** (Android 13, e/OS 3.0.4, LineageOS-derived): full integration suite passed on 2026-04-13. Added to
   README's tested devices table.
 - **Garmin Forerunner 955** (reported by [@dasJ](https://github.com/dasJ) on 2026-04-26, PR
-  [#10](https://github.com/vdavid/mtp-rs/pull/10) merged 2026-05-02) — works in production with the
+  [#10](https://github.com/vdavid/mtp-rs/pull/10) merged 2026-05-02): works in production with the
   `set_split_header_data(true)` quirk auto-applied for `manufacturer == "Garmin"` (in
   `MtpDeviceBuilder::open`). Same workaround as the Zune-era hardware from #3/#4, but auto-applied. The
   manufacturer-string match violates the "no device knowledge baked in" philosophy and is on the cleanup list once we
@@ -28,7 +28,7 @@ Confirmed working from this thread:
 
 ## Active threads
 
-### #12 — Test failures: Panasonic Lumix DMC-TZ61 (opened 2026-06-03)
+### #12: Test failures on the Panasonic Lumix DMC-TZ61 (opened 2026-06-03)
 
 Reporter: [@juleskers](https://github.com/juleskers) (the #6 tracker maintainer), testing their 2014 PictBridge/PTP
 camera as promised in #6. Two failure classes, both root-caused via the reporter's `diagnose` + `ptp_diagnose` logs
@@ -41,12 +41,12 @@ camera as promised in #6. Two failure classes, both root-caused via the reporter
    `supports_rename()` pattern. **Confirmed fixed by the reporter**: the camera's 21 advertised operations include
    neither send op, so the gate triggers ("no more panics 🎉").
 2. **Recursive file search found nothing** despite hundreds of 4–9 MB photos in `/DCIM/1nn_PANA/`. Root cause: the
-   camera reports `20480000T000000` (year 2048, month 0, day 0 — its "no date" sentinel) in
+   camera reports `20480000T000000` (year 2048, month 0, day 0: its "no date" sentinel) in
    `DateCreated`/`DateModified`. `unpack_datetime` raised a hard error on it, which failed the whole `ObjectInfo`
-   parse, which failed the entire listing — and the old test helper swallowed the error into "no suitable file found".
+   parse, which failed the entire listing, and the old test helper swallowed the error into "no suitable file found".
    Fixed 2026-06-06: receive-side datetime parsing is lenient (unparseable → `None`); send-side packing stays strict.
    **Confirmed by the reporter 2026-06-06**: the recursive search found a photo and ran the cancel test.
-   (An earlier hypothesis blamed `ParentFilter::Exact` dropping objects on mismatched parent handles — that was
+   (An earlier hypothesis blamed `ParentFilter::Exact` dropping objects on mismatched parent handles. That was
    wrong, don't chase it.)
    
    Second test batch (2026-06-06, logs on the issue) surfaced four more problems; all addressed 2026-06-07, and
@@ -56,7 +56,7 @@ camera as promised in #6. Two failure classes, both root-caused via the reporter
    and every subsequent test timing out until power-cycle, identically in two runs. Root cause: our cancel flow
    skipped the SIC spec's post-cancel step. Fixed: `cancel_transfer` now polls GET_DEVICE_STATUS (0x67) after the
    drains until the device stops reporting Device_Busy, clearing reported endpoint halts. Polling must stay AFTER the
-   drains (between cancel and drain it breaks Android — that's what the old comment warned about; Android simply
+   drains (between cancel and drain it breaks Android: that's what the old comment warned about; Android simply
    fails the request, harmlessly).
 4. **Persistent "endpoint stalled" across process runs.** Probing unsupported device properties (`ptp_diagnose`)
    makes the camera STALL the bulk endpoint, and the halt survives process restarts, so an immediate re-run failed at
@@ -81,7 +81,7 @@ camera as promised in #6. Two failure classes, both root-caused via the reporter
    Third batch (2026-06-20, on commit `3b01ed8`) confirmed all the above and surfaced two more, both camera-firmware
    behaviors rather than library bugs:
    
-7. **Plain reopen does NOT recover a poisoned PTP-camera session; `reset_device()` does — except on firmware that
+7. **Plain reopen does NOT recover a poisoned PTP-camera session; `reset_device()` does, except on firmware that
    wedges past all software recovery.** The integration test `test_drop_mid_stream_then_software_reconnect` drops a
    download without cancel/drain (poisoning the session), then tried only a close+reopen. On this camera reopen reads
    the abandoned transaction's queued data as a desync ("expected Response container type (3), got 255"). The test
@@ -121,7 +121,7 @@ The "permissive interface scan" pattern that grew out of this was later formaliz
 
 Reporter and fixer: [@num13ru](https://github.com/num13ru). OpenSession is a session-less PTP operation and must be sent
 with `transaction_id = 0`. The old code routed it through the general `execute()` path, which assigned the first
-in-session transaction id. Spec-correct fix, but the symptom was Kindle rejecting OpenSession with a non-zero TID —
+in-session transaction id. Spec-correct fix, but the symptom was Kindle rejecting OpenSession with a non-zero TID.
 Android tolerated it. Tested on @num13ru's Kindle Paperwhite. Their Kindle test screenshot lives in
 [this comment](https://github.com/vdavid/mtp-rs/pull/2#issuecomment-4264713119), linked from the README's tested devices
 row.
@@ -141,7 +141,7 @@ consumers can drive odd devices out-of-tree. Shipped in #4:
   `MtpDeviceBuilder::known_devices(...)`: enumerate devices whose USB descriptors don't advertise standard MTP class
   codes.
 - `MtpDeviceBuilder::open_nusb_device(nusb::Device)`: escape hatch for callers doing their own enumeration.
-- macOS `SetConfiguration(1)` retry on `claim_interface` failure for vendor-class devices — IOKit doesn't publish
+- macOS `SetConfiguration(1)` retry on `claim_interface` failure for vendor-class devices: IOKit doesn't publish
   interfaces until configuration is set.
 
 The original PR proposal also had a `DeviceQuirks` struct with `manual_traversal`
@@ -151,7 +151,7 @@ keeps device knowledge out of the crate.
 
 ### #5: RUSTSEC-2026-0097: rand unsoundness (closed 2026-04-13)
 
-Source: github-actions advisory. Not affected — `rand` is pulled in only transitively via `proptest` (dev-dependency),
+Source: github-actions advisory. Not affected: `rand` is pulled in only transitively via `proptest` (dev-dependency),
 so it never reaches downstream consumers. The trigger conditions (custom logger calling `rand::rng()` during reseed)
 don't apply to our test builds either. Closed as not-affected.
 
@@ -227,15 +227,15 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 
 ## Recurring contributors
 
-- [@num13ru](https://github.com/num13ru) — Kindle Paperwhite owner. Reported and/or shipped fixes across #2, #8, #9.
+- [@num13ru](https://github.com/num13ru): Kindle Paperwhite owner. Reported and/or shipped fixes across #2, #8, #9.
   High-quality diagnostics with side-by-side comparisons. Tests on real hardware before submitting.
-- [@kelchm](https://github.com/kelchm) — Designed and contributed the low-level primitives in #3 / #4. Good
+- [@kelchm](https://github.com/kelchm): Designed and contributed the low-level primitives in #3 / #4. Good
   architectural taste, willing to drop premature abstractions.
-- [@juleskers](https://github.com/juleskers) — Maintains the tested-devices tracker (#6). Fairphone 5 confirmed working
+- [@juleskers](https://github.com/juleskers): Maintains the tested-devices tracker (#6). Fairphone 5 confirmed working
   with full integration suite.
-- [@jannikac](https://github.com/jannikac) — First external bug report (#1), Kindle-detection fix.
-- [@dasJ](https://github.com/dasJ) — Garmin Forerunner 955 confirmed working in production (#6 comment, 2026-04-26).
-- [@dragon-Elec](https://github.com/dragon-Elec) — Python bindings request
+- [@jannikac](https://github.com/jannikac): First external bug report (#1), Kindle-detection fix.
+- [@dasJ](https://github.com/dasJ): Garmin Forerunner 955 confirmed working in production (#6 comment, 2026-04-26).
+- [@dragon-Elec](https://github.com/dragon-Elec): Python bindings request
   (#7).
 
 ## Updating this doc

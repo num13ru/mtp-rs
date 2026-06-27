@@ -237,7 +237,7 @@ impl MtpDevice {
     /// It is safe to call `next_event()` concurrently with other `MtpDevice` methods.
     ///
     /// If you wrap `MtpDevice` in a shared lock (for example, `Arc<Mutex<MtpDevice>>`),
-    /// do **not** hold that lock while awaiting `next_event()` — it will block all file
+    /// do **not** hold that lock while awaiting `next_event()`: it will block all file
     /// operations for the duration of the wait. Instead, clone the `MtpDevice` (it is
     /// cheaply cloneable via `Arc` internally) and call `next_event()` on the clone
     /// without holding the lock.

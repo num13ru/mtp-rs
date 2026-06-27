@@ -80,7 +80,7 @@ docs/                             # Protocol, architecture, debugging, release p
 ## Running tests
 
 ```bash
-# Unit tests (no device needed) — runs the whole workspace
+# Unit tests (no device needed): runs the whole workspace
 cargo test --workspace
 
 # Library integration tests (real MTP device connected)

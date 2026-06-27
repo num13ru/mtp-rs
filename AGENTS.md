@@ -55,7 +55,7 @@ nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 
 - **Android**: `ObjectHandle::ALL` recursive listing broken; library auto-detects via `"android.com"` in vendor extension
 - **Android**: Uploads to the storage root are rejected with `InvalidObjectHandle`. Upload into an existing folder (for example, `Download`) instead.
-- **Android**: Object handles are NOT stable. MediaProvider re-keys object IDs across a media rescan, so a handle a host cached when it last listed a folder can be silently invalidated before a later operation (upload, delete) into that folder — the device then returns `InvalidObjectHandle`/`InvalidParentObject`, not for a missing object but for a stale ID. Hosts should treat those codes on a previously-valid handle as "re-list the parent and re-resolve, then retry once", not as a hard not-found. (A downstream, Cmdr, hit this as a 307 MB upload failing at `SendObjectInfo` and surfacing as "Path not found" on the intact *source* file.) Reproducible against the virtual device with `rekey_virtual_object` (see Testing).
+- **Android**: Object handles are NOT stable. MediaProvider re-keys object IDs across a media rescan, so a handle a host cached when it last listed a folder can be silently invalidated before a later operation (upload, delete) into that folder: the device then returns `InvalidObjectHandle`/`InvalidParentObject`, not for a missing object but for a stale ID. Hosts should treat those codes on a previously-valid handle as "re-list the parent and re-resolve, then retry once", not as a hard not-found. (A downstream, Cmdr, hit this as a 307 MB upload failing at `SendObjectInfo` and surfacing as "Path not found" on the intact *source* file.) Reproducible against the virtual device with `rekey_virtual_object` (see Testing).
 - **Fujifilm cameras**: Report `AccessCapability::ReadWrite` but return `StoreReadOnly` on writes. Advertised ops lie.
 - **Samsung**: Returns `InvalidObjectHandle` for root listing; needs recursive traversal with filtering
 - **Panasonic Lumix DMC-TZ61** (and likely other PTP cameras): Reports `20480000T000000` (month 0, day 0) as "no date" in ObjectInfo datetimes. Receive-side datetime parsing is lenient for this reason: unparseable datetimes become `None` instead of failing the dataset parse. Send-side packing stays strict.
@@ -106,12 +106,12 @@ mechanism: a CLASS_CANCEL control request (bRequest=0x64) followed by draining
 the bulk IN and interrupt pipes. This approach was validated against libmtp's
 `ptp_read_cancel_func` (Florent Viard, 2017). Key implementation notes:
 
-- The drain must start **immediately** after CLASS_CANCEL — any delay (like
+- The drain must start **immediately** after CLASS_CANCEL: any delay (like
   polling GET_DEVICE_STATUS, which Android doesn't support) allows the device
   to enter an unrecoverable state.
 - The drain uses maxpacket-sized reads with a 300ms idle timeout (matching
   libmtp and Windows behavior).
-- The interrupt pipe must also be drained — some devices (GoPro) freeze if
+- The interrupt pipe must also be drained: some devices (GoPro) freeze if
   the CancelTransaction event is left unread.
 - **After** the drains, GET_DEVICE_STATUS (0x67) **must** be polled until the
   device stops reporting Device_Busy, clearing any endpoint halts the status
@@ -136,8 +136,8 @@ The use case is **releasing the one-per-device PTP session**. An in-flight
 folders while a download is open (even a "paused" one that parked in place). With
 this API a consumer can `cancel()` the in-flight download (drains the pipe via
 the validated CLASS_CANCEL path, frees the session so navigation works again),
-remember the bytes it kept, and reopen from exactly that offset to fetch the rest
-— a true suspend/resume.
+remember the bytes it kept, and reopen from exactly that offset to fetch the rest:
+a true suspend/resume.
 
 Contract:
 
@@ -178,13 +178,13 @@ The motivation is the session monopoly: `download_stream` /
 no other op (a folder listing, navigation) can touch the device until the read
 finishes or is aborted. The spike numbers that drove this (validated on a Pixel
 9 Pro XL): an 8 MiB window is ≈80ms and frees the session between windows, so a
-concurrent listing slips in at its natural cost — versus ~35s to abort a
+concurrent listing slips in at its natural cost, versus ~35s to abort a
 held-open multi-GB read (the USB cancel must drain the whole backlog), which
 times out a concurrent listing. A downstream consumer (Cmdr) hit exactly this
 and hand-rolled the window loop before it moved here.
 
 Design boundary (important): `WindowedDownload` owns the BOOKKEEPING (cached
-total size, current offset, window sizing, EOF detection) but NO policy — no
+total size, current offset, window sizing, EOF detection) but NO policy: no
 pause, debounce, or gate. The consumer interposes its own logic BETWEEN
 `next_window()` calls. `window_size` is a real, open parameter; the 8 MiB default
 is a documented suggestion, not baked in.
@@ -199,7 +199,7 @@ a spin); a short non-zero mid-file read advances by the bytes ACTUALLY returned;
 
 Drop safety: unlike `FileDownload` (holds the session open, MUST be consumed or
 `cancel()`led before drop), `WindowedDownload` holds NOTHING between windows, so
-stopping early is just dropping it — no `cancel()`, `Drop` is a no-op. A
+stopping early is just dropping it: no `cancel()`, `Drop` is a no-op. A
 `next_window()` future dropped mid-call self-heals via `TransactionScope` (the
 next op drains).
 
@@ -224,13 +224,13 @@ demonstrates it with no hardware. Real-device coverage:
   `MaybeFuture`; awaiting one panics at runtime ("Awaiting blocking syscall
   without an async runtime") unless the consumer enables nusb's `tokio`/`smol`
   feature, which we don't (runtime-agnostic). `control_in`/`control_out` are
-  the exception — genuinely async via nusb's URB event loop, so those stay
+  the exception: genuinely async via nusb's URB event loop, so those stay
   `.await`. This only bites on real hardware (a STALL never fires against the
   mock/virtual transport), so it slips through CI; #12 hit it on the first
   camera stall.
 - `Transport::reset_device()` / `PtpDevice::reset_device()` / the CLI's
   `mtp-rs reset` send the SIC DEVICE_RESET request (0x66), clear halts, and
-  drain stale bulk data — without a PTP session, so they work on a device too
+  drain stale bulk data (without a PTP session), so they work on a device too
   wedged for `OpenSession` ("Transaction ID mismatch" / "expected Response
   container type" on every command).
 
@@ -238,8 +238,8 @@ demonstrates it with no hardware. Real-device coverage:
 
 A PTP transaction is command → (data) → response over one bulk pipe, and the
 host's transaction-ID counter must track the device's. If an operation's future
-is **dropped** after its command goes out but before the response is drained — a
-superseded listing, a cancelled task, a `timeout` racing the future — or it
+is **dropped** after its command goes out but before the response is drained (a
+superseded listing, a cancelled task, a `timeout` racing the future), or it
 returns early on an I/O error, the device's reply is left in the pipe. Every
 later operation then reads the *previous* reply, so the IDs desync by one
 ("Transaction ID mismatch: expected N, got N-1") and stay desynced: the session
@@ -322,7 +322,7 @@ External test fixtures that delete and recreate files in a virtual device's back
 
 The current API supports an event-driven drain:
 
-- `pause_watcher(serial)` returns a `WatcherGuard`. The pause is **refcounted** (`VirtualDeviceState::pause_count`), so multiple concurrent guards compose — the watcher only resumes when the last guard drops. Tests can drain in parallel without stepping on each other.
+- `pause_watcher(serial)` returns a `WatcherGuard`. The pause is **refcounted** (`VirtualDeviceState::pause_count`), so multiple concurrent guards compose: the watcher only resumes when the last guard drops. Tests can drain in parallel without stepping on each other.
 - While at least one guard is alive, every dropped FS event's canonical path is pushed into `VirtualDeviceState::dropped_paths` (a `VecDeque` capped at `DROPPED_PATHS_CAP = 1024`, oldest evicted past that).
 - `dropped_paths_since_pause(serial) -> Vec<PathBuf>` is the **primary observation primitive**: returns a clone of the ring, oldest first.
 - `was_path_dropped(serial, suffix) -> bool` is a thin convenience over the above for the sentinel-file drain pattern: write a uniquely-named file as the LAST fixture step (per-directory FS-event ordering on every supported `notify` backend means every earlier write to the same directory already arrived once you see the sentinel), then poll this until it returns `true`.
@@ -336,7 +336,7 @@ Unit tests for the API live in `transport/virtual_device/registry.rs` (`pause_re
 
 ## Simulating stale handles (virtual-device only)
 
-`rekey_virtual_object(serial, rel_path)` reassigns a tracked object's handle while leaving the object and its on-disk contents in place: the old handle then returns `InvalidObjectHandle`/`InvalidParentObject`, a fresh listing of the parent surfaces the new handle, and direct children are re-parented. It queues no events (it models the device moving on before the host observes the change), so it reproduces the Android handle re-keying quirk above — the exact precondition for a stale-cached-handle upload/delete failure. The stable-handle virtual device can't otherwise produce it. Drive it with a list → `rekey_virtual_object` → operate sequence to exercise a host's stale-handle recovery path; see `rekey_object_invalidates_old_handle_then_relist_and_upload_recover` in `transport/virtual_device/mod.rs`.
+`rekey_virtual_object(serial, rel_path)` reassigns a tracked object's handle while leaving the object and its on-disk contents in place: the old handle then returns `InvalidObjectHandle`/`InvalidParentObject`, a fresh listing of the parent surfaces the new handle, and direct children are re-parented. It queues no events (it models the device moving on before the host observes the change), so it reproduces the Android handle re-keying quirk above: the exact precondition for a stale-cached-handle upload/delete failure. The stable-handle virtual device can't otherwise produce it. Drive it with a list → `rekey_virtual_object` → operate sequence to exercise a host's stale-handle recovery path; see `rekey_object_invalidates_old_handle_then_relist_and_upload_recover` in `transport/virtual_device/mod.rs`.
 
 ## Things to avoid
 
@@ -353,6 +353,6 @@ Run `just check` before committing. `cargo fmt`, `cargo clippy -D warnings`, tes
 ## References
 
 - [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md), [docs/debugging.md](docs/debugging.md)
-- [docs/releasing.md](docs/releasing.md) — how to publish a new version to crates.io
-- [docs/notes/community-threads.md](docs/notes/community-threads.md) — required reading before working on issues or PRs. Recap of every GitHub thread so far, known device quirks, and recurring contributors. Update after work that affects community-facing context.
+- [docs/releasing.md](docs/releasing.md): how to publish a new version to crates.io
+- [docs/notes/community-threads.md](docs/notes/community-threads.md): required reading before working on issues or PRs. Recap of every GitHub thread so far, known device quirks, and recurring contributors. Update after work that affects community-facing context.
 - [MTP v1.1 Spec](https://github.com/vdavid/mtp-v1_1-spec-md)

@@ -621,7 +621,7 @@ mod tests {
         let session = PtpSession::open(transport, 1).await.unwrap();
 
         // The device's reply is queued, but the op is abandoned before reading
-        // it — modeling a superseded/cancelled listing.
+        // it, modeling a superseded/cancelled listing.
         mock.queue_response(data_container(1, OperationCode::GetObjectInfo, &[0u8; 4]));
         mock.queue_response(ok_response(1));
         mock.block_receive();
@@ -664,7 +664,7 @@ mod tests {
         // Op B (tx=2). Before the fix it reads op A's leftover tx=1 reply and
         // dies with a transaction-ID mismatch. After the fix, the session
         // drains the pipe first (one cancel_transfer for tx=1), so op B sends
-        // into a clean pipe and finds it empty (NoDevice) — never a desync.
+        // into a clean pipe and finds it empty (NoDevice), never a desync.
         let result = session
             .execute_with_receive(OperationCode::GetObjectInfo, &[2])
             .await;
@@ -1014,7 +1014,7 @@ mod tests {
 
         let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
             Ok(Bytes::from_static(&[0xAA])),
-            Ok(Bytes::new()), // empty — should be skipped
+            Ok(Bytes::new()), // empty, should be skipped
             Ok(Bytes::from_static(&[0xBB])),
         ];
         let total_size = 2u64;

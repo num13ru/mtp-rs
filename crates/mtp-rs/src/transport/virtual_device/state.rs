@@ -92,7 +92,7 @@ pub(super) struct VirtualDeviceState {
 /// can't leak.
 ///
 /// If your test scenario pauses the watcher for multi-minute spans and
-/// generates more than 1024 FS events you care about, file an issue — a
+/// generates more than 1024 FS events you care about, file an issue: a
 /// runtime-configurable cap is the natural next step, but every consumer so
 /// far has been comfortably under the default.
 pub const DROPPED_PATHS_CAP: usize = 1024;
@@ -143,8 +143,8 @@ impl VirtualDeviceState {
     }
 
     /// Reassign the object handle of the object at `rel_path`, keeping the object
-    /// (and its on-disk contents) in place. The OLD handle becomes invalid — the
-    /// device answers `InvalidObjectHandle` / `InvalidParentObject` for it — while
+    /// (and its on-disk contents) in place. The OLD handle becomes invalid (the
+    /// device answers `InvalidObjectHandle` / `InvalidParentObject` for it), while
     /// a fresh listing of the parent returns the NEW handle. Direct children are
     /// re-parented to the new handle so `GetObjectInfo` keeps reporting a live
     /// parent.
@@ -152,7 +152,7 @@ impl VirtualDeviceState {
     /// This simulates Android MediaProvider re-keying object IDs across a media
     /// rescan: the folder still exists, but a handle the host cached before the
     /// rescan is now stale. Unlike
-    /// [`rescan_backing_dirs`](Self::rescan_backing_dirs) it queues no events —
+    /// [`rescan_backing_dirs`](Self::rescan_backing_dirs) it queues no events:
     /// it models the device moving on silently, before the host has observed
     /// anything, which is exactly the window where a cached parent handle goes
     /// stale under a host's upload.

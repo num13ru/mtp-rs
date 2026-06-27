@@ -68,8 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         assembled.extend_from_slice(&chunk?);
     }
     // The virtual device sends the whole object in one data container, so a single
-    // chunk can overshoot `kept`. Trim to exactly the prefix we mean to keep —
-    // a real per-chunk driver would simply stop at a chunk boundary near `kept`.
+    // chunk can overshoot `kept`. Trim to exactly the prefix we mean to keep.
+    // A real per-chunk driver would simply stop at a chunk boundary near `kept`.
     assembled.truncate(kept as usize);
     println!(
         "Kept {} bytes, then pausing (cancel releases the MTP session)...",
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prove the session is usable while paused.
     let listed = storage.list_objects(None).await?;
     println!(
-        "While paused, listed {} object(s) on the device — the session is free.\n",
+        "While paused, listed {} object(s) on the device. The session is free.\n",
         listed.len()
     );
 

@@ -129,7 +129,7 @@ impl PtpSession {
     /// Get partial object.
     ///
     /// Downloads a portion of an object's data. Uses the standard `GetPartialObject`
-    /// operation, which has a 32-bit offset — offsets beyond 4 GB are truncated to
+    /// operation, which has a 32-bit offset: offsets beyond 4 GB are truncated to
     /// u32 and will silently wrap. For files larger than 4 GB, use
     /// [`get_partial_object_64()`](Self::get_partial_object_64) instead.
     ///

@@ -311,7 +311,7 @@ pub fn rescan_virtual_device(serial: &str) -> Option<RescanSummary> {
 /// re-keys object IDs across a media rescan, so a handle a host cached when it
 /// last listed a folder can be silently invalidated before a later operation
 /// (upload, delete) into that folder. Unlike [`rescan_virtual_device`] this
-/// queues no events — it models the device moving on before the host has
+/// queues no events: it models the device moving on before the host has
 /// observed the change, which is the exact window the bug lives in. Pair it with
 /// a list-then-rekey-then-operate sequence to drive a host's stale-handle
 /// recovery path.
@@ -344,7 +344,7 @@ pub fn rekey_virtual_object(serial: &str, rel_path: &Path) -> Option<(ObjectHand
 ///
 /// Each cap limits how many bytes that read returns below what was requested:
 /// `0` makes the read return an **empty** data container (a device stalling
-/// mid-file — 0 bytes while bytes remain), `n > 0` a **short** read of `n` real
+/// mid-file: 0 bytes while bytes remain), `n > 0` a **short** read of `n` real
 /// bytes (a legal partial read). Reads past the end of `caps` behave normally.
 /// Replaces any previously-queued caps. Returns `false` if no active device with
 /// that serial exists.
@@ -464,7 +464,7 @@ mod tests {
         // Unregister A
         unregister_virtual_device(info_a.location_id);
 
-        // Register C — must get a unique location_id different from both A and B
+        // Register C: must get a unique location_id different from both A and B
         let (config_c, _dir_c) = make_config("reg-test-unique-c");
         let info_c = register_virtual_device(&config_c);
 
@@ -595,7 +595,7 @@ mod tests {
             2
         );
 
-        // First drop must leave the watcher paused — the other guard is alive.
+        // First drop must leave the watcher paused: the other guard is alive.
         drop(guard_a);
         assert_eq!(
             state_of("pause-refcount-001").lock().unwrap().pause_count,

@@ -1092,7 +1092,7 @@ fn validate_path_within(base_dir: &Path, path: &Path) -> Result<PathBuf, ()> {
         return Err(());
     }
 
-    // Path doesn't exist yet — canonicalize its parent and check
+    // Path doesn't exist yet, so canonicalize its parent and check
     if let Some(parent) = path.parent() {
         if parent.exists() {
             let canonical_parent = parent.canonicalize().map_err(|_| ())?;
