@@ -36,6 +36,14 @@ pub enum Error {
     #[error("device is held exclusively by another process")]
     ExclusiveAccess,
 
+    /// The OS denied permission to open the device.
+    ///
+    /// Distinct from [`Error::ExclusiveAccess`]: nothing else holds the device — this user/process
+    /// lacks permission to access it (most often missing Linux `udev` rules). Guide the user to fix
+    /// device permissions rather than to close another app.
+    #[error("permission denied accessing the device")]
+    PermissionDenied,
+
     /// The device does not support this operation.
     #[error("operation not supported by this device")]
     Unsupported,
@@ -113,6 +121,15 @@ impl Error {
         matches!(self, Error::ExclusiveAccess)
     }
 
+    /// Whether the OS denied permission to access the device (e.g. missing Linux `udev` rules).
+    ///
+    /// Distinct from [`is_exclusive_access`](Self::is_exclusive_access): the remedy is to fix
+    /// device permissions, not to close a conflicting app.
+    #[must_use]
+    pub fn is_permission_denied(&self) -> bool {
+        matches!(self, Error::PermissionDenied)
+    }
+
     /// Whether this is the Android "re-key" case where re-listing the parent and retrying once is
     /// the correct recovery (rather than treating it as not-found).
     #[must_use]
@@ -124,23 +141,26 @@ impl Error {
 impl From<crate::error::PtpError> for Error {
     fn from(e: crate::error::PtpError) -> Self {
         use crate::error::PtpError as Low;
-        let exclusive = e.is_exclusive_access();
+        use nusb::ErrorKind as Usb;
         match e {
             Low::Protocol { code, .. } => map_response_code(code),
-            Low::Usb(_) if exclusive => Error::ExclusiveAccess,
-            Low::Usb(io) => {
-                let msg = io.to_string().to_lowercase();
-                if msg.contains("no such device") || msg.contains("disconnect") {
-                    Error::Disconnected
-                } else {
-                    Error::Io {
-                        message: io.to_string(),
-                    }
-                }
-            }
-            Low::Io(_) if exclusive => Error::ExclusiveAccess,
-            Low::Io(io) => Error::Io {
-                message: io.to_string(),
+            // Classify USB faults by nusb's typed ErrorKind, not by message text. `Busy` covers both
+            // macOS `kIOReturnExclusiveAccess` and Linux `EBUSY` (the device is held by another app
+            // or driver); `EACCES` (missing udev permission) is the distinct `PermissionDenied`.
+            Low::Usb(usb) => match usb.kind() {
+                Usb::Busy => Error::ExclusiveAccess,
+                Usb::PermissionDenied => Error::PermissionDenied,
+                Usb::Disconnected | Usb::NotFound => Error::Disconnected,
+                Usb::Unsupported => Error::Unsupported,
+                _ => Error::Io {
+                    message: usb.to_string(),
+                },
+            },
+            Low::Io(io) => match io.kind() {
+                std::io::ErrorKind::PermissionDenied => Error::PermissionDenied,
+                _ => Error::Io {
+                    message: io.to_string(),
+                },
             },
             Low::InvalidData { message } => Error::InvalidData { message },
             Low::Timeout => Error::Timeout,
