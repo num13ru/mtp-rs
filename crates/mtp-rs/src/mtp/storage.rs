@@ -267,6 +267,14 @@ impl Storage {
     /// docs). For a long read where the device must stay responsive to other work, use
     /// [`download_windowed`](Self::download_windowed) instead.
     ///
+    /// # Resume on forward-only-seek devices
+    ///
+    /// A [`ByteRange::From`]/[`ByteRange::Range`] resume assumes the device can seek to the offset
+    /// cheaply. The Windows WPD backend's Pixel-class devices return `E_NOTIMPL` from `IStream::Seek`,
+    /// so the backend reaches the offset by reading and discarding the prefix: a resume is O(offset)
+    /// and re-streams every byte before the offset. Resuming near the end of a large file re-reads
+    /// almost the whole file, so prefer a single in-order pass over many small offset resumes there.
+    ///
     /// [`download`]: Self::download
     pub async fn download(
         &self,
@@ -287,6 +295,14 @@ impl Storage {
     ///
     /// `window_size` is the maximum bytes per window. [`DEFAULT_DOWNLOAD_WINDOW`] (8 MiB) is a
     /// documented suggestion; a `window_size` of 0 is clamped to 1.
+    ///
+    /// # Resume on forward-only-seek devices
+    ///
+    /// A windowed *resume* from an offset (`ByteRange::From`/`Range`) re-reads the skipped prefix on
+    /// devices whose `IStream::Seek` is `E_NOTIMPL` (the Windows WPD backend's Pixel-class devices),
+    /// making the first window after the offset O(offset). The session-freeing benefit between windows
+    /// still holds, but starting deep into a large file pays a full re-read of the prefix first;
+    /// prefer covering the file from the start (`ByteRange::Full`) where possible.
     pub async fn download_windowed(
         &self,
         handle: ObjectHandle,
