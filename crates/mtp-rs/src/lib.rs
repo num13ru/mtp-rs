@@ -56,7 +56,7 @@ pub use ptp::{
 // Re-export high-level MTP types
 pub use mtp::{
     DeviceEvent, FileDownload, MtpDevice, MtpDeviceBuilder, NewObjectInfo, ObjectListing, Progress,
-    Storage, DEFAULT_CANCEL_TIMEOUT,
+    Storage, WindowedDownload, DEFAULT_CANCEL_TIMEOUT, DEFAULT_DOWNLOAD_WINDOW,
 };
 
 // Re-export USB speed enum for callers that want to surface link speed (e.g. for UI).
@@ -67,9 +67,9 @@ pub use transport::UsbSpeed;
 pub use transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
 #[cfg(feature = "virtual-device")]
 pub use transport::virtual_device::registry::{
-    clear_dropped_paths, dropped_paths_since_pause, pause_watcher, register_virtual_device,
-    rekey_virtual_object, rescan_virtual_device, unregister_virtual_device, was_path_dropped,
-    WatcherGuard,
+    clear_dropped_paths, dropped_paths_since_pause, force_partial_read_caps, pause_watcher,
+    register_virtual_device, rekey_virtual_object, rescan_virtual_device,
+    unregister_virtual_device, was_path_dropped, WatcherGuard,
 };
 #[cfg(feature = "virtual-device")]
 pub use transport::virtual_device::RescanSummary;

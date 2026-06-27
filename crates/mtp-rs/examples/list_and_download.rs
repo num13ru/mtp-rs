@@ -47,10 +47,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(img) = first_image {
         println!("=== Downloading: {} ({} bytes) ===", img.filename, img.size);
 
+        // `download_windowed` is the recommended way to read a file: it fetches
+        // bounded windows and frees the device's single PTP session between each,
+        // so other operations (listings, navigation) stay responsive during a
+        // long download. (For raw throughput when nothing else needs the device,
+        // `download_stream` reads in one continuous transfer instead.)
         let start = std::time::Instant::now();
-        let download = storage.download_stream(img.handle).await?;
+        let mut download = storage.download_windowed_default(img.handle).await?;
         let total_size = download.size();
-        let data = download.collect().await?;
+        let mut data = Vec::with_capacity(total_size as usize);
+        while let Some(window) = download.next_window().await {
+            data.extend_from_slice(&window?);
+        }
         let elapsed = start.elapsed();
 
         let speed = if elapsed.as_secs_f64() > 0.0 {

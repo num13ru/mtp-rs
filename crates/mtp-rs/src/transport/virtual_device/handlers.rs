@@ -296,6 +296,15 @@ fn read_partial(
 ) {
     use std::io::{Read, Seek, SeekFrom};
 
+    // Test hook: clamp this read's length below what was requested. A cap of 0
+    // returns an empty data container (a device stalling mid-file); a cap of n>0
+    // returns a short read of n real bytes (a legal partial read). See
+    // `VirtualDeviceState::forced_partial_read_caps`.
+    let max_bytes = match state.forced_partial_read_caps.pop_front() {
+        Some(cap) => cap.min(max_bytes),
+        None => max_bytes,
+    };
+
     let path = match state.resolve_path(handle) {
         Some(p) => p,
         None => {

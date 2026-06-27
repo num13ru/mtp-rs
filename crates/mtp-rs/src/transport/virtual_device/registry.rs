@@ -339,6 +339,37 @@ pub fn rekey_virtual_object(serial: &str, rel_path: &Path) -> Option<(ObjectHand
     state.rekey_object(rel_path)
 }
 
+/// Clamp the lengths of the next `GetPartialObject(64)` reads on this device,
+/// one `cap` from `caps` consumed per read (front first).
+///
+/// Each cap limits how many bytes that read returns below what was requested:
+/// `0` makes the read return an **empty** data container (a device stalling
+/// mid-file — 0 bytes while bytes remain), `n > 0` a **short** read of `n` real
+/// bytes (a legal partial read). Reads past the end of `caps` behave normally.
+/// Replaces any previously-queued caps. Returns `false` if no active device with
+/// that serial exists.
+///
+/// # When to use
+///
+/// To exercise the windowed-download edge cases the virtual device can't produce
+/// on its own:
+/// - **Stall** (`vec![0]`): a window read returning 0 bytes while the file still
+///   has bytes remaining (`offset < size`) must surface an error, not be mistaken
+///   for a clean end-of-file and not spun on.
+/// - **Short mid-file read** (`vec![n]`): a window read returning fewer bytes than
+///   requested mid-file is legal; the download must advance by the bytes actually
+///   returned, staying byte-exact.
+pub fn force_partial_read_caps(serial: &str, caps: Vec<usize>) -> bool {
+    let active = active_states().lock().unwrap();
+    let state_arc = match active.iter().find(|(s, _)| s == serial) {
+        Some((_, state)) => Arc::clone(state),
+        None => return false,
+    };
+    drop(active); // Release the registry lock before acquiring the state lock.
+    state_arc.lock().unwrap().forced_partial_read_caps = caps.into();
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

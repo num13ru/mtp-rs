@@ -640,6 +640,358 @@ mod tests {
         assert_eq!(full, content);
     }
 
+    // ---- Windowed downloads (session-freeing window-by-window reads) ----
+
+    /// Drain a `WindowedDownload` to a `Vec<u8>`, asserting no window errors.
+    async fn collect_windowed(mut dl: crate::mtp::WindowedDownload) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Some(window) = dl.next_window().await {
+            out.extend_from_slice(&window.expect("window should not error"));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn windowed_download_reassembles_to_full_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // 5000 bytes, a recognizable pattern; window of 1024 forces ~5 windows
+        // (with a short final one) so reassembly spans many transactions.
+        let content: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let dl = storages[0]
+            .download_windowed(obj.handle, 1024)
+            .await
+            .unwrap();
+        assert_eq!(dl.size(), content.len() as u64, "size() is the full object");
+        let windowed = collect_windowed(dl).await;
+        assert_eq!(windowed, content, "windowed reassembly must equal the file");
+
+        // Equals a plain full download too.
+        let full = storages[0].download(obj.handle).await.unwrap();
+        assert_eq!(windowed, full);
+
+        // And equals a manual download_partial_64 reassembly (the primitive the
+        // window loop is built on).
+        let mut manual = Vec::new();
+        let mut off = 0u64;
+        while off < content.len() as u64 {
+            let chunk = storages[0]
+                .download_partial_64(obj.handle, off, 1024)
+                .await
+                .unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            off += chunk.len() as u64;
+            manual.extend_from_slice(&chunk);
+        }
+        assert_eq!(windowed, manual);
+    }
+
+    #[tokio::test]
+    async fn windowed_download_default_window_matches_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..20_000).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // The default 8 MiB window dwarfs this file, so it comes back in one
+        // window — still byte-exact.
+        let dl = storages[0]
+            .download_windowed_default(obj.handle)
+            .await
+            .unwrap();
+        assert_eq!(collect_windowed(dl).await, content);
+    }
+
+    #[tokio::test]
+    async fn windowed_download_from_offset_returns_correct_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        for offset in [0u64, 1, 100, 2500, 4999] {
+            let dl = storages[0]
+                .download_windowed_from_offset(obj.handle, offset, 512)
+                .await
+                .unwrap();
+            assert_eq!(
+                dl.size(),
+                content.len() as u64,
+                "size() must report the full object size at offset {offset}"
+            );
+            assert_eq!(dl.offset(), offset, "offset() starts at the resume point");
+            let got = collect_windowed(dl).await;
+            assert_eq!(
+                got,
+                content[offset as usize..],
+                "tail bytes wrong for offset {offset}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn windowed_download_offset_zero_is_whole_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..3333).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let from_zero = collect_windowed(
+            storages[0]
+                .download_windowed_from_offset(obj.handle, 0, 256)
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(from_zero, content);
+    }
+
+    #[tokio::test]
+    async fn windowed_download_at_size_first_window_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"exactly this many bytes".to_vec();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let mut dl = storages[0]
+            .download_windowed_from_offset(obj.handle, content.len() as u64, 64)
+            .await
+            .unwrap();
+        // offset == size: the first window is a clean None, no read issued.
+        assert!(
+            dl.next_window().await.is_none(),
+            "offset == size must yield zero windows"
+        );
+
+        // Nothing is held between windows, so the session is immediately usable
+        // (no cancel/drop dance needed).
+        assert_eq!(storages[0].list_objects(None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn windowed_download_past_size_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"small".to_vec();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // `WindowedDownload` isn't `Debug`, so match the result directly.
+        match storages[0]
+            .download_windowed_from_offset(obj.handle, content.len() as u64 + 1, 64)
+            .await
+        {
+            Err(crate::Error::InvalidData { .. }) => {}
+            Err(other) => panic!("expected InvalidData for offset past size, got {other:?}"),
+            Ok(_) => panic!("offset past size must error, not return a download"),
+        }
+
+        // No USB transaction issued, so the session stays usable.
+        assert_eq!(storages[0].list_objects(None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn windowed_download_short_final_window_exact_total() {
+        let dir = tempfile::tempdir().unwrap();
+        // 1000 bytes with a 256-byte window: 3 full + a 232-byte final window.
+        let content: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let mut dl = storages[0]
+            .download_windowed(obj.handle, 256)
+            .await
+            .unwrap();
+        let mut sizes = Vec::new();
+        let mut total = 0usize;
+        while let Some(window) = dl.next_window().await {
+            let bytes = window.unwrap();
+            total += bytes.len();
+            sizes.push(bytes.len());
+        }
+        assert_eq!(total, 1000);
+        assert_eq!(sizes, vec![256, 256, 256, 232], "clean short final window");
+    }
+
+    #[tokio::test]
+    async fn windowed_download_empty_file_first_window_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("empty.bin"), b"").unwrap();
+
+        let config = test_config_with_serial(dir.path(), "windowed-empty-001");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+        assert_eq!(obj.size, 0);
+
+        // Arm a stall on any partial read so we can prove NO read is issued for an
+        // empty file: if next_window wrongly issued a read it would consume this
+        // cap, but it should short-circuit on offset >= size first.
+        assert!(crate::force_partial_read_caps(
+            "windowed-empty-001",
+            vec![0]
+        ));
+
+        let mut dl = storages[0].download_windowed(obj.handle, 64).await.unwrap();
+        assert!(
+            dl.next_window().await.is_none(),
+            "empty file: first window is a clean None"
+        );
+
+        // Prove no read was issued: the armed cap is still pending. Issue one real
+        // partial read now — it pops the still-armed cap and comes back empty,
+        // which only holds if next_window() left the cap untouched.
+        let probe = storages[0]
+            .download_partial_64(obj.handle, 0, 64)
+            .await
+            .unwrap();
+        assert!(probe.is_empty(), "the still-armed cap fires on this read");
+    }
+
+    #[tokio::test]
+    async fn windowed_download_zero_bytes_before_eof_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..2000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config_with_serial(dir.path(), "windowed-stall-001");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        let mut dl = storages[0]
+            .download_windowed(obj.handle, 512)
+            .await
+            .unwrap();
+        // First window reads fine.
+        let first = dl.next_window().await.expect("first window").unwrap();
+        assert_eq!(first.len(), 512);
+
+        // Force the NEXT read to return 0 bytes mid-file (a device stall).
+        assert!(crate::force_partial_read_caps(
+            "windowed-stall-001",
+            vec![0]
+        ));
+        match dl.next_window().await {
+            Some(Err(crate::Error::InvalidData { .. })) => {}
+            Some(Err(other)) => panic!("expected InvalidData stall error, got {other:?}"),
+            Some(Ok(b)) => panic!("expected a stall error, got {} bytes", b.len()),
+            None => panic!("a 0-byte read mid-file must be an error, NOT a clean EOF"),
+        }
+    }
+
+    #[tokio::test]
+    async fn windowed_download_short_mid_file_read_advances_correctly() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..2000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = test_config_with_serial(dir.path(), "windowed-short-001");
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // Force the first two reads to come back short (100, then 50 real bytes)
+        // even though the window asks for 512 — a legal partial read. The download
+        // must advance by what actually arrived, so the result stays byte-exact.
+        assert!(crate::force_partial_read_caps(
+            "windowed-short-001",
+            vec![100, 50]
+        ));
+
+        let mut dl = storages[0]
+            .download_windowed(obj.handle, 512)
+            .await
+            .unwrap();
+        let w1 = dl.next_window().await.unwrap().unwrap();
+        assert_eq!(w1.len(), 100, "first read clamped to 100 bytes");
+        assert_eq!(dl.offset(), 100, "offset advanced by bytes returned");
+        let w2 = dl.next_window().await.unwrap().unwrap();
+        assert_eq!(w2.len(), 50, "second read clamped to 50 bytes");
+        assert_eq!(dl.offset(), 150);
+
+        // Remaining windows are full-size; the whole thing reassembles exactly.
+        let mut got = w1;
+        got.extend_from_slice(&w2);
+        got.extend(collect_windowed(dl).await);
+        assert_eq!(got, content, "short mid-file reads stay byte-exact");
+    }
+
+    #[tokio::test]
+    async fn windowed_download_session_free_between_windows() {
+        // The headline property: nothing is held between windows, so another
+        // device operation succeeds BETWEEN two next_window() calls.
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..4000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("big.bin"), &content).unwrap();
+        std::fs::write(dir.path().join("sibling.txt"), b"hi").unwrap();
+
+        let config = test_config(dir.path());
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let big = storages[0]
+            .list_objects(None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|o| o.filename == "big.bin")
+            .unwrap();
+
+        let mut dl = storages[0]
+            .download_windowed(big.handle, 512)
+            .await
+            .unwrap();
+
+        // Read one window...
+        let w1 = dl.next_window().await.expect("first window").unwrap();
+        assert_eq!(w1.len(), 512);
+
+        // ...now, WITHOUT cancelling or dropping the download, run a full listing
+        // on the SAME session. This is the whole point: a held-open download_stream
+        // would deadlock/serialize here; the windowed read leaves the session free.
+        let listed = storages[0].list_objects(None).await.unwrap();
+        assert_eq!(listed.len(), 2, "listing succeeds between windows");
+
+        // The download then continues correctly from where it left off.
+        let mut got = w1;
+        got.extend(collect_windowed(dl).await);
+        assert_eq!(
+            got, content,
+            "download resumes byte-exact after the listing"
+        );
+    }
+
     #[tokio::test]
     async fn upload_file() {
         let dir = tempfile::tempdir().unwrap();

@@ -74,6 +74,15 @@ pub(super) struct VirtualDeviceState {
     /// `notify` backend means the sentinel's event arrives after every event
     /// from any preceding write to the same directory.
     pub(super) dropped_paths: VecDeque<PathBuf>,
+    /// Test hook: byte caps to apply to the next `GetPartialObject(64)` reads,
+    /// one popped per read (front first). A cap clamps how many bytes that read
+    /// returns below what was requested: `0` yields an **empty** data container
+    /// (a device stalling mid-file), `n > 0` a **short** read of `n` real bytes
+    /// (a legal partial read). Once the queue is empty, reads behave normally.
+    /// Set via [`force_partial_read_caps`](super::registry::force_partial_read_caps).
+    /// Exercises the windowed-download stall path (0 bytes while bytes remain ⇒
+    /// error, not EOF) and short-read bookkeeping (advance by bytes returned).
+    pub(super) forced_partial_read_caps: VecDeque<usize>,
 }
 
 /// Maximum number of entries in [`VirtualDeviceState::dropped_paths`]; oldest
@@ -122,6 +131,7 @@ impl VirtualDeviceState {
             response_queue: VecDeque::new(),
             pause_count: 0,
             dropped_paths: VecDeque::new(),
+            forced_partial_read_caps: VecDeque::new(),
         }
     }
 

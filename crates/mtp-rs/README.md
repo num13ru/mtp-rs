@@ -232,16 +232,20 @@ match storage.upload(None, info, Box::pin(stream)).await {
 
 ### Download with progress
 
+`download_windowed` is the recommended way to read a file: it fetches bounded windows and frees the device's single PTP session between each, so other operations (listings, navigation) stay responsive during a long download.
+
 ```rust
-let mut download = storage.download_stream(file.handle).await?;
+let mut download = storage.download_windowed_default(file.handle).await?;
 println!("Downloading {} bytes...", download.size());
 
-while let Some(chunk) = download.next_chunk().await {
-let bytes = chunk ?;
-// Process bytes...
-println ! ("{:.1}%", download.progress() * 100.0);
+while let Some(window) = download.next_window().await {
+let bytes = window ?;
+// Process bytes... (do other device work between windows if you like)
+println ! ("{:.1}%", download.offset() as f64 / download.size() as f64 * 100.0);
 }
 ```
+
+For raw throughput when nothing else needs the device during the read, `download_stream` reads the whole file in one continuous transfer instead (it holds the PTP session for the entire download, so the device can't service other operations meanwhile).
 
 ### Partial reads (byte ranges)
 

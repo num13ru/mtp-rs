@@ -164,6 +164,55 @@ Tested against the virtual device in `transport/virtual_device/mod.rs`
 `examples/resume_download.rs` demonstrates the full half-download → pause → list →
 resume → verify cycle with no hardware.
 
+## Reading large files without monopolizing the session
+
+`Storage::download_windowed(handle, window_size)` reads a file as a SEQUENCE of
+bounded `GetPartialObject64` transactions instead of one held-open stream. It
+returns a `WindowedDownload` whose `next_window()` reads the next window and
+RELEASES the one-per-device PTP session on return. Companions:
+`download_windowed_from_offset` (resumable), `download_windowed_default`, the
+`DEFAULT_DOWNLOAD_WINDOW` const (8 MiB).
+
+The motivation is the session monopoly: `download_stream` /
+`download_stream_from_offset` own the single PTP session for the WHOLE file, so
+no other op (a folder listing, navigation) can touch the device until the read
+finishes or is aborted. The spike numbers that drove this (validated on a Pixel
+9 Pro XL): an 8 MiB window is ≈80ms and frees the session between windows, so a
+concurrent listing slips in at its natural cost — versus ~35s to abort a
+held-open multi-GB read (the USB cancel must drain the whole backlog), which
+times out a concurrent listing. A downstream consumer (Cmdr) hit exactly this
+and hand-rolled the window loop before it moved here.
+
+Design boundary (important): `WindowedDownload` owns the BOOKKEEPING (cached
+total size, current offset, window sizing, EOF detection) but NO policy — no
+pause, debounce, or gate. The consumer interposes its own logic BETWEEN
+`next_window()` calls. `window_size` is a real, open parameter; the 8 MiB default
+is a documented suggestion, not baked in.
+
+Edge-case contract (mirrors `download_stream_from_offset`): empty file /
+`offset == size` ⇒ first `next_window()` returns `None` and issues no read;
+`offset > size` ⇒ `Error::InvalidData` before any USB I/O; a 0-byte read while
+`offset < size` ⇒ `Error::InvalidData` (a device STALL, not a silent EOF and not
+a spin); a short non-zero mid-file read advances by the bytes ACTUALLY returned;
+`window_size` is clamped to u32 (the `GetPartialObject64` `max_bytes`) and to ≥1.
+`size()` reports the FULL object size so progress/ETA stays anchored.
+
+Drop safety: unlike `FileDownload` (holds the session open, MUST be consumed or
+`cancel()`led before drop), `WindowedDownload` holds NOTHING between windows, so
+stopping early is just dropping it — no `cancel()`, `Drop` is a no-op. A
+`next_window()` future dropped mid-call self-heals via `TransactionScope` (the
+next op drains).
+
+Tested against the virtual device in `transport/virtual_device/mod.rs`
+(`windowed_download_*`), including the headline `..._session_free_between_windows`
+(a `list_objects` succeeds between two `next_window()` calls) and the
+`..._zero_bytes_before_eof_errors` stall path. The stall and short-read paths use
+the `force_partial_read_caps(serial, caps)` virtual-device hook (caps the next
+reads' returned length; 0 = empty/stall, n = short read). `examples/windowed_download.rs`
+demonstrates it with no hardware. Real-device coverage:
+`test_windowed_download_matches_stream_and_frees_session` in
+`tests/integration.rs` (`#[ignore]`).
+
 ## Stall recovery and device reset
 
 - Devices STALL a bulk endpoint to signal errors (cameras do this for

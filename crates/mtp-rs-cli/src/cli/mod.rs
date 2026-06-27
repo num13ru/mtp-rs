@@ -44,12 +44,17 @@ pub async fn run() -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    use super::args::Cli;
+    // The arg-struct types + PathBuf are only referenced by the virtual-device
+    // test fixtures below; gate the imports so a `--no-default-features` test
+    // build doesn't warn on them as unused.
+    #[cfg(feature = "virtual-device")]
     use super::args::{
-        Cli, Command, CopyArgs, GetArgs, LsArgs, MoveArgs, PutArgs, RemotePathArg, RenameArgs,
-        RmArgs,
+        Command, CopyArgs, GetArgs, LsArgs, MoveArgs, PutArgs, RemotePathArg, RenameArgs, RmArgs,
     };
     use super::*;
     use clap::CommandFactory;
+    #[cfg(feature = "virtual-device")]
     use std::path::PathBuf;
 
     #[test]

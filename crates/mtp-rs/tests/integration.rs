@@ -804,6 +804,126 @@ mod readonly {
         );
         assert_eq!(total_received, file_size);
     }
+
+    /// Windowed download against a real device: read a large file via
+    /// `download_windowed`, checksum it against a full `download_stream` of the
+    /// same file, AND prove the PTP session is free between windows by running a
+    /// folder listing in the middle of the windowed read.
+    ///
+    /// This is the headline property the windowed API exists for: a held-open
+    /// `download_stream` would block any other op until it finished or was
+    /// cancelled (and cancelling a multi-GB read costs ~35s to drain); the
+    /// windowed read frees the session between every window, so the listing here
+    /// just works.
+    ///
+    /// Run it (with the phone connected and unlocked):
+    ///
+    /// ```sh
+    /// cargo test -p mtp-rs --test integration -- --ignored windowed
+    /// ```
+    ///
+    /// Set `MTP_TEST_READFILE=/DCIM/.../big.mp4` to pin a specific large file;
+    /// otherwise it searches for one in the 5–200 MB range.
+    #[tokio::test]
+    #[ignore]
+    #[serial]
+    async fn test_windowed_download_matches_stream_and_frees_session() {
+        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let storages = try_device!(device.storages().await, "get storages");
+        let storage = &storages[0];
+
+        // A larger file than the streaming test, so the multi-window path and the
+        // ~80ms/window cadence are meaningfully exercised on real hardware.
+        tlog!("Searching for file (5MB-200MB)...");
+        let Some((handle, file_size, file_name)) =
+            find_suitable_file(storage, 5_000_000, 200_000_000).await
+        else {
+            tlog!("No suitable file found, skipping");
+            return;
+        };
+        tlog!("Windowed-reading {} ({} bytes)", file_name, file_size);
+
+        // Reference: a plain full streaming download, reduced to a 64-bit FNV-1a
+        // checksum so we don't hold the whole file in RAM twice.
+        let mut reference = try_device!(storage.download_stream(handle).await, "start stream");
+        assert_eq!(reference.size(), file_size);
+        let mut ref_hash = FNV_OFFSET;
+        let mut ref_len = 0u64;
+        while let Some(result) = reference.next_chunk().await {
+            let bytes = result.expect("stream chunk error");
+            ref_len += bytes.len() as u64;
+            ref_hash = fnv1a_update(ref_hash, &bytes);
+        }
+        assert_eq!(ref_len, file_size, "full stream length mismatch");
+        drop(reference);
+
+        // Windowed read with the default 8 MiB window, listing the storage root
+        // between windows to prove the session is free.
+        let mut windowed = try_device!(
+            storage.download_windowed_default(handle).await,
+            "start windowed"
+        );
+        assert_eq!(
+            windowed.size(),
+            file_size,
+            "windowed size() must report the full object size"
+        );
+        let mut win_hash = FNV_OFFSET;
+        let mut win_len = 0u64;
+        let mut window_count = 0u64;
+        let mut listings_between = 0u64;
+        while let Some(window) = windowed.next_window().await {
+            let bytes = window.expect("window error");
+            win_len += bytes.len() as u64;
+            win_hash = fnv1a_update(win_hash, &bytes);
+            window_count += 1;
+
+            // BETWEEN windows: the session is free. Run a real listing on the
+            // same session. (Do it after the first window so there's a read in
+            // flight conceptually, but only a few times to keep the test quick.)
+            if listings_between < 3 {
+                let listed = try_device!(
+                    storage.list_objects(None).await,
+                    "list root between windows"
+                );
+                listings_between += 1;
+                tlog!(
+                    "Between windows: listed {} root object(s) — session is free.",
+                    listed.len()
+                );
+            }
+        }
+
+        tlog!(
+            "Windowed: {} bytes in {} windows, {} listings interleaved.",
+            win_len,
+            window_count,
+            listings_between
+        );
+        assert_eq!(win_len, file_size, "windowed length mismatch");
+        assert_eq!(
+            win_hash, ref_hash,
+            "windowed download checksum must equal the full stream's"
+        );
+        assert!(
+            listings_between > 0,
+            "at least one listing must have run between windows"
+        );
+    }
+}
+
+/// FNV-1a 64-bit offset basis, for the integration checksum.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a 64-bit incremental update. Lets the windowed integration test compare
+/// a multi-hundred-MB download against a full stream without buffering it twice.
+fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 // Camera control tests disabled - need PtpSession device property methods.

@@ -42,4 +42,6 @@ pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
 pub use event::DeviceEvent;
 pub use object::NewObjectInfo;
 pub use storage::{ObjectListing, Storage};
-pub use stream::{FileDownload, Progress, DEFAULT_CANCEL_TIMEOUT};
+pub use stream::{
+    FileDownload, Progress, WindowedDownload, DEFAULT_CANCEL_TIMEOUT, DEFAULT_DOWNLOAD_WINDOW,
+};

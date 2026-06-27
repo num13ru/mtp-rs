@@ -2,7 +2,7 @@
 
 use crate::cancel::{bail_if_cancelled, CancelToken};
 use crate::mtp::object::NewObjectInfo;
-use crate::mtp::stream::{FileDownload, Progress};
+use crate::mtp::stream::{FileDownload, Progress, WindowedDownload, DEFAULT_DOWNLOAD_WINDOW};
 use crate::ptp::{ObjectHandle, ObjectInfo, StorageId, StorageInfo};
 use crate::{Error, UploadError};
 use bytes::Bytes;
@@ -473,13 +473,31 @@ impl Storage {
     ///
     /// Unlike [`download()`](Self::download), this method yields data chunks
     /// directly from USB as they arrive, without buffering the entire file
-    /// in memory. Ideal for large files or when piping data to disk.
+    /// in memory.
+    ///
+    /// **For most downloads, prefer [`download_windowed()`](Self::download_windowed).**
+    /// This continuous-stream form maximizes throughput but holds the device's
+    /// single PTP session for the whole file (see Session monopoly below). Reach
+    /// for it only when you want raw speed and nothing else needs the device
+    /// during the read (a CLI `get`, a batch export).
     ///
     /// # Important
     ///
     /// The MTP session is locked while the download is active. You must either
     /// consume the entire download or call [`FileDownload::cancel()`] before
     /// dropping it.
+    ///
+    /// # ⚠️ Session monopoly
+    ///
+    /// MTP allows exactly one PTP session per device, and this download holds it
+    /// open for the **whole file**. While it's in flight the device can't service
+    /// any other operation — a folder listing, navigation, metadata read — until
+    /// the download finishes or is cancelled (and cancelling a multi-GB in-flight
+    /// read costs ~35 s, since the USB cancel must drain the backlog). For a long
+    /// read where the device must stay responsive to other work, use
+    /// [`download_windowed()`](Self::download_windowed) instead: it reads the file
+    /// as a sequence of small bounded windows and frees the session between each
+    /// one, so listings and navigation slip in between windows.
     ///
     /// # Example
     ///
@@ -571,6 +589,18 @@ impl Storage {
     /// (the whole point of a resumable download), leaving the device usable for
     /// the next operation.
     ///
+    /// # ⚠️ Session monopoly
+    ///
+    /// Like [`download_stream()`](Self::download_stream), this holds the device's
+    /// one PTP session open for the **whole** `[offset, size)` segment, so the
+    /// device can't service listings or navigation until it finishes or is
+    /// cancelled. If you instead want to read a large file while keeping the
+    /// device responsive to other operations throughout (rather than as an
+    /// explicit suspend/resume around `cancel()`), reach for
+    /// [`download_windowed()`](Self::download_windowed) /
+    /// [`download_windowed_from_offset()`](Self::download_windowed_from_offset),
+    /// which free the session between every window.
+    ///
     /// # Example
     ///
     /// ```rust,no_run
@@ -644,6 +674,143 @@ impl Storage {
         // Report the full object size so a resumed download's progress/ETA stays
         // anchored to the whole file, not just this segment.
         Ok(FileDownload::new(size, stream))
+    }
+
+    /// Read a large file as a sequence of bounded windows, **freeing the PTP
+    /// session between every window** so the device stays responsive.
+    ///
+    /// Unlike [`download_stream()`](Self::download_stream), which holds the
+    /// device's one PTP session open for the entire file, this returns a
+    /// [`WindowedDownload`] whose
+    /// [`next_window()`](WindowedDownload::next_window) reads the file one bounded
+    /// `GetPartialObject64` transaction at a time and **releases the session on
+    /// each return**. Between two `next_window()` calls the session is free, so a
+    /// consumer can interleave other device work — service a pending folder
+    /// listing, navigate, check a cancel flag — without aborting the read. This
+    /// makes "stay responsive to listings/navigation during a long read" easy:
+    /// a listing issued between windows just works, at its natural cost.
+    ///
+    /// `window_size` is the maximum bytes per window (the `GetPartialObject64`
+    /// `max_bytes`, a u32). It's a real, open parameter — mtp-rs stays
+    /// unopinionated. [`DEFAULT_DOWNLOAD_WINDOW`] (8 MiB) is a documented
+    /// suggestion (~80 ms/window on a Pixel 9 Pro XL — small enough to interleave,
+    /// large enough for throughput); [`download_windowed_default()`](Self::download_windowed_default)
+    /// uses it. A `window_size` of 0 is clamped to 1.
+    ///
+    /// # The consumer owns the policy
+    ///
+    /// [`WindowedDownload`] owns only the bookkeeping (total size, offset, window
+    /// sizing, EOF). It owns **no** policy — no pause, debounce, or gate. The
+    /// consumer interposes whatever it wants *between* `next_window()` calls.
+    /// That boundary is intentional: the library provides the mechanism, the
+    /// consumer provides the policy.
+    ///
+    /// # No `cancel()` needed
+    ///
+    /// To stop early, just stop calling `next_window()` and drop the
+    /// [`WindowedDownload`] — nothing is held between windows, so there's no
+    /// session to drain and [`Drop`] is a no-op. Contrast
+    /// [`FileDownload`], which holds the session open and **must** be consumed or
+    /// [`cancel()`](FileDownload::cancel)led before drop.
+    ///
+    /// [`size()`](WindowedDownload::size) reports the **full** object size, so
+    /// progress/ETA stays anchored to the whole file.
+    ///
+    /// # Device support
+    ///
+    /// Requires the device to advertise `GetPartialObject64` (`0x95C1`); most
+    /// modern Android devices do. Devices that don't return [`Error::Protocol`]
+    /// with `OperationNotSupported` on the first window.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mtp_rs::mtp::{MtpDevice, DEFAULT_DOWNLOAD_WINDOW};
+    /// use mtp_rs::ObjectHandle;
+    /// use tokio::io::AsyncWriteExt;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let device = MtpDevice::open_first().await?;
+    /// # let storages = device.storages().await?;
+    /// # let storage = &storages[0];
+    /// # let handle = ObjectHandle(1);
+    /// let mut download = storage.download_windowed(handle, DEFAULT_DOWNLOAD_WINDOW).await?;
+    /// println!("Reading {} bytes...", download.size());
+    ///
+    /// let mut file = tokio::fs::File::create("output.bin").await?;
+    /// while let Some(window) = download.next_window().await {
+    ///     let bytes = window?;
+    ///     file.write_all(&bytes).await?;
+    ///     // The session is FREE here — do other device work between windows.
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn download_windowed(
+        &self,
+        handle: ObjectHandle,
+        window_size: u32,
+    ) -> Result<WindowedDownload, Error> {
+        self.download_windowed_from_offset(handle, 0, window_size)
+            .await
+    }
+
+    /// Read a large file in windows starting at a byte offset (resumable
+    /// windowed download).
+    ///
+    /// Like [`download_windowed()`](Self::download_windowed), but the first window
+    /// starts at `offset` and the download covers `[offset, size)`. Useful to
+    /// resume a partially-fetched file while still freeing the session between
+    /// windows.
+    ///
+    /// # Offset semantics (mirrors [`download_stream_from_offset()`](Self::download_stream_from_offset))
+    ///
+    /// - `offset == 0` covers the whole file (equivalent to
+    ///   [`download_windowed()`](Self::download_windowed)).
+    /// - `offset == size` yields a download whose first
+    ///   [`next_window()`](WindowedDownload::next_window) returns `None` (a clean,
+    ///   already-complete no-op), issuing no USB transaction.
+    /// - `offset > size` returns [`Error::InvalidData`] immediately, before any
+    ///   USB I/O.
+    ///
+    /// [`size()`](WindowedDownload::size) still reports the full object size, so
+    /// progress/ETA stays anchored across a resume.
+    pub async fn download_windowed_from_offset(
+        &self,
+        handle: ObjectHandle,
+        offset: u64,
+        window_size: u32,
+    ) -> Result<WindowedDownload, Error> {
+        let info = self.get_object_info(handle).await?;
+        let size = info.size;
+
+        if offset > size {
+            return Err(Error::invalid_data(format!(
+                "windowed download offset {offset} is past the object size {size}"
+            )));
+        }
+
+        Ok(WindowedDownload::new(
+            Arc::clone(&self.inner),
+            handle,
+            size,
+            offset,
+            window_size,
+        ))
+    }
+
+    /// Read a large file in windows using the default window size
+    /// ([`DEFAULT_DOWNLOAD_WINDOW`], 8 MiB).
+    ///
+    /// Convenience for [`download_windowed(handle, DEFAULT_DOWNLOAD_WINDOW)`](Self::download_windowed).
+    /// Reach for [`download_windowed()`](Self::download_windowed) with an explicit
+    /// `window_size` when you want to tune the responsiveness/throughput tradeoff.
+    pub async fn download_windowed_default(
+        &self,
+        handle: ObjectHandle,
+    ) -> Result<WindowedDownload, Error> {
+        self.download_windowed(handle, DEFAULT_DOWNLOAD_WINDOW)
+            .await
     }
 
     // =========================================================================
