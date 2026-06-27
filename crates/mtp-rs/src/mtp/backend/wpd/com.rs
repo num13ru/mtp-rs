@@ -21,7 +21,7 @@ use windows::core::Interface;
 use windows::core::PCWSTR;
 use windows::core::PWSTR;
 use windows::Win32::Devices::PortableDevices::*;
-use windows::Win32::Foundation::S_OK;
+use windows::Win32::Foundation::{PROPERTYKEY, S_OK};
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoTaskMemAlloc, IStream, CLSCTX_ALL, STGC_DEFAULT, STGM_READ, STREAM_SEEK_SET,
@@ -111,7 +111,7 @@ impl WpdDevice {
 
         let mut ids = IdMap::new();
         let device_info = read_device_info(&props);
-        let capabilities = probe_capabilities();
+        let capabilities = probe_capabilities(&device);
         let storage_wpd_ids = collect_storage_ids(&content, &mut ids);
 
         Ok(Self {
@@ -805,18 +805,61 @@ unsafe fn read_storage_info(
     info
 }
 
-/// Capabilities. TODO(phase-3): derive precisely from
-/// `IPortableDeviceCapabilities::GetSupportedCommands`. For now report the standard Android/MTP
-/// command set (events deferred to phase 4); the conformance suite checks WPD caps only against the
-/// USB backend, not here.
-fn probe_capabilities() -> Capabilities {
+/// Derive [`Capabilities`] from the device's supported WPD commands.
+///
+/// Reads `IPortableDeviceCapabilities::GetSupportedCommands` and maps the object-management commands
+/// to the neutral flags. Falls back to permissive MTP defaults if the probe yields nothing (older
+/// driver). `supports_partial_download` is always true (we provide ranged reads via seek or the
+/// read-and-discard fallback); thumbnails and events stay off for now (events are Phase 4).
+///
+/// # Safety
+/// COM thread only.
+unsafe fn probe_capabilities(device: &IPortableDevice) -> Capabilities {
+    let commands: Vec<PROPERTYKEY> = (|| {
+        let caps = device.Capabilities().ok()?;
+        let cmds = caps.GetSupportedCommands().ok()?;
+        // GetCount / GetAt write through `*const` out-pointers (a windows-rs quirk), so these need
+        // no `mut` as far as the borrow checker can see.
+        let count = 0u32;
+        cmds.GetCount(&count).ok()?;
+        let mut out = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let key = PROPERTYKEY::default();
+            if cmds.GetAt(i, &key).is_ok() {
+                out.push(key);
+            }
+        }
+        Some(out)
+    })()
+    .unwrap_or_default();
+
+    // Permissive defaults when the device doesn't enumerate commands.
+    if commands.is_empty() {
+        return Capabilities {
+            can_upload: true,
+            can_delete: true,
+            can_rename: true,
+            can_move: true,
+            can_copy: true,
+            can_create_folder: true,
+            supports_partial_download: true,
+            supports_thumbnails: false,
+            supports_events: false,
+        };
+    }
+
+    let has = |k: &PROPERTYKEY| {
+        commands
+            .iter()
+            .any(|c| c.fmtid == k.fmtid && c.pid == k.pid)
+    };
     Capabilities {
-        can_upload: true,
-        can_delete: true,
-        can_rename: true,
-        can_move: true,
-        can_copy: true,
-        can_create_folder: true,
+        can_upload: has(&WPD_COMMAND_OBJECT_MANAGEMENT_CREATE_OBJECT_WITH_PROPERTIES_AND_DATA),
+        can_delete: has(&WPD_COMMAND_OBJECT_MANAGEMENT_DELETE_OBJECTS),
+        can_rename: has(&WPD_COMMAND_OBJECT_PROPERTIES_SET),
+        can_move: has(&WPD_COMMAND_OBJECT_MANAGEMENT_MOVE_OBJECTS),
+        can_copy: has(&WPD_COMMAND_OBJECT_MANAGEMENT_COPY_OBJECTS),
+        can_create_folder: has(&WPD_COMMAND_OBJECT_MANAGEMENT_CREATE_OBJECT_WITH_PROPERTIES_ONLY),
         supports_partial_download: true,
         supports_thumbnails: false,
         supports_events: false,
