@@ -157,6 +157,21 @@ impl From<PtpDateTime> for DateTime {
     }
 }
 
+impl DateTime {
+    /// Convert to the PTP wire datetime (used when packing an upload's `ObjectInfo`).
+    #[must_use]
+    pub(crate) fn to_ptp(self) -> PtpDateTime {
+        PtpDateTime {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: self.hour,
+            minute: self.minute,
+            second: self.second,
+        }
+    }
+}
+
 /// Type of storage medium.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StorageType {

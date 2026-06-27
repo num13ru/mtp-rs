@@ -1,6 +1,7 @@
 //! Object-related types for MTP.
 
-use crate::ptp::{AssociationType, DateTime, ObjectFormatCode, ObjectInfo as PtpObjectInfo};
+use crate::mtp::{DateTime, ObjectFormat};
+use crate::ptp::{AssociationType, ObjectFormatCode, ObjectInfo as PtpObjectInfo};
 
 /// Information needed to create a new object.
 #[derive(Debug, Clone)]
@@ -10,7 +11,7 @@ pub struct NewObjectInfo {
     /// File size in bytes (must match actual data sent)
     pub size: u64,
     /// Object format (auto-detected from extension if None)
-    pub format: Option<ObjectFormatCode>,
+    pub format: Option<ObjectFormat>,
     /// Modification time
     pub modified: Option<DateTime>,
 }
@@ -35,14 +36,14 @@ impl NewObjectInfo {
         Self {
             filename: name.into(),
             size: 0,
-            format: Some(ObjectFormatCode::Association),
+            format: Some(ObjectFormat::ASSOCIATION),
             modified: None,
         }
     }
 
     /// Create info with explicit format.
     #[must_use]
-    pub fn with_format(filename: impl Into<String>, size: u64, format: ObjectFormatCode) -> Self {
+    pub fn with_format(filename: impl Into<String>, size: u64, format: ObjectFormat) -> Self {
         Self {
             filename: filename.into(),
             size,
@@ -60,14 +61,14 @@ impl NewObjectInfo {
 
     /// Convert to PTP ObjectInfo for sending.
     pub(crate) fn to_object_info(&self) -> PtpObjectInfo {
-        let format = self.format.unwrap_or(ObjectFormatCode::Undefined);
-        let is_folder = format == ObjectFormatCode::Association;
+        let format = self.format.unwrap_or(ObjectFormat::UNDEFINED);
+        let is_folder = format.is_association();
 
         PtpObjectInfo {
-            format,
+            format: ObjectFormatCode::from(format.code()),
             size: self.size,
             filename: self.filename.clone(),
-            modified: self.modified,
+            modified: self.modified.map(DateTime::to_ptp),
             association_type: if is_folder {
                 AssociationType::GenericFolder
             } else {
@@ -79,11 +80,11 @@ impl NewObjectInfo {
 }
 
 /// Detect format from filename extension.
-fn detect_format_from_filename(filename: &str) -> ObjectFormatCode {
+fn detect_format_from_filename(filename: &str) -> ObjectFormat {
     if let Some(ext) = filename.rsplit('.').next() {
-        ObjectFormatCode::from_extension(ext)
+        ObjectFormat::from(ObjectFormatCode::from_extension(ext))
     } else {
-        ObjectFormatCode::Undefined
+        ObjectFormat::UNDEFINED
     }
 }
 
@@ -91,12 +92,16 @@ fn detect_format_from_filename(filename: &str) -> ObjectFormatCode {
 mod tests {
     use super::*;
 
+    fn fmt(code: ObjectFormatCode) -> ObjectFormat {
+        ObjectFormat::from(code)
+    }
+
     #[test]
     fn test_new_object_info_file() {
         let info = NewObjectInfo::file("test.mp3", 1000);
         assert_eq!(info.filename, "test.mp3");
         assert_eq!(info.size, 1000);
-        assert_eq!(info.format, Some(ObjectFormatCode::Mp3));
+        assert_eq!(info.format, Some(fmt(ObjectFormatCode::Mp3)));
     }
 
     #[test]
@@ -104,35 +109,36 @@ mod tests {
         let info = NewObjectInfo::folder("Music");
         assert_eq!(info.filename, "Music");
         assert_eq!(info.size, 0);
-        assert_eq!(info.format, Some(ObjectFormatCode::Association));
+        assert_eq!(info.format, Some(ObjectFormat::ASSOCIATION));
     }
 
     #[test]
     fn test_format_detection() {
         assert_eq!(
             detect_format_from_filename("song.mp3"),
-            ObjectFormatCode::Mp3
+            fmt(ObjectFormatCode::Mp3)
         );
         assert_eq!(
             detect_format_from_filename("photo.jpg"),
-            ObjectFormatCode::Jpeg
+            fmt(ObjectFormatCode::Jpeg)
         );
         assert_eq!(
             detect_format_from_filename("video.mp4"),
-            ObjectFormatCode::Mp4Container
+            fmt(ObjectFormatCode::Mp4Container)
         );
         assert_eq!(
             detect_format_from_filename("unknown.xyz"),
-            ObjectFormatCode::Undefined
+            ObjectFormat::UNDEFINED
         );
     }
 
     #[test]
     fn test_with_format() {
-        let info = NewObjectInfo::with_format("document.bin", 500, ObjectFormatCode::Executable);
+        let info =
+            NewObjectInfo::with_format("document.bin", 500, fmt(ObjectFormatCode::Executable));
         assert_eq!(info.filename, "document.bin");
         assert_eq!(info.size, 500);
-        assert_eq!(info.format, Some(ObjectFormatCode::Executable));
+        assert_eq!(info.format, Some(fmt(ObjectFormatCode::Executable)));
     }
 
     #[test]
@@ -173,14 +179,13 @@ mod tests {
 
     #[test]
     fn test_format_detection_case_insensitive() {
-        // The from_extension method is case-insensitive
         assert_eq!(
             detect_format_from_filename("SONG.MP3"),
-            ObjectFormatCode::Mp3
+            fmt(ObjectFormatCode::Mp3)
         );
         assert_eq!(
             detect_format_from_filename("Photo.JPG"),
-            ObjectFormatCode::Jpeg
+            fmt(ObjectFormatCode::Jpeg)
         );
     }
 
@@ -188,7 +193,7 @@ mod tests {
     fn test_format_detection_no_extension() {
         assert_eq!(
             detect_format_from_filename("noextension"),
-            ObjectFormatCode::Undefined
+            ObjectFormat::UNDEFINED
         );
     }
 }
