@@ -11,9 +11,10 @@ use crate::cancel::CancelToken;
 use crate::mtp::backend::ByteRange;
 use crate::mtp::object::NewObjectInfo;
 use crate::mtp::{
-    Capabilities, DeviceInfo, Error, ObjectHandle, ObjectInfo, StorageId, StorageInfo,
+    Capabilities, DeviceEvent, DeviceInfo, Error, ObjectHandle, ObjectInfo, StorageId, StorageInfo,
 };
 use bytes::Bytes;
+use futures::channel::mpsc::UnboundedSender;
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{SinkExt, StreamExt};
@@ -129,15 +130,29 @@ pub(crate) struct WpdHandle {
 }
 
 impl WpdHandle {
-    /// Spawn a worker, open the device, and return the handle plus the device's cached identity.
-    pub(crate) async fn spawn(spec: OpenSpec) -> Result<(Self, DeviceInfo, Capabilities), Error> {
+    /// Spawn a worker, open the device, and return the handle, the device's cached identity, and the
+    /// receiving end of the device-event channel (the worker's WPD callback owns the sender).
+    pub(crate) async fn spawn(
+        spec: OpenSpec,
+    ) -> Result<
+        (
+            Self,
+            DeviceInfo,
+            Capabilities,
+            mpsc::UnboundedReceiver<DeviceEvent>,
+        ),
+        Error,
+    > {
         let (req_tx, req_rx) = std_mpsc::channel::<Request>();
         let (startup_tx, startup_rx) =
             oneshot::channel::<Result<(DeviceInfo, Capabilities), Error>>();
+        // The event channel is created here so the receiver can be returned to the backend; the
+        // `Send` sender is moved into the worker, which hands it to the WPD callback on Advise.
+        let (event_tx, event_rx) = mpsc::unbounded::<DeviceEvent>();
 
         let join = std::thread::Builder::new()
             .name("wpd-com-worker".into())
-            .spawn(move || worker_main(spec, startup_tx, req_rx))
+            .spawn(move || worker_main(spec, startup_tx, req_rx, event_tx))
             .map_err(|e| Error::Io {
                 message: format!("failed to spawn WPD worker thread: {e}"),
             })?;
@@ -154,6 +169,7 @@ impl WpdHandle {
             },
             device_info,
             capabilities,
+            event_rx,
         ))
     }
 
@@ -199,6 +215,7 @@ fn worker_main(
     spec: OpenSpec,
     startup: oneshot::Sender<Result<(DeviceInfo, Capabilities), Error>>,
     req_rx: std_mpsc::Receiver<Request>,
+    event_tx: UnboundedSender<DeviceEvent>,
 ) {
     // SAFETY: this is the only thread that touches these COM objects; MTA matches the spike.
     unsafe {
@@ -219,6 +236,13 @@ fn worker_main(
             return;
         }
     };
+
+    // Register the WPD event callback on *this* (the COM apartment) thread, now that the device is
+    // chosen — `Advise` must run on the apartment that owns the device, and registering after
+    // open_device avoids advising the candidate devices a `Serial` match opens and discards. The
+    // sender is moved into the callback; if Advise fails the sink keeps it alive (the channel stays
+    // open, so `next_event` simply blocks rather than reporting a phantom disconnect).
+    unsafe { dev.register_events(event_tx) };
 
     while let Ok(req) = req_rx.recv() {
         match req {

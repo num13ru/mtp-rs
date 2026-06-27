@@ -4,6 +4,7 @@
 //! here ever crosses a thread boundary.
 
 use super::consts::WPD_DEVICE_OBJECT_ID;
+use super::events::WpdEventSink;
 use super::ids::IdMap;
 use super::props::{
     is_folder_content_type, map_hresult, read_object_info, set_u32, take_pwstr, wide,
@@ -11,12 +12,15 @@ use super::props::{
 use crate::cancel::CancelToken;
 use crate::mtp::object::NewObjectInfo;
 use crate::mtp::{
-    Capabilities, DeviceInfo, Error, FilesystemType, ObjectFormat, ObjectHandle, ObjectInfo,
-    StorageId, StorageInfo, StorageType,
+    Capabilities, DeviceEvent, DeviceInfo, Error, FilesystemType, ObjectFormat, ObjectHandle,
+    ObjectInfo, StorageId, StorageInfo, StorageType,
 };
+use futures::channel::mpsc::UnboundedSender;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::sync::{Arc, Mutex};
 
+use windows::core::ComObject;
 use windows::core::Interface;
 use windows::core::PCWSTR;
 use windows::core::PWSTR;
@@ -24,7 +28,8 @@ use windows::Win32::Devices::PortableDevices::*;
 use windows::Win32::Foundation::{PROPERTYKEY, S_OK};
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoTaskMemAlloc, IStream, CLSCTX_ALL, STGC_DEFAULT, STGM_READ, STREAM_SEEK_SET,
+    CoCreateInstance, CoTaskMemAlloc, CoTaskMemFree, IStream, CLSCTX_ALL, STGC_DEFAULT, STGM_READ,
+    STREAM_SEEK_SET,
 };
 use windows::Win32::System::Variant::VT_LPWSTR;
 
@@ -67,19 +72,45 @@ pub(crate) unsafe fn enumerate() -> Result<Vec<DeviceEntry>, Error> {
 /// An open WPD device with all its COM interface pointers. Lives only on the actor thread.
 pub(crate) struct WpdDevice {
     // Field order matters for drop: interfaces release in declaration order. `device` last so the
-    // session outlives the content/props/resources derived from it.
+    // session outlives the content/props/resources/event-callback derived from it.
     content: IPortableDeviceContent,
     props: IPortableDeviceProperties,
     resources: IPortableDeviceResources,
+    /// The event sink we handed WPD via `Advise`. Kept alive for the lifetime of the registration
+    /// (released — our reference — when this struct drops, *after* `Unadvise` in [`Drop`]). `None`
+    /// until [`register_events`](Self::register_events) runs (and on a device WPD never advised).
+    event_callback: Option<IPortableDeviceEventCallback>,
+    /// The cookie `Advise` returned (a COM-allocated string). Null until a successful register;
+    /// passed to `Unadvise` and `CoTaskMemFree`d in [`Drop`].
+    event_cookie: PWSTR,
     // Held only to keep the device session alive (its content/props/resources derive from it); never
     // read directly. Released last (declared last) on drop.
     #[allow(dead_code)]
     device: IPortableDevice,
-    ids: IdMap,
+    /// Shared with the event callback so an event's WPD object-id string is interned into the *same*
+    /// reverse map the worker resolves handles from. `std::sync::Mutex` (not async): held only for
+    /// the fast intern/resolve, never across a COM call or `.await`.
+    ids: Arc<Mutex<IdMap>>,
     /// WPD object-id strings of the device's storages, for top-level (`ROOT`) parent detection.
     storage_wpd_ids: HashSet<String>,
     device_info: DeviceInfo,
     capabilities: Capabilities,
+}
+
+impl Drop for WpdDevice {
+    fn drop(&mut self) {
+        // Unadvise on this (the COM apartment) thread *before* the interfaces release and COM
+        // uninitializes. Only if we actually registered (non-null cookie). Then free the cookie.
+        if !self.event_cookie.is_null() {
+            // SAFETY: runs on the worker/COM thread while `device` is still live; `event_cookie` is
+            // the COM-allocated string `Advise` returned.
+            unsafe {
+                let _ = self.device.Unadvise(PCWSTR(self.event_cookie.0));
+                CoTaskMemFree(Some(self.event_cookie.0 as *const c_void));
+            }
+            self.event_cookie = PWSTR::null();
+        }
+    }
 }
 
 impl WpdDevice {
@@ -109,21 +140,47 @@ impl WpdDevice {
         let props = content.Properties().map_err(map_hresult)?;
         let resources = content.Transfer().map_err(map_hresult)?;
 
-        let mut ids = IdMap::new();
+        let ids = Arc::new(Mutex::new(IdMap::new()));
         let device_info = read_device_info(&props);
         let capabilities = probe_capabilities(&device);
-        let storage_wpd_ids = collect_storage_ids(&content, &mut ids);
+        let storage_wpd_ids =
+            collect_storage_ids(&content, &mut ids.lock().expect("idmap poisoned"));
 
         Ok(Self {
             content,
             props,
             resources,
+            event_callback: None,
+            event_cookie: PWSTR::null(),
             device,
             ids,
             storage_wpd_ids,
             device_info,
             capabilities,
         })
+    }
+
+    /// Register the WPD event callback so the device's events flow to `event_tx`.
+    ///
+    /// Builds the [`WpdEventSink`] (sharing the device's [`IdMap`] so event handles stay resolvable),
+    /// hands WPD an interface pointer via `Advise`, and stores both the cookie (for `Unadvise` on
+    /// drop) and our own reference to the sink (so it outlives the registration). Must run on the
+    /// COM/worker thread. A failed `Advise` is logged and tolerated: the sink (and thus the sender)
+    /// is still retained, so the event channel stays open and `next_event` simply blocks.
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn register_events(&mut self, event_tx: UnboundedSender<DeviceEvent>) {
+        let sink = WpdEventSink::new(event_tx, Arc::clone(&self.ids));
+        let callback: IPortableDeviceEventCallback = ComObject::new(sink).into_interface();
+        match self
+            .device
+            .Advise(0, &callback, None::<&IPortableDeviceValues>)
+        {
+            Ok(cookie) => self.event_cookie = cookie,
+            Err(e) => eprintln!("mtp-rs: WPD event registration (Advise) failed: {}", map_hresult(e)),
+        }
+        self.event_callback = Some(callback);
     }
 
     pub(crate) fn device_info(&self) -> &DeviceInfo {
@@ -146,7 +203,7 @@ impl WpdDevice {
                 continue;
             }
             self.storage_wpd_ids.insert(wpd_id.clone());
-            let id = self.ids.storage(&wpd_id);
+            let id = self.ids.lock().expect("idmap poisoned").storage(&wpd_id);
             out.push(read_storage_info(&self.props, &wpd_id, id));
         }
         Ok(out)
@@ -159,6 +216,8 @@ impl WpdDevice {
     pub(crate) unsafe fn storage_info(&mut self, storage: StorageId) -> Result<StorageInfo, Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .storage_id(storage)
             .ok_or(Error::NotFound)?
             .to_string();
@@ -182,13 +241,20 @@ impl WpdDevice {
         let (parent_wpd, child_parent) = match parent {
             None => (
                 self.ids
+                    .lock()
+                    .expect("idmap poisoned")
                     .storage_id(storage)
                     .ok_or(Error::NotFound)?
                     .to_string(),
                 ObjectHandle::ROOT,
             ),
             Some(h) => (
-                self.ids.object_id(h).ok_or(Error::StaleHandle)?.to_string(),
+                self.ids
+                    .lock()
+                    .expect("idmap poisoned")
+                    .object_id(h)
+                    .ok_or(Error::StaleHandle)?
+                    .to_string(),
                 h,
             ),
         };
@@ -209,9 +275,11 @@ impl WpdDevice {
             let hr = enumerator.Next(&mut batch, &mut fetched);
             for item in batch.iter().take(fetched as usize) {
                 let id = take_pwstr(*item);
+                // Intern under the lock, then read properties without it (no COM under the mutex).
+                let handle = self.ids.lock().expect("idmap poisoned").object(&id);
                 out.push(read_object_info(
                     &self.props,
-                    &mut self.ids,
+                    handle,
                     &id,
                     child_parent,
                     storage,
@@ -231,6 +299,8 @@ impl WpdDevice {
     pub(crate) unsafe fn object_info(&mut self, obj: ObjectHandle) -> Result<ObjectInfo, Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -274,7 +344,7 @@ impl WpdDevice {
         let parent = if parent_id.is_empty() || self.storage_wpd_ids.contains(&parent_id) {
             ObjectHandle::ROOT
         } else {
-            self.ids.object(&parent_id)
+            self.ids.lock().expect("idmap poisoned").object(&parent_id)
         };
         let format = if folder {
             ObjectFormat::ASSOCIATION
@@ -306,6 +376,8 @@ impl WpdDevice {
     pub(crate) unsafe fn object_size(&mut self, obj: ObjectHandle) -> Result<u64, Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -326,6 +398,8 @@ impl WpdDevice {
     pub(crate) unsafe fn open_stream(&mut self, obj: ObjectHandle) -> Result<IStream, Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -354,14 +428,13 @@ impl WpdDevice {
         storage: StorageId,
         parent: Option<ObjectHandle>,
     ) -> Result<String, Error> {
+        let ids = self.ids.lock().expect("idmap poisoned");
         match parent {
-            None => self
-                .ids
+            None => ids
                 .storage_id(storage)
                 .map(str::to_string)
                 .ok_or(Error::NotFound),
-            Some(h) => self
-                .ids
+            Some(h) => ids
                 .object_id(h)
                 .map(str::to_string)
                 .ok_or(Error::StaleHandle),
@@ -374,14 +447,13 @@ impl WpdDevice {
         new_storage: StorageId,
         new_parent: ObjectHandle,
     ) -> Result<String, Error> {
+        let ids = self.ids.lock().expect("idmap poisoned");
         if new_parent == ObjectHandle::ROOT {
-            self.ids
-                .storage_id(new_storage)
+            ids.storage_id(new_storage)
                 .map(str::to_string)
                 .ok_or(Error::NotFound)
         } else {
-            self.ids
-                .object_id(new_parent)
+            ids.object_id(new_parent)
                 .map(str::to_string)
                 .ok_or(Error::StaleHandle)
         }
@@ -419,7 +491,8 @@ impl WpdDevice {
         self.content
             .CreateObjectWithPropertiesOnly(&values, &mut new_id)
             .map_err(map_hresult)?;
-        Ok(self.ids.object(&take_pwstr(new_id)))
+        let wpd_id = take_pwstr(new_id);
+        Ok(self.ids.lock().expect("idmap poisoned").object(&wpd_id))
     }
 
     /// Create the object and open its data stream for a streaming upload (no `Commit` yet).
@@ -483,7 +556,8 @@ impl WpdDevice {
         // The new object id is read from the data stream after commit.
         let data_stream: IPortableDeviceDataStream = stream.cast().map_err(map_hresult)?;
         let new_id = data_stream.GetObjectID().map_err(map_hresult)?;
-        Ok(self.ids.object(&take_pwstr(new_id)))
+        let wpd_id = take_pwstr(new_id);
+        Ok(self.ids.lock().expect("idmap poisoned").object(&wpd_id))
     }
 
     /// Find a direct child of `parent` (a storage when `None`) whose filename matches, returning its
@@ -517,6 +591,8 @@ impl WpdDevice {
     ) -> Result<IStream, Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -544,6 +620,8 @@ impl WpdDevice {
     pub(crate) unsafe fn delete(&mut self, obj: ObjectHandle) -> Result<(), Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -566,6 +644,8 @@ impl WpdDevice {
     pub(crate) unsafe fn rename(&mut self, obj: ObjectHandle, new_name: &str) -> Result<(), Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -597,6 +677,8 @@ impl WpdDevice {
     ) -> Result<(), Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -625,6 +707,8 @@ impl WpdDevice {
     ) -> Result<ObjectHandle, Error> {
         let wpd_id = self
             .ids
+            .lock()
+            .expect("idmap poisoned")
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
@@ -881,7 +965,8 @@ unsafe fn read_storage_info(
 /// driver). `supports_partial_download` is always true (we provide ranged reads via seek or the
 /// read-and-discard fallback); `supports_thumbnails` is true (the backend reads the
 /// `WPD_RESOURCE_THUMBNAIL` resource — *whether a given object has one* is resolved at call time,
-/// which is the only place WPD can answer it); events stay off for now (events are Phase 4).
+/// which is the only place WPD can answer it); `supports_events` is true (the backend registers a
+/// WPD event callback at open — see [`WpdDevice::register_events`]).
 ///
 /// # Safety
 /// COM thread only.
@@ -915,7 +1000,7 @@ unsafe fn probe_capabilities(device: &IPortableDevice) -> Capabilities {
             can_create_folder: true,
             supports_partial_download: true,
             supports_thumbnails: true,
-            supports_events: false,
+            supports_events: true,
         };
     }
 
@@ -933,6 +1018,7 @@ unsafe fn probe_capabilities(device: &IPortableDevice) -> Capabilities {
         can_create_folder: has(&WPD_COMMAND_OBJECT_MANAGEMENT_CREATE_OBJECT_WITH_PROPERTIES_ONLY),
         supports_partial_download: true,
         supports_thumbnails: true,
-        supports_events: false,
+        // The backend registers a WPD event callback (Advise) at open, so events are delivered.
+        supports_events: true,
     }
 }

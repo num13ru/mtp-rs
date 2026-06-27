@@ -24,8 +24,10 @@
 mod common;
 
 use futures::FutureExt;
-use mtp_rs::{Backend, MtpDevice, ObjectHandle, Storage};
+use mtp_rs::{Backend, DeviceEvent, MtpDevice, ObjectHandle, Storage};
 use std::panic::AssertUnwindSafe;
+use std::time::{Duration, Instant};
+use tokio::time::timeout;
 
 /// Open the real device over WPD, find `Download`, and create a fresh scoped test folder under it.
 ///
@@ -153,3 +155,68 @@ wpd_conformance!(
     "mtp-rs-conformance-thumb",
     |s, dir| { common::run_thumbnail_unsupported(s, Some(dir)) }
 );
+
+/// Device-event smoke test (Phase 4): create a folder on the device and watch for the WPD event.
+///
+/// **Tolerant by design.** Whether an Android device emits WPD events for a *host-initiated* change
+/// is device-dependent; some do, some don't. So this test never fails on a missing event — it
+/// asserts only that `next_event()` either yields an object event referencing the new folder *or*
+/// times out cleanly (no error, no hang), and prints which happened. The hard requirement is that
+/// the event plumbing doesn't error or deadlock; the device's emit behavior is reported, not asserted.
+#[tokio::test]
+#[ignore = "requires a real WPD device connected in MTP mode"]
+async fn wpd_object_added_event() {
+    let (device, storage, dir) = open_scoped("mtp-rs-conformance-events").await;
+
+    let result = AssertUnwindSafe(async {
+        // Drain any events left over from creating the scoped folder, so we only watch for ours.
+        while timeout(Duration::from_millis(500), device.next_event())
+            .await
+            .is_ok()
+        {}
+
+        // The host-initiated change we want an event for.
+        let child = storage
+            .create_folder(Some(dir), "evt-probe")
+            .await
+            .expect("create child folder to trigger an event");
+
+        // Watch up to ~5s for an object event referencing the new folder.
+        let mut observed: Option<DeviceEvent> = None;
+        let watch_until = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < watch_until && observed.is_none() {
+            match timeout(Duration::from_secs(1), device.next_event()).await {
+                Ok(Ok(ev)) => match &ev {
+                    DeviceEvent::ObjectAdded { handle }
+                    | DeviceEvent::ObjectInfoChanged { handle }
+                        if *handle == child =>
+                    {
+                        observed = Some(ev);
+                    }
+                    other => eprintln!("  (other event while waiting: {other:?})"),
+                },
+                Ok(Err(e)) => panic!("next_event errored unexpectedly: {e}"),
+                Err(_) => { /* 1s poll window elapsed; keep waiting until the 5s deadline */ }
+            }
+        }
+
+        match observed {
+            Some(ev) => println!(
+                "FINDING: the device DID emit an event for a host create_folder: {ev:?}"
+            ),
+            None => println!(
+                "FINDING: the device did NOT emit an event for a host create_folder within 5s \
+                 (tolerated — event delivery for host-initiated changes is device-dependent)"
+            ),
+        }
+    })
+    .catch_unwind()
+    .await;
+
+    if let Err(e) = storage.delete(dir).await {
+        eprintln!("cleanup: failed to delete scoped folder {dir:?}: {e} — remove it manually");
+    }
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}

@@ -15,6 +15,7 @@
 mod actor;
 mod com;
 mod consts;
+mod events;
 mod ids;
 mod props;
 
@@ -42,6 +43,10 @@ pub(crate) struct WpdBackend {
     handle: WpdHandle,
     device_info: DeviceInfo,
     capabilities: Capabilities,
+    /// Device events delivered from the WPD callback over its own (separate from the request/reply)
+    /// channel. Behind an async `Mutex` because `next_event(&self)` mutates the receiver and may be
+    /// called repeatedly; the lock is held only across one `next()` await.
+    events: futures::lock::Mutex<mpsc::UnboundedReceiver<DeviceEvent>>,
 }
 
 impl WpdBackend {
@@ -56,11 +61,12 @@ impl WpdBackend {
     }
 
     async fn spawn(spec: OpenSpec) -> Result<Self, Error> {
-        let (handle, device_info, capabilities) = WpdHandle::spawn(spec).await?;
+        let (handle, device_info, capabilities, events) = WpdHandle::spawn(spec).await?;
         Ok(Self {
             handle,
             device_info,
             capabilities,
+            events: futures::lock::Mutex::new(events),
         })
     }
 }
@@ -343,8 +349,11 @@ impl MtpBackend for WpdBackend {
     }
 
     async fn next_event(&self) -> Result<DeviceEvent, Error> {
-        // Events are Phase 4 (deferred). See docs/windows-wpd-backend-plan.md.
-        Err(Error::Unsupported)
+        // Block until the WPD callback delivers the next event. A closed channel means the worker
+        // (and its event sender) is gone, i.e. the device session ended. The caller wraps this in a
+        // timeout if it wants one; we wait indefinitely.
+        let mut events = self.events.lock().await;
+        events.next().await.ok_or(Error::Disconnected)
     }
 
     async fn close(&self) -> Result<(), Error> {

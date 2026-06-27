@@ -5,7 +5,6 @@
 //! (`GetStringValue`/`GetGuidValue`/`GetUnsignedLargeIntegerValue`) keep us out of raw `PROPVARIANT`
 //! handling, as proven in the Phase 0 spike.
 
-use crate::mtp::backend::wpd::ids::IdMap;
 use crate::mtp::{Error, ObjectFormat, ObjectHandle, ObjectInfo, StorageId};
 use std::ffi::c_void;
 
@@ -84,24 +83,25 @@ pub(crate) fn is_folder_content_type(ctype: &GUID) -> bool {
     *ctype == WPD_CONTENT_TYPE_FOLDER || *ctype == WPD_CONTENT_TYPE_FUNCTIONAL_OBJECT
 }
 
-/// Read the neutral [`ObjectInfo`] for one WPD object whose `parent`/`storage` the caller already
-/// knows (the common case while listing a known directory).
+/// Read the neutral [`ObjectInfo`] for one WPD object whose `handle`/`parent`/`storage` the caller
+/// already knows (the common case while listing a known directory).
 ///
-/// `parent` and `storage` are supplied by the caller because, while listing the children of a known
-/// directory, both are context we already have — cheaper and more reliable than re-deriving them
-/// from each child's properties. Datetimes are left `None` for now (lenient; see the plan's
-/// "per-device property variance" risk).
+/// `handle`, `parent`, and `storage` are supplied by the caller because, while listing the children
+/// of a known directory, all are context we already have — cheaper and more reliable than
+/// re-deriving them from each child's properties. The caller interns `wpd_id` into the shared
+/// [`IdMap`](super::ids::IdMap) under its lock and passes the resulting `handle` here, so this
+/// function never touches the (mutex-guarded) map while doing COM I/O. Datetimes are left `None` for
+/// now (lenient; see the plan's "per-device property variance" risk).
 ///
 /// # Safety
 /// `props` must be a live `IPortableDeviceProperties` for the open device.
 pub(crate) unsafe fn read_object_info(
     props: &IPortableDeviceProperties,
-    ids: &mut IdMap,
+    handle: ObjectHandle,
     wpd_id: &str,
     parent: ObjectHandle,
     storage: StorageId,
 ) -> ObjectInfo {
-    let handle = ids.object(wpd_id);
     let id_w = wide(wpd_id);
     let vals = props.GetValues(windows::core::PCWSTR(id_w.as_ptr()), None);
 
