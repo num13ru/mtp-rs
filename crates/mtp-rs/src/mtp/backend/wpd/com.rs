@@ -288,7 +288,15 @@ impl WpdDevice {
     }
 }
 
-/// Seek a stream to `offset` (no-op at 0).
+/// Bytes read-and-discarded per pass when falling back from an unsupported `Seek`.
+const SEEK_DISCARD_CHUNK: usize = 256 * 1024;
+
+/// Position a stream at `offset` (no-op at 0).
+///
+/// WPD resource streams are sometimes **forward-only**: `IStream::Seek` returns `E_NOTIMPL` (observed
+/// on a Pixel 9 Pro XL). When the real seek fails we fall back to reading and discarding `offset`
+/// bytes, which is correct for any forward read (a ranged/resumed download or `read_range`) at the
+/// cost of reading the skipped prefix. Verified seekable streams take the fast path.
 ///
 /// # Safety
 /// COM thread only; `stream` must be live.
@@ -296,9 +304,23 @@ pub(crate) unsafe fn stream_seek(stream: &IStream, offset: u64) -> Result<(), Er
     if offset == 0 {
         return Ok(());
     }
-    stream
-        .Seek(offset as i64, STREAM_SEEK_SET, None)
-        .map_err(map_hresult)
+    if stream.Seek(offset as i64, STREAM_SEEK_SET, None).is_ok() {
+        return Ok(());
+    }
+    // Forward-only fallback: consume `offset` bytes.
+    let mut discard = vec![0u8; SEEK_DISCARD_CHUNK];
+    let mut remaining = offset;
+    while remaining > 0 {
+        let want = (remaining as usize).min(discard.len());
+        let n = stream_read(stream, &mut discard[..want])?;
+        if n == 0 {
+            return Err(Error::invalid_data(
+                "WPD stream ended before reaching the seek offset",
+            ));
+        }
+        remaining -= n as u64;
+    }
+    Ok(())
 }
 
 /// Read up to `buf.len()` bytes; returns the number read (0 at EOF).
