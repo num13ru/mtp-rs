@@ -37,9 +37,16 @@ mod event;
 mod object;
 mod storage;
 mod stream;
+mod types;
 
 pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
 pub use event::DeviceEvent;
+// Backend-neutral high-level types (see types.rs). Not yet wired into the public method signatures
+// — that happens in the façade step; defined first so the backend trait can speak this vocabulary.
+pub use types::{
+    Capabilities, DateTime, DeviceInfo, FilesystemType, ObjectFormat, ObjectHandle, ObjectInfo,
+    StorageId, StorageInfo, StorageType,
+};
 pub use object::NewObjectInfo;
 pub use storage::{ObjectListing, Storage};
 pub use stream::{
