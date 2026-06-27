@@ -5,7 +5,17 @@
 - **Phase 0 (spike): DONE, hardware-verified.** A throwaway pure-Rust WPD spike enumerated, opened,
   listed (multi-level), and downloaded+byte/SHA-verified a file from a real Pixel 9 Pro XL on
   Windows. See "Phase 0 findings" below for the proven facts that the rest of this plan relies on.
-- Phases 1-5: not started. This document is the spec.
+- **Phase 1 (backend seam + neutral `mtp::`): DONE.** Landed on branch `feat/windows-wpd-backend`.
+  `MtpBackend` trait + `UsbBackend` (sole impl), backend-neutral `mtp::` types/errors, opaque `u64`
+  handles, three download patterns, neutral `mtp::Error` (incl. typed `StaleHandle`/`ExclusiveAccess`/
+  `PermissionDenied`), `NewObjectInfo` neutralized, `session()` dropped, `capabilities()` added,
+  upload bounds relaxed to accept borrowed streams/callbacks. `just` fully green (412 tests incl. the
+  new conformance suite); existing USB/virtual/mock behavior unchanged (quirks, partial-handle, SIC
+  cancel, recovery all preserved). Exit gate met: `mtp-rs-cli` green, and Cmdr migrated + verified
+  green (3029 default tests + 19 MTP virtual-device E2E, incl. upload-partial/cancel/stale-handle).
+  Cmdr's dep is temporarily pinned to this worktree via `path`; swap to a crates.io version when the
+  neutral API ships.
+- Phases 2-5: not started. Phase 2 (WpdBackend) is next, on Windows.
 
 Breaking changes to the public API are **in scope and expected** — the library is early-stage and the
 goal is the elegant end state, not source compatibility. The one hard constraint is **no behavioral
