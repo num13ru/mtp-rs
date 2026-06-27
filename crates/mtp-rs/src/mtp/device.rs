@@ -1,7 +1,7 @@
 //! MtpDevice - the main entry point for MTP operations.
 
 use crate::mtp::backend::usb::UsbBackend;
-use crate::mtp::backend::MtpBackend;
+use crate::mtp::backend::{Backend, MtpBackend};
 use crate::mtp::{Capabilities, DeviceEvent, DeviceInfo, Error, Storage, StorageId};
 use crate::ptp::PtpSession;
 use crate::transport::{NusbTransport, Transport};
@@ -350,6 +350,7 @@ impl MtpDeviceInfo {
 pub struct MtpDeviceBuilder {
     timeout: Duration,
     known_devices: Vec<(u16, u16)>,
+    backend: Backend,
 }
 
 impl MtpDeviceBuilder {
@@ -358,7 +359,70 @@ impl MtpDeviceBuilder {
         Self {
             timeout: NusbTransport::DEFAULT_TIMEOUT,
             known_devices: Vec::new(),
+            backend: Backend::default(),
         }
+    }
+
+    /// Choose which backend to open (default [`Backend::Auto`]).
+    ///
+    /// On Windows, `Auto` prefers WPD (for phones) and falls back to USB; pass [`Backend::Usb`] to
+    /// force PTP-over-USB to a Zadig/WinUSB-bound camera, or [`Backend::Wpd`] to force WPD.
+    #[must_use]
+    pub fn backend(mut self, backend: Backend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// If the configured backend selects WPD (Windows), try to open the first WPD device.
+    ///
+    /// Returns `Ok(None)` when WPD isn't selected, or when `Auto` found no WPD device (so the caller
+    /// falls back to USB). A forced [`Backend::Wpd`], or any non-"no device" WPD error, propagates.
+    async fn try_open_wpd_first(&self) -> Result<Option<MtpDevice>, Error> {
+        #[cfg(windows)]
+        if matches!(self.backend, Backend::Auto | Backend::Wpd) {
+            match crate::mtp::backend::wpd::WpdBackend::open_first().await {
+                Ok(b) => {
+                    return Ok(Some(MtpDevice {
+                        backend: Arc::new(b),
+                    }))
+                }
+                Err(e) if self.backend == Backend::Wpd || !matches!(e, Error::NoDevice) => {
+                    return Err(e)
+                }
+                Err(_) => {} // Auto + no WPD device: fall back to USB.
+            }
+        }
+        #[cfg(not(windows))]
+        if self.backend == Backend::Wpd {
+            return Err(Error::Unsupported);
+        }
+        Ok(None)
+    }
+
+    /// As [`try_open_wpd_first`](Self::try_open_wpd_first) but matching a serial number.
+    async fn try_open_wpd_by_serial(&self, serial: &str) -> Result<Option<MtpDevice>, Error> {
+        #[cfg(windows)]
+        if matches!(self.backend, Backend::Auto | Backend::Wpd) {
+            match crate::mtp::backend::wpd::WpdBackend::open_by_serial(serial).await {
+                Ok(b) => {
+                    return Ok(Some(MtpDevice {
+                        backend: Arc::new(b),
+                    }))
+                }
+                Err(e) if self.backend == Backend::Wpd || !matches!(e, Error::NoDevice) => {
+                    return Err(e)
+                }
+                Err(_) => {}
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = serial;
+            if self.backend == Backend::Wpd {
+                return Err(Error::Unsupported);
+            }
+        }
+        Ok(None)
     }
 
     /// Set bulk transfer timeout (default: 30 seconds).
@@ -390,6 +454,9 @@ impl MtpDeviceBuilder {
 
     /// Open the first available device.
     pub async fn open_first(self) -> Result<MtpDevice, Error> {
+        if let Some(device) = self.try_open_wpd_first().await? {
+            return Ok(device);
+        }
         let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
         let device_info = devices
             .into_iter()
@@ -431,6 +498,10 @@ impl MtpDeviceBuilder {
             crate::transport::virtual_device::registry::find_virtual_config_by_serial(serial)
         {
             return self.open_virtual(config).await;
+        }
+
+        if let Some(device) = self.try_open_wpd_by_serial(serial).await? {
+            return Ok(device);
         }
 
         let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;

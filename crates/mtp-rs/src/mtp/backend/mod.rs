@@ -13,6 +13,9 @@
 
 pub(crate) mod usb;
 
+#[cfg(windows)]
+pub(crate) mod wpd;
+
 use crate::cancel::CancelToken;
 use crate::mtp::object::NewObjectInfo;
 use crate::mtp::stream::Progress;
@@ -26,6 +29,23 @@ use futures::Stream;
 use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::time::Duration;
+
+/// Selects which backend [`MtpDeviceBuilder`](crate::mtp::MtpDeviceBuilder) opens.
+///
+/// `Auto` (the default) picks per platform: on Windows it prefers the WPD backend (phones are bound
+/// to the WPD driver, not WinUSB), falling back to PTP-over-USB only if no WPD device is present;
+/// on other platforms it uses USB. `Usb` forces PTP-over-USB (e.g. a Zadig/WinUSB-bound camera on
+/// Windows); `Wpd` forces Windows WPD-over-COM (and errors as unsupported off Windows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Backend {
+    /// Platform default: Windows → WPD then USB; elsewhere → USB.
+    #[default]
+    Auto,
+    /// Force PTP-over-USB.
+    Usb,
+    /// Force Windows WPD-over-COM.
+    Wpd,
+}
 
 /// Which bytes of an object a download should cover.
 ///

@@ -41,7 +41,7 @@ mod storage;
 mod stream;
 mod types;
 
-pub use backend::ByteRange;
+pub use backend::{Backend, ByteRange};
 pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
 pub use error::{Error, UploadError};
 pub use event::DeviceEvent;
