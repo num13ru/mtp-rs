@@ -93,12 +93,12 @@ fn select_storage(mut storages: Vec<Storage>, selection: &str) -> Result<Storage
     Ok(storages.remove(index))
 }
 
-fn parse_storage_id(selection: &str) -> Result<u32, CliError> {
+fn parse_storage_id(selection: &str) -> Result<u64, CliError> {
     if let Some(hex) = selection
         .strip_prefix("0x")
         .or_else(|| selection.strip_prefix("0X"))
     {
-        return u32::from_str_radix(hex, 16)
+        return u64::from_str_radix(hex, 16)
             .map_err(|_| CliError::new(CliErrorKind::RemotePath, "invalid storage ID"));
     }
 
@@ -106,11 +106,11 @@ fn parse_storage_id(selection: &str) -> Result<u32, CliError> {
         .chars()
         .any(|c| matches!(c, 'a'..='f' | 'A'..='F'))
     {
-        return u32::from_str_radix(selection, 16)
+        return u64::from_str_radix(selection, 16)
             .map_err(|_| CliError::new(CliErrorKind::RemotePath, "invalid storage ID"));
     }
 
     selection
-        .parse::<u32>()
+        .parse::<u64>()
         .map_err(|_| CliError::new(CliErrorKind::RemotePath, "invalid storage selection"))
 }

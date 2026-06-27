@@ -16,7 +16,7 @@ struct MoveRow {
     source_path: String,
     destination_path: String,
     filename: String,
-    handle: u32,
+    handle: u64,
     kind: &'static str,
     replaced: bool,
     renamed: bool,

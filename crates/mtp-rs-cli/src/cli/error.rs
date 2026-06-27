@@ -1,4 +1,4 @@
-use mtp_rs::{Error, ResponseCode};
+use mtp_rs::Error;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,14 +79,43 @@ impl CliError {
                 Error::Timeout => {
                     Self::new(CliErrorKind::Transfer, format!("{context}: timed out"))
                 }
+                Error::Busy => Self::new(
+                    CliErrorKind::Transfer,
+                    format!("{context}: device busy, try again"),
+                ),
                 Error::Disconnected => Self::new(
                     CliErrorKind::Transfer,
                     format!("{context}: device disconnected"),
                 ),
-                Error::Protocol { code, .. } => protocol_error(context, *code),
-                Error::Io(io) => {
-                    Self::new(CliErrorKind::Other, format!("{context}: I/O error: {io}"))
+                // A re-keyed/invalid handle or parent: the remote path no longer
+                // resolves to the object the host cached.
+                Error::StaleHandle | Error::NotFound => Self::new(
+                    CliErrorKind::RemotePath,
+                    format!("{context}: remote path not found"),
+                ),
+                Error::StorageFull => Self::new(
+                    CliErrorKind::Transfer,
+                    format!("{context}: storage is full"),
+                ),
+                Error::AccessDenied => Self::new(
+                    CliErrorKind::AccessDenied,
+                    format!("{context}: storage is read-only or access denied"),
+                ),
+                Error::Unsupported => Self::new(
+                    CliErrorKind::Other,
+                    format!("{context}: operation not supported by this device"),
+                ),
+                Error::Cancelled => {
+                    Self::new(CliErrorKind::Transfer, format!("{context}: cancelled"))
                 }
+                Error::InvalidData { message } => Self::new(
+                    CliErrorKind::Transfer,
+                    format!("{context}: invalid data: {message}"),
+                ),
+                Error::Io { message } => Self::new(
+                    CliErrorKind::Other,
+                    format!("{context}: I/O error: {message}"),
+                ),
                 _ => Self::new(CliErrorKind::Other, format!("{context}: {error}")),
             }
         };
@@ -119,35 +148,6 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-fn protocol_error(context: &str, code: ResponseCode) -> CliError {
-    match code {
-        ResponseCode::InvalidObjectHandle | ResponseCode::InvalidParentObject => CliError::new(
-            CliErrorKind::RemotePath,
-            format!("{context}: remote path not found"),
-        ),
-        ResponseCode::InvalidStorageId => CliError::new(
-            CliErrorKind::RemotePath,
-            format!("{context}: invalid storage"),
-        ),
-        ResponseCode::StoreFull => CliError::new(
-            CliErrorKind::Transfer,
-            format!("{context}: storage is full"),
-        ),
-        ResponseCode::StoreReadOnly | ResponseCode::ObjectWriteProtected => CliError::new(
-            CliErrorKind::AccessDenied,
-            format!("{context}: storage is read-only"),
-        ),
-        ResponseCode::AccessDenied => CliError::new(
-            CliErrorKind::AccessDenied,
-            format!("{context}: access denied"),
-        ),
-        _ => CliError::new(
-            CliErrorKind::Transfer,
-            format!("{context}: protocol error {code:?}"),
-        ),
-    }
-}
-
 fn exclusive_access_help() -> &'static str {
     "Close other applications that may own the USB device, such as Photos, Android File Transfer, Garmin Express, or another file manager."
 }
@@ -159,14 +159,11 @@ fn macos_usb_user_client_help() -> &'static str {
 fn is_macos_usb_user_client_denied(error: &Error) -> bool {
     #[cfg(target_os = "macos")]
     {
-        const K_IO_RETURN_NO_RESOURCES: u32 = 0xe00002be;
+        // The neutral error folds USB faults into `Io { message }`, keeping the
+        // underlying nusb message text. The IOKit user-client denial surfaces as
+        // a failure to create the IOKit PlugInInterface, so match on that text.
         match error {
-            Error::Usb(usb) => {
-                usb.os_error() == Some(K_IO_RETURN_NO_RESOURCES)
-                    && usb
-                        .to_string()
-                        .contains("failed to create IOKit PlugInInterface")
-            }
+            Error::Io { message } => message.contains("failed to create IOKit PlugInInterface"),
             _ => false,
         }
     }

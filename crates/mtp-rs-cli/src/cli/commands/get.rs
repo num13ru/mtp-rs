@@ -15,7 +15,7 @@ struct GetRow {
     remote_path: String,
     local_path: String,
     filename: String,
-    handle: u32,
+    handle: u64,
     bytes: u64,
 }
 
@@ -49,7 +49,7 @@ pub async fn run(cli: &Cli, args: &GetArgs) -> Result<(), CliError> {
     };
 
     let mut download = storage
-        .download_stream(object.handle)
+        .download(object.handle, mtp_rs::ByteRange::Full)
         .await
         .map_err(|e| CliError::from_mtp("start download", e, cli.verbose))?;
     let temp_path = temp_download_path(&args.local_path);

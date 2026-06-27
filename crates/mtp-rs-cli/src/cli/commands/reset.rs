@@ -38,7 +38,7 @@ pub async fn run(cli: &Cli) -> Result<(), CliError> {
         PtpDevice::open_by_location_with_timeout(location, timeout).await
     } else {
         let devices = NusbTransport::list_mtp_devices()
-            .map_err(|e| CliError::from_mtp("list devices", e, cli.verbose))?;
+            .map_err(|e| CliError::from_mtp("list devices", e.into(), cli.verbose))?;
         match devices.as_slice() {
             [] => {
                 return Err(CliError::new(CliErrorKind::NoDevice, "no MTP device found"));
@@ -52,12 +52,12 @@ pub async fn run(cli: &Cli) -> Result<(), CliError> {
             }
         }
     }
-    .map_err(|e| CliError::from_mtp("open device", e, cli.verbose))?;
+    .map_err(|e| CliError::from_mtp("open device", e.into(), cli.verbose))?;
 
     device
         .reset_device()
         .await
-        .map_err(|e| CliError::from_mtp("reset device", e, cli.verbose))?;
+        .map_err(|e| CliError::from_mtp("reset device", e.into(), cli.verbose))?;
 
     // Verify with a session-less GetDeviceInfo; a device that answers this is
     // back in business. Failure here is informational, not an error: some

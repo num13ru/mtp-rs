@@ -2,7 +2,7 @@
 //! multiple commands and the JSON / progress writers.
 
 use mtp_rs::mtp::{MtpDeviceInfo, Storage};
-use mtp_rs::ptp::ObjectInfo;
+use mtp_rs::ObjectInfo;
 use serde::Serialize;
 use std::io::Write;
 
@@ -64,7 +64,7 @@ impl From<&MtpDeviceInfo> for DeviceRow {
 pub struct StorageRow {
     pub index: usize,
     pub id: String,
-    pub id_raw: u32,
+    pub id_raw: u64,
     pub description: String,
     pub volume_identifier: String,
     pub max_capacity: u64,
@@ -82,9 +82,13 @@ impl StorageRow {
             id_raw: storage.id().0,
             description: storage.info().description.clone(),
             volume_identifier: storage.info().volume_identifier.clone(),
-            max_capacity: storage.info().max_capacity,
-            free_space_bytes: storage.info().free_space_bytes,
-            access_capability: format!("{:?}", storage.info().access_capability),
+            max_capacity: storage.info().total_capacity,
+            free_space_bytes: storage.info().free_space,
+            access_capability: if storage.info().is_writable {
+                "ReadWrite".to_string()
+            } else {
+                "ReadOnly".to_string()
+            },
             storage_type: format!("{:?}", storage.info().storage_type),
             filesystem_type: format!("{:?}", storage.info().filesystem_type),
         }
@@ -93,9 +97,9 @@ impl StorageRow {
 
 #[derive(Debug, Serialize)]
 pub struct ObjectRow {
-    pub handle: u32,
-    pub storage_id: u32,
-    pub parent: u32,
+    pub handle: u64,
+    pub storage_id: u64,
+    pub parent: u64,
     pub filename: String,
     pub kind: String,
     pub size: u64,
@@ -111,7 +115,7 @@ impl From<&ObjectInfo> for ObjectRow {
             filename: info.filename.clone(),
             kind: if info.is_folder() { "folder" } else { "file" }.to_string(),
             size: info.size,
-            format: format!("{:?}", info.format),
+            format: format!("{:#06x}", info.format.code()),
         }
     }
 }

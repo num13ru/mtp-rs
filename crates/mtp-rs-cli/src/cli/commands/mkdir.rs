@@ -12,7 +12,7 @@ struct MkdirRow {
     operation: &'static str,
     remote_path: String,
     filename: String,
-    handle: u32,
+    handle: u64,
 }
 
 pub async fn run(cli: &Cli, args: &RemotePathArg) -> Result<(), CliError> {

@@ -22,7 +22,7 @@ struct PutRow {
     local_path: String,
     remote_path: String,
     filename: String,
-    handle: u32,
+    handle: u64,
     bytes: u64,
     replaced: bool,
     verified: bool,
@@ -73,7 +73,7 @@ pub async fn run(cli: &Cli, args: &PutArgs) -> Result<(), CliError> {
     let info = NewObjectInfo::file(target.filename.clone(), total_size);
     let mut last_percent = 101u64;
     let handle = match storage
-        .upload_with_progress(target.parent, info, stream, |progress| {
+        .upload_with_progress(target.parent, info, stream, move |progress| {
             print_progress(
                 "upload",
                 progress.bytes_transferred,
@@ -147,7 +147,7 @@ async fn verify_remote_matches_local(
     verbose: bool,
 ) -> Result<(), CliError> {
     let mut remote = storage
-        .download_stream(handle)
+        .download(handle, mtp_rs::ByteRange::Full)
         .await
         .map_err(|e| CliError::from_mtp("verify download", e, verbose))?;
     let mut local = tokio::fs::File::open(local_path)

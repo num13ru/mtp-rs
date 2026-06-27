@@ -15,7 +15,7 @@ struct RenameRow {
     remote_path: String,
     old_name: String,
     new_name: String,
-    handle: u32,
+    handle: u64,
     kind: &'static str,
 }
 

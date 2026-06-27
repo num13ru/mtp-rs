@@ -11,7 +11,7 @@ struct RmRow {
     operation: &'static str,
     remote_path: String,
     filename: String,
-    handle: u32,
+    handle: u64,
     kind: &'static str,
 }
 

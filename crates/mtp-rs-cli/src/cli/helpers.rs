@@ -5,8 +5,7 @@
 //! adapter) stay in their own file.
 
 use mtp_rs::mtp::Storage;
-use mtp_rs::ptp::ObjectInfo;
-use mtp_rs::{MtpDevice, ObjectHandle};
+use mtp_rs::{MtpDevice, ObjectHandle, ObjectInfo};
 
 use super::error::{CliError, CliErrorKind};
 use super::path::{self, ExistingRemote, RemotePath, UploadTarget};

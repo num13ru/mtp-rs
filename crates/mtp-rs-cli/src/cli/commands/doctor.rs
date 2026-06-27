@@ -90,11 +90,15 @@ pub async fn run(cli: &Cli) -> Result<(), CliError> {
     for (index, storage) in storages.iter().enumerate() {
         if !cli.json {
             println!(
-                "  [{}] {} free={} access={:?}",
+                "  [{}] {} free={} access={}",
                 index,
                 storage.info().description,
-                storage.info().free_space_bytes,
-                storage.info().access_capability
+                storage.info().free_space,
+                if storage.info().is_writable {
+                    "ReadWrite"
+                } else {
+                    "ReadOnly"
+                }
             );
         }
         let root = storage

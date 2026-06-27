@@ -1,6 +1,5 @@
 use super::error::{CliError, CliErrorKind};
-use mtp_rs::ptp::ObjectInfo;
-use mtp_rs::{ObjectHandle, Storage};
+use mtp_rs::{ObjectHandle, ObjectInfo, Storage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePath {
