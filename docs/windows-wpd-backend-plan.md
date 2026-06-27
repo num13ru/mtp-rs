@@ -124,8 +124,10 @@ pub(crate) trait MtpBackend: Send + Sync {
         -> Result<ObjectListing>;                  // streaming, cancellable
     async fn object_info(&self, obj: ObjectHandle) -> Result<ObjectInfo>;
 
-    // One ranged primitive subsumes today's 5 download variants (see "Download consolidation").
+    // Two download primitives (see "Download consolidation"): streaming + single-shot range.
+    // download_to_vec and WindowedDownload are façade conveniences over read_range.
     async fn download(&self, obj: ObjectHandle, range: ByteRange) -> Result<FileDownload>;
+    async fn read_range(&self, obj: ObjectHandle, offset: u64, len: Option<u64>) -> Result<Vec<u8>>;
     async fn thumbnail(&self, obj: ObjectHandle) -> Result<Vec<u8>>;
 
     async fn upload(&self, parent: ObjectHandle, info: NewObjectInfo,
@@ -176,24 +178,81 @@ in terms of these primitives, so both backends get them for free.
 8. **Honest platform docs.** `ptp::` is the USB-PTP API: on Windows it only reaches WinUSB-bound
    devices (cameras, or Zadig); phones bound to the WPD driver are reached through `mtp::`/WPD.
 
-### Download consolidation
+### Download consolidation (corrected after consumer mapping)
 
-Today's `download` / `download_partial` / `download_partial_64` / `download_stream` /
-`download_stream_from_offset` collapse into **one** ranged streaming primitive:
+There are not 5 but ~9 download entry points today, and they fall into **three genuinely distinct
+patterns** that the real consumers depend on — so the consolidation merges *within* each pattern, it
+does **not** flatten them into one:
 
 ```rust
 enum ByteRange { Full, From(u64), Range { offset: u64, len: u64 } }
-async fn download(&self, obj, range) -> Result<FileDownload>;
 ```
 
-- `Full` = whole file (UsbBackend: `GetObject`; WpdBackend: `IStream` from 0).
-- `From(offset)` = resume (UsbBackend: `GetPartialObject64`; WpdBackend: `IStream::Seek`).
-- `Range { .. }` = bounded slice.
-- `download_to_vec(obj)` is a façade convenience = `download(obj, Full)` collected.
-- `FileDownload` keeps reporting the **full** object size (resume-friendly progress), as today.
+1. **Streaming, holds the session** — `download(&self, obj, ByteRange) -> FileDownload`. Subsumes
+   `download_stream` + `download_stream_from_offset`. The **CLI** uses this (`get`, `put --verify`).
+   UsbBackend: `GetObject` / `GetPartialObject64`; WpdBackend: `IStream` (+ `Seek` for offset).
+2. **Windowed, releases the session between windows** — `download_windowed(&self, obj, ByteRange,
+   window_size) -> WindowedDownload`, pulled via `next_window()`. Subsumes
+   `download_windowed` / `download_windowed_from_offset` / `download_windowed_default`. **Cmdr's
+   primary download path** (`file_ops.rs`). This is the real suspend/resume mechanism: each window is
+   one bounded read and the device is listable between windows. Must be preserved. UsbBackend:
+   `GetPartialObject64` per window; WpdBackend: bounded `IStream` reads (no exclusive session to
+   release, but the same chunked-pull shape holds).
+3. **Buffered convenience** — `download_to_vec(&self, obj, ByteRange) -> Vec<u8>`. Subsumes
+   `download` + `download_partial` + `download_partial_64`. Plus `thumbnail(&self, obj) -> Vec<u8>`.
 
-The resumable-session use case (cancel mid-download to free the device for listing, then resume from
-offset) is preserved: it is `download(obj, From(kept))` after a `cancel()`.
+The backend trait exposes two primitives — a streaming `download(obj, range)` and a single-shot
+`read_range(obj, offset, len) -> Vec<u8>`; `download_to_vec` and `WindowedDownload` both build on
+`read_range`, so each backend implements the minimum. `FileDownload`/`WindowedDownload` keep
+reporting the **full** object size (resume-friendly progress), as today.
+
+### Neutral type surface (sized after consumer mapping)
+
+Backend neutrality requires `mtp::` to own these types (today they are `ptp::` types leaked through
+re-export or return values). Each gets `From`/`Into` conversions from the `ptp::` equivalents so
+`UsbBackend` converts only at its boundary:
+
+- `mtp::ObjectHandle`, `mtp::StorageId` — opaque `Copy` `u64` tokens (see move #2). Keep the `ROOT`
+  / `ALL` sentinels consumers rely on.
+- `mtp::ObjectInfo` — keep the fields/helpers consumers use (`handle`, `storage_id`, `parent`,
+  `filename`, `size`, `created`/`modified`, `is_folder()`/`is_file()`), with a **neutral**
+  `format: ObjectFormat` instead of `ptp::ObjectFormatCode`.
+- `mtp::ObjectFormat` — neutral format enum (folder/image/audio/video/other + raw code escape
+  hatch). WPD exposes MTP format codes, so the mapping is shared.
+- `mtp::DeviceInfo` — small neutral struct: `manufacturer`, `model`, `serial_number`,
+  `device_version`. Capability/operation lists do **not** belong here (WPD can't fill them).
+- `mtp::StorageInfo` — `total_capacity`, `free_space`, `description`, `volume_identifier`,
+  `is_writable` (+ neutral `StorageType` if needed). Replaces the leaked `AccessCapability`/
+  `StorageType`/`FilesystemType` enums consumers match on.
+- `mtp::DateTime` — neutral Y/M/D H:M:S (the `ptp::` one is already backend-neutral in spirit; lift
+  it). Cmdr converts it; keep the same fields.
+
+`ptp::` keeps all of the above in their PTP-specific forms for low-level/camera users. The reset path
+(`ptp::PtpDevice` + `transport::NusbTransport`, used by the CLI's `reset`) stays public and untouched.
+
+### Consumer blast radius (Phase 1 exit gate)
+
+Both first-party consumers must compile and pass against the new API before Phase 1 lands:
+
+- **`mtp-rs-cli`**: prints `handle.0`/`storage_id.0` in JSON (`output.rs`, command rows) and parses a
+  storage id from a string (`device.rs`) — opaque `u64` still prints/parses fine, but the inner
+  accessor changes. Matches `Error` + `ResponseCode` variants (`error.rs`), uses `supports_rename()`,
+  `download_stream`, `upload_with_progress`, `ObjectInfo` fields, `MtpDeviceInfo`. No `session()` /
+  `is_android()` use. Isolated `ptp::`/`transport::` use in `reset.rs` is unaffected.
+- **Cmdr** (`apps/desktop/src-tauri`, currently pins published `mtp-rs = "0.22.0"`): ~15 files,
+  ~100+ sites. Heaviest: `connection/errors.rs` (full `Error`+`ResponseCode` match — rewrite against
+  neutral `Error`), `connection/file_ops.rs` (windowed download + upload + `handle.0` wire
+  serialization), handle/id construction across `*_ops.rs`, `ObjectFormatCode::Association` directory
+  checks, `AccessCapability::ReadWrite`. No `session()` use. **During Phase 1, repoint Cmdr's
+  dependency to a local `path`/branch** to validate, then back to a version on release.
+
+### Cross-process handle stability (note for Phase 2)
+
+The CLI is one process per command, so any id it prints and later accepts (storage selection) must be
+**stable across sessions**. For `UsbBackend` the opaque token equals the real PTP id (stable) — no
+issue in Phase 1. For `WpdBackend`, derive the token deterministically from the WPD string id (stable
+per device) rather than a per-session counter, or have the CLI address by path across invocations.
+Resolved in Phase 2; flagged here so the token scheme is chosen with this in mind.
 
 ### Streaming types
 
