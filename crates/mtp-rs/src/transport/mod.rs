@@ -24,7 +24,7 @@ pub type BulkStream<'a> = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error
 #[async_trait]
 pub trait Transport: Send + Sync {
     /// Send data on the bulk OUT endpoint.
-    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error>;
+    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::PtpError>;
 
     /// Send data as a continuous bulk transfer from a stream of chunks.
     ///
@@ -34,12 +34,12 @@ pub trait Transport: Send + Sync {
     ///
     /// The default implementation collects all chunks and calls `send_bulk`.
     /// USB transports should override this to use native streaming writes.
-    async fn send_bulk_streaming(&self, chunks: BulkStream<'_>) -> Result<(), crate::Error> {
+    async fn send_bulk_streaming(&self, chunks: BulkStream<'_>) -> Result<(), crate::PtpError> {
         use futures::StreamExt;
         let mut buffer = Vec::new();
         let mut stream = chunks;
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(crate::Error::Io)?;
+            let chunk = chunk_result.map_err(crate::PtpError::Io)?;
             buffer.extend_from_slice(&chunk);
         }
         self.send_bulk(&buffer).await
@@ -48,12 +48,12 @@ pub trait Transport: Send + Sync {
     /// Receive data from the bulk IN endpoint.
     ///
     /// `max_size` is the maximum bytes to receive in one call.
-    async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, crate::Error>;
+    async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, crate::PtpError>;
 
     /// Receive event data from the interrupt IN endpoint.
     ///
     /// This may block until an event is available.
-    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error>;
+    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::PtpError>;
 
     /// Cancel an in-progress transfer using the USB Still Image Class mechanism.
     ///
@@ -68,7 +68,7 @@ pub trait Transport: Send + Sync {
         &self,
         transaction_id: u32,
         idle_timeout: Duration,
-    ) -> Result<(), crate::Error>;
+    ) -> Result<(), crate::PtpError>;
 
     /// Reset the device to its idle state using the USB Still Image Class
     /// Device Reset request (`bRequest=0x66`), then clear stale transport
@@ -82,7 +82,7 @@ pub trait Transport: Send + Sync {
     ///
     /// The default implementation is a no-op success for transports that
     /// have no USB-level state (mock, virtual device).
-    async fn reset_device(&self) -> Result<(), crate::Error> {
+    async fn reset_device(&self) -> Result<(), crate::PtpError> {
         Ok(())
     }
 }

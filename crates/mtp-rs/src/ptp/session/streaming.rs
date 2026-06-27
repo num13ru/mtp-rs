@@ -9,7 +9,7 @@ use crate::ptp::{
     OperationCode, ResponseCode, ResponseContainer,
 };
 use crate::transport::Transport;
-use crate::Error;
+use crate::PtpError as Error;
 use bytes::Bytes;
 use futures::lock::OwnedMutexGuard;
 use futures::Stream;
@@ -629,7 +629,7 @@ mod tests {
         mock.queue_response(data_container(1, OperationCode::GetObject, &file_data));
 
         // Queue a cancel failure
-        mock.queue_cancel_result(Err(crate::Error::Disconnected));
+        mock.queue_cancel_result(Err(crate::PtpError::Disconnected));
 
         let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
         let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();

@@ -26,7 +26,7 @@
 //! for storage in device.storages().await? {
 //!     println!("Storage: {} ({} free)",
 //!              storage.info().description,
-//!              storage.info().free_space_bytes);
+//!              storage.info().free_space);
 //!
 //!     // List root folder
 //!     for obj in storage.list_objects(None).await? {
@@ -45,19 +45,23 @@ pub mod ptp;
 pub mod transport;
 
 pub use cancel::CancelToken;
-pub use error::{Error, UploadError};
 
-// Re-export core types for convenience
-pub use ptp::{
-    receive_stream_to_stream, DateTime, EventCode, ObjectFormatCode, ObjectHandle, OperationCode,
-    ReceiveStream, ResponseCode, SessionId, StorageId, TransactionId,
-};
+// The crate root surfaces the backend-neutral high-level API. `Error` is the neutral
+// `mtp::Error`; the rich low-level PTP error stays available as `PtpError` (and under `ptp::`).
+pub use error::PtpError;
+pub use mtp::{Error, UploadError};
 
-// Re-export high-level MTP types
+// Backend-neutral high-level types (the default vocabulary for `mtp::`).
 pub use mtp::{
-    DeviceEvent, FileDownload, MtpDevice, MtpDeviceBuilder, NewObjectInfo, ObjectListing, Progress,
-    Storage, WindowedDownload, DEFAULT_CANCEL_TIMEOUT, DEFAULT_DOWNLOAD_WINDOW,
+    ByteRange, Capabilities, DateTime, DeviceEvent, DeviceInfo, FileDownload, MtpDevice,
+    MtpDeviceBuilder, NewObjectInfo, ObjectFormat, ObjectHandle, ObjectInfo, ObjectListing,
+    Progress, Storage, StorageId, StorageInfo, WindowedDownload, DEFAULT_CANCEL_TIMEOUT,
+    DEFAULT_DOWNLOAD_WINDOW,
 };
+
+// Low-level PTP escape hatch for cameras / protocol work. These keep their PTP-specific
+// shapes; reach for them via `ptp::` when the neutral surface isn't enough.
+pub use ptp::{receive_stream_to_stream, EventCode, OperationCode, ReceiveStream, ResponseCode};
 
 // Re-export USB speed enum for callers that want to surface link speed (e.g. for UI).
 pub use transport::UsbSpeed;

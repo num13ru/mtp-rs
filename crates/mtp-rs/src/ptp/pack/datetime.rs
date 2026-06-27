@@ -152,9 +152,9 @@ impl DateTime {
 /// Pack a DateTime into MTP string format.
 ///
 /// Returns an error if the DateTime contains invalid values.
-pub fn pack_datetime(dt: &DateTime) -> Result<Vec<u8>, crate::Error> {
+pub fn pack_datetime(dt: &DateTime) -> Result<Vec<u8>, crate::PtpError> {
     let formatted = dt.format().ok_or_else(|| {
-        crate::Error::invalid_data(format!(
+        crate::PtpError::invalid_data(format!(
             "invalid DateTime: year={}, month={}, day={}, hour={}, minute={}, second={}",
             dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
         ))
@@ -174,7 +174,7 @@ pub fn pack_datetime(dt: &DateTime) -> Result<Vec<u8>, crate::Error> {
 /// error here would fail the whole `ObjectInfo` parse and with it the whole
 /// listing (issue #12). The string itself was already length-prefixed and
 /// consumed correctly, so only its interpretation is skipped.
-pub fn unpack_datetime(buf: &[u8]) -> Result<(Option<DateTime>, usize), crate::Error> {
+pub fn unpack_datetime(buf: &[u8]) -> Result<(Option<DateTime>, usize), crate::PtpError> {
     let (s, consumed) = unpack_string(buf)?;
     Ok((DateTime::parse(&s), consumed))
 }

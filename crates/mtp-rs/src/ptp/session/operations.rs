@@ -7,7 +7,7 @@ use crate::ptp::{
     pack_string, unpack_u32_array, unpack_u64, DeviceInfo, EventContainer, ObjectFormatCode,
     ObjectHandle, ObjectInfo, ObjectPropertyCode, OperationCode, StorageId, StorageInfo,
 };
-use crate::Error;
+use crate::PtpError as Error;
 
 use super::PtpSession;
 
@@ -393,10 +393,9 @@ impl PtpSession {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mtp_rs::ptp::{PtpDevice, EventCode};
-    /// use mtp_rs::{StorageId, ObjectFormatCode};
+    /// use mtp_rs::ptp::{EventCode, ObjectFormatCode, PtpDevice, StorageId};
     ///
-    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// # async fn example() -> Result<(), mtp_rs::PtpError> {
     /// # let device = PtpDevice::open_first().await?;
     /// # let session = device.open_session().await?;
     /// // Trigger capture
@@ -702,7 +701,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::Error::Protocol {
+            Err(crate::PtpError::Protocol {
                 code: ResponseCode::OperationNotSupported,
                 ..
             })
@@ -737,7 +736,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::Error::Protocol {
+            Err(crate::PtpError::Protocol {
                 code: ResponseCode::OperationNotSupported,
                 ..
             })
@@ -789,7 +788,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::Error::Protocol {
+            Err(crate::PtpError::Protocol {
                 code: ResponseCode::OperationNotSupported,
                 ..
             })

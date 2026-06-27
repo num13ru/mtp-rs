@@ -59,9 +59,9 @@ pub fn pack_i64(val: i64) -> [u8; 8] {
 // --- Primitive unpacking functions ---
 
 /// Unpack a u8 value from a buffer.
-pub fn unpack_u8(buf: &[u8]) -> Result<u8, crate::Error> {
+pub fn unpack_u8(buf: &[u8]) -> Result<u8, crate::PtpError> {
     if buf.is_empty() {
-        return Err(crate::Error::invalid_data(
+        return Err(crate::PtpError::invalid_data(
             "insufficient bytes for u8: need 1, have 0",
         ));
     }
@@ -69,9 +69,9 @@ pub fn unpack_u8(buf: &[u8]) -> Result<u8, crate::Error> {
 }
 
 /// Unpack a u16 value from a buffer (little-endian).
-pub fn unpack_u16(buf: &[u8]) -> Result<u16, crate::Error> {
+pub fn unpack_u16(buf: &[u8]) -> Result<u16, crate::PtpError> {
     if buf.len() < 2 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for u16: need 2, have {}",
             buf.len()
         )));
@@ -80,9 +80,9 @@ pub fn unpack_u16(buf: &[u8]) -> Result<u16, crate::Error> {
 }
 
 /// Unpack a u32 value from a buffer (little-endian).
-pub fn unpack_u32(buf: &[u8]) -> Result<u32, crate::Error> {
+pub fn unpack_u32(buf: &[u8]) -> Result<u32, crate::PtpError> {
     if buf.len() < 4 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for u32: need 4, have {}",
             buf.len()
         )));
@@ -91,9 +91,9 @@ pub fn unpack_u32(buf: &[u8]) -> Result<u32, crate::Error> {
 }
 
 /// Unpack a u64 value from a buffer (little-endian).
-pub fn unpack_u64(buf: &[u8]) -> Result<u64, crate::Error> {
+pub fn unpack_u64(buf: &[u8]) -> Result<u64, crate::PtpError> {
     if buf.len() < 8 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for u64: need 8, have {}",
             buf.len()
         )));
@@ -104,9 +104,9 @@ pub fn unpack_u64(buf: &[u8]) -> Result<u64, crate::Error> {
 }
 
 /// Unpack a signed 8-bit integer from a buffer.
-pub fn unpack_i8(buf: &[u8]) -> Result<i8, crate::Error> {
+pub fn unpack_i8(buf: &[u8]) -> Result<i8, crate::PtpError> {
     if buf.is_empty() {
-        return Err(crate::Error::invalid_data(
+        return Err(crate::PtpError::invalid_data(
             "insufficient bytes for i8: need 1, have 0",
         ));
     }
@@ -114,9 +114,9 @@ pub fn unpack_i8(buf: &[u8]) -> Result<i8, crate::Error> {
 }
 
 /// Unpack a signed 16-bit integer from a buffer (little-endian).
-pub fn unpack_i16(buf: &[u8]) -> Result<i16, crate::Error> {
+pub fn unpack_i16(buf: &[u8]) -> Result<i16, crate::PtpError> {
     if buf.len() < 2 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for i16: need 2, have {}",
             buf.len()
         )));
@@ -125,9 +125,9 @@ pub fn unpack_i16(buf: &[u8]) -> Result<i16, crate::Error> {
 }
 
 /// Unpack a signed 32-bit integer from a buffer (little-endian).
-pub fn unpack_i32(buf: &[u8]) -> Result<i32, crate::Error> {
+pub fn unpack_i32(buf: &[u8]) -> Result<i32, crate::PtpError> {
     if buf.len() < 4 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for i32: need 4, have {}",
             buf.len()
         )));
@@ -136,9 +136,9 @@ pub fn unpack_i32(buf: &[u8]) -> Result<i32, crate::Error> {
 }
 
 /// Unpack a signed 64-bit integer from a buffer (little-endian).
-pub fn unpack_i64(buf: &[u8]) -> Result<i64, crate::Error> {
+pub fn unpack_i64(buf: &[u8]) -> Result<i64, crate::PtpError> {
     if buf.len() < 8 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for i64: need 8, have {}",
             buf.len()
         )));
@@ -189,9 +189,9 @@ pub fn pack_string(s: &str) -> Vec<u8> {
 /// Unpack an MTP string from a buffer.
 ///
 /// Returns the decoded string and the number of bytes consumed.
-pub fn unpack_string(buf: &[u8]) -> Result<(String, usize), crate::Error> {
+pub fn unpack_string(buf: &[u8]) -> Result<(String, usize), crate::PtpError> {
     if buf.is_empty() {
-        return Err(crate::Error::invalid_data(
+        return Err(crate::PtpError::invalid_data(
             "insufficient bytes for string length",
         ));
     }
@@ -206,7 +206,7 @@ pub fn unpack_string(buf: &[u8]) -> Result<(String, usize), crate::Error> {
     // Calculate required bytes: 1 (length) + len * 2 (UTF-16 code units)
     let required = 1 + len * 2;
     if buf.len() < required {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for string: need {}, have {}",
             required,
             buf.len()
@@ -230,7 +230,7 @@ pub fn unpack_string(buf: &[u8]) -> Result<(String, usize), crate::Error> {
 
     // Decode UTF-16 to String
     let s = String::from_utf16(&code_units)
-        .map_err(|_| crate::Error::invalid_data("invalid UTF-16 encoding"))?;
+        .map_err(|_| crate::PtpError::invalid_data("invalid UTF-16 encoding"))?;
 
     Ok((s, required))
 }
@@ -278,9 +278,9 @@ pub fn pack_u32_array(arr: &[u32]) -> Vec<u8> {
 /// Unpack a u16 array from a buffer.
 ///
 /// Returns the array and the number of bytes consumed.
-pub fn unpack_u16_array(buf: &[u8]) -> Result<(Vec<u16>, usize), crate::Error> {
+pub fn unpack_u16_array(buf: &[u8]) -> Result<(Vec<u16>, usize), crate::PtpError> {
     if buf.len() < 4 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for array count: need 4, have {}",
             buf.len()
         )));
@@ -290,7 +290,7 @@ pub fn unpack_u16_array(buf: &[u8]) -> Result<(Vec<u16>, usize), crate::Error> {
     let required = 4 + count * 2;
 
     if buf.len() < required {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for u16 array: need {}, have {}",
             required,
             buf.len()
@@ -309,9 +309,9 @@ pub fn unpack_u16_array(buf: &[u8]) -> Result<(Vec<u16>, usize), crate::Error> {
 /// Unpack a u32 array from a buffer.
 ///
 /// Returns the array and the number of bytes consumed.
-pub fn unpack_u32_array(buf: &[u8]) -> Result<(Vec<u32>, usize), crate::Error> {
+pub fn unpack_u32_array(buf: &[u8]) -> Result<(Vec<u32>, usize), crate::PtpError> {
     if buf.len() < 4 {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for array count: need 4, have {}",
             buf.len()
         )));
@@ -321,7 +321,7 @@ pub fn unpack_u32_array(buf: &[u8]) -> Result<(Vec<u32>, usize), crate::Error> {
     let required = 4 + count * 4;
 
     if buf.len() < required {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "insufficient bytes for u32 array: need {}, have {}",
             required,
             buf.len()

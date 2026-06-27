@@ -1,6 +1,7 @@
 //! Device events.
 
-use crate::ptp::{EventCode, EventContainer, ObjectHandle, StorageId};
+use crate::mtp::{ObjectHandle, StorageId};
+use crate::ptp::{EventCode, EventContainer};
 
 /// Events from an MTP device.
 #[derive(Debug, Clone)]
@@ -62,22 +63,22 @@ impl DeviceEvent {
     pub fn from_container(container: &EventContainer) -> Self {
         match container.code {
             EventCode::ObjectAdded => DeviceEvent::ObjectAdded {
-                handle: ObjectHandle(container.params[0]),
+                handle: ObjectHandle(u64::from(container.params[0])),
             },
             EventCode::ObjectRemoved => DeviceEvent::ObjectRemoved {
-                handle: ObjectHandle(container.params[0]),
+                handle: ObjectHandle(u64::from(container.params[0])),
             },
             EventCode::StoreAdded => DeviceEvent::StoreAdded {
-                storage_id: StorageId(container.params[0]),
+                storage_id: StorageId(u64::from(container.params[0])),
             },
             EventCode::StoreRemoved => DeviceEvent::StoreRemoved {
-                storage_id: StorageId(container.params[0]),
+                storage_id: StorageId(u64::from(container.params[0])),
             },
             EventCode::StorageInfoChanged => DeviceEvent::StorageInfoChanged {
-                storage_id: StorageId(container.params[0]),
+                storage_id: StorageId(u64::from(container.params[0])),
             },
             EventCode::ObjectInfoChanged => DeviceEvent::ObjectInfoChanged {
-                handle: ObjectHandle(container.params[0]),
+                handle: ObjectHandle(u64::from(container.params[0])),
             },
             EventCode::DeviceInfoChanged => DeviceEvent::DeviceInfoChanged,
             // All other codes (including Unknown and unhandled known codes like DevicePropChanged)
@@ -113,7 +114,7 @@ mod tests {
                 DeviceEvent::ObjectInfoChanged { handle } => handle,
                 _ => panic!("Unexpected event type"),
             };
-            assert_eq!(handle, ObjectHandle(expected_handle));
+            assert_eq!(handle, ObjectHandle(u64::from(expected_handle)));
         }
 
         // Events with storage ID param
@@ -134,7 +135,7 @@ mod tests {
                 DeviceEvent::StorageInfoChanged { storage_id } => storage_id,
                 _ => panic!("Unexpected event type"),
             };
-            assert_eq!(storage_id, StorageId(expected_id));
+            assert_eq!(storage_id, StorageId(u64::from(expected_id)));
         }
 
         // DeviceInfoChanged (no params)

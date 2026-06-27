@@ -76,7 +76,7 @@ fn parse_device_status(data: &[u8]) -> Option<(u16, Vec<u8>)> {
 /// subsequent transfer on the endpoint (observed on the Panasonic Lumix
 /// DMC-TZ61, issue #12: a re-run of `ptp_diagnose` failed at `GetDeviceInfo`
 /// with "endpoint stalled" from the previous run's property probing).
-fn clear_halt_if_stalled<T, D>(ep: &mut nusb::Endpoint<T, D>, err: TransferError) -> crate::Error
+fn clear_halt_if_stalled<T, D>(ep: &mut nusb::Endpoint<T, D>, err: TransferError) -> crate::PtpError
 where
     T: nusb::transfer::BulkOrInterrupt,
     D: nusb::transfer::EndpointDirection,
@@ -210,7 +210,7 @@ impl NusbTransport {
     const INTERRUPT_BUFFER_SIZE: usize = 64;
 
     /// List all available MTP devices with location IDs.
-    pub fn list_mtp_devices() -> Result<Vec<UsbDeviceInfo>, crate::Error> {
+    pub fn list_mtp_devices() -> Result<Vec<UsbDeviceInfo>, crate::PtpError> {
         Self::list_mtp_devices_with_known(&[])
     }
 
@@ -221,10 +221,10 @@ impl NusbTransport {
     /// even if their USB descriptors don't match standard MTP class codes.
     pub fn list_mtp_devices_with_known(
         known: &[(u16, u16)],
-    ) -> Result<Vec<UsbDeviceInfo>, crate::Error> {
+    ) -> Result<Vec<UsbDeviceInfo>, crate::PtpError> {
         let devices = nusb::list_devices()
             .wait()
-            .map_err(crate::Error::Usb)?
+            .map_err(crate::PtpError::Usb)?
             .filter_map(|dev| {
                 let match_reason = Self::mtp_match_reason(&dev, known)?;
                 let location_id = location_id_from_topology(&dev);
@@ -370,7 +370,7 @@ impl NusbTransport {
     }
 
     /// Open a specific device and claim the MTP interface.
-    pub async fn open(device: nusb::Device) -> Result<Self, crate::Error> {
+    pub async fn open(device: nusb::Device) -> Result<Self, crate::PtpError> {
         Self::open_with_timeout(device, Self::DEFAULT_TIMEOUT).await
     }
 
@@ -385,10 +385,10 @@ impl NusbTransport {
     pub async fn open_with_timeout(
         device: nusb::Device,
         timeout: Duration,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self, crate::PtpError> {
         // Find the MTP interface
         let config = device.active_configuration().map_err(|e| {
-            crate::Error::invalid_data(format!("Failed to get configuration: {}", e))
+            crate::PtpError::invalid_data(format!("Failed to get configuration: {}", e))
         })?;
 
         let mut mtp_interface_number = None;
@@ -438,14 +438,14 @@ impl NusbTransport {
         }
 
         let interface_number = mtp_interface_number
-            .ok_or_else(|| crate::Error::invalid_data("No MTP interface found on device"))?;
+            .ok_or_else(|| crate::PtpError::invalid_data("No MTP interface found on device"))?;
 
-        let bulk_in_addr =
-            bulk_in_addr.ok_or_else(|| crate::Error::invalid_data("No bulk IN endpoint found"))?;
+        let bulk_in_addr = bulk_in_addr
+            .ok_or_else(|| crate::PtpError::invalid_data("No bulk IN endpoint found"))?;
         let bulk_out_addr = bulk_out_addr
-            .ok_or_else(|| crate::Error::invalid_data("No bulk OUT endpoint found"))?;
+            .ok_or_else(|| crate::PtpError::invalid_data("No bulk OUT endpoint found"))?;
         let interrupt_in_addr = interrupt_in_addr
-            .ok_or_else(|| crate::Error::invalid_data("No interrupt IN endpoint found"))?;
+            .ok_or_else(|| crate::PtpError::invalid_data("No interrupt IN endpoint found"))?;
 
         // Claim the interface
         //
@@ -459,25 +459,25 @@ impl NusbTransport {
                 device
                     .set_configuration(1)
                     .wait()
-                    .map_err(crate::Error::Usb)?;
+                    .map_err(crate::PtpError::Usb)?;
                 device
                     .claim_interface(interface_number)
                     .wait()
-                    .map_err(crate::Error::Usb)?
+                    .map_err(crate::PtpError::Usb)?
             }
-            Err(e) => return Err(crate::Error::Usb(e)),
+            Err(e) => return Err(crate::PtpError::Usb(e)),
         };
 
         // Open endpoints
         let bulk_in = interface
             .endpoint::<Bulk, In>(bulk_in_addr)
-            .map_err(crate::Error::Usb)?;
+            .map_err(crate::PtpError::Usb)?;
         let bulk_out = interface
             .endpoint::<Bulk, Out>(bulk_out_addr)
-            .map_err(crate::Error::Usb)?;
+            .map_err(crate::PtpError::Usb)?;
         let interrupt_in = interface
             .endpoint::<Interrupt, In>(interrupt_in_addr)
-            .map_err(crate::Error::Usb)?;
+            .map_err(crate::PtpError::Usb)?;
 
         Ok(Self {
             interface,
@@ -500,18 +500,20 @@ impl NusbTransport {
         self.timeout = timeout;
     }
 
-    /// Convert a nusb TransferError to crate::Error.
-    fn convert_transfer_error(err: TransferError) -> crate::Error {
+    /// Convert a nusb TransferError to crate::PtpError.
+    fn convert_transfer_error(err: TransferError) -> crate::PtpError {
         match err {
             // send_bulk uses transfer_blocking, which cancels the transfer on
             // timeout and returns Cancelled. Map to Timeout so that
             // Error::is_retryable() treats it correctly.
-            TransferError::Cancelled => crate::Error::Timeout,
-            TransferError::Disconnected => crate::Error::Disconnected,
+            TransferError::Cancelled => crate::PtpError::Timeout,
+            TransferError::Disconnected => crate::PtpError::Disconnected,
             TransferError::Stall
             | TransferError::Fault
             | TransferError::InvalidArgument
-            | TransferError::Unknown(_) => crate::Error::Io(std::io::Error::other(err.to_string())),
+            | TransferError::Unknown(_) => {
+                crate::PtpError::Io(std::io::Error::other(err.to_string()))
+            }
         }
     }
 
@@ -597,7 +599,7 @@ impl NusbTransport {
 
 #[async_trait]
 impl Transport for NusbTransport {
-    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error> {
+    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::PtpError> {
         let mut ep = self.bulk_out.lock().await;
         let buf: Buffer = data.to_vec().into();
         let completion = ep.transfer_blocking(buf, self.timeout);
@@ -607,7 +609,7 @@ impl Transport for NusbTransport {
         Ok(())
     }
 
-    async fn send_bulk_streaming(&self, chunks: BulkStream<'_>) -> Result<(), crate::Error> {
+    async fn send_bulk_streaming(&self, chunks: BulkStream<'_>) -> Result<(), crate::PtpError> {
         use futures::StreamExt;
 
         let mut ep = self.bulk_out.lock().await;
@@ -621,7 +623,7 @@ impl Transport for NusbTransport {
         let mut stream = chunks;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(crate::Error::Io)?;
+            let chunk = chunk_result.map_err(crate::PtpError::Io)?;
             let mut remaining = chunk.as_ref();
 
             while !remaining.is_empty() {
@@ -634,7 +636,7 @@ impl Transport for NusbTransport {
                     ep.submit(current_buf);
                     let completion = ep
                         .wait_next_complete(self.timeout)
-                        .ok_or(crate::Error::Timeout)?;
+                        .ok_or(crate::PtpError::Timeout)?;
                     if let Err(e) = completion.status {
                         return Err(clear_halt_if_stalled(&mut ep, e));
                     }
@@ -650,7 +652,7 @@ impl Transport for NusbTransport {
             ep.submit(current_buf);
             let completion = ep
                 .wait_next_complete(self.timeout)
-                .ok_or(crate::Error::Timeout)?;
+                .ok_or(crate::PtpError::Timeout)?;
             if let Err(e) = completion.status {
                 return Err(clear_halt_if_stalled(&mut ep, e));
             }
@@ -661,7 +663,7 @@ impl Transport for NusbTransport {
                 ep.submit(Buffer::new(0));
                 let completion = ep
                     .wait_next_complete(self.timeout)
-                    .ok_or(crate::Error::Timeout)?;
+                    .ok_or(crate::PtpError::Timeout)?;
                 if let Err(e) = completion.status {
                     return Err(clear_halt_if_stalled(&mut ep, e));
                 }
@@ -671,7 +673,7 @@ impl Transport for NusbTransport {
             ep.submit(Buffer::new(0));
             let completion = ep
                 .wait_next_complete(self.timeout)
-                .ok_or(crate::Error::Timeout)?;
+                .ok_or(crate::PtpError::Timeout)?;
             if let Err(e) = completion.status {
                 return Err(clear_halt_if_stalled(&mut ep, e));
             }
@@ -680,7 +682,7 @@ impl Transport for NusbTransport {
         Ok(())
     }
 
-    async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, crate::Error> {
+    async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, crate::PtpError> {
         let mut ep = self.bulk_in.lock().await;
 
         // If there's no pending transfer from a previous timed-out call,
@@ -723,12 +725,12 @@ impl Transport for NusbTransport {
                 // Don't cancel the transfer; it stays pending in the endpoint.
                 // next_complete() is cancel-safe, so dropping its future is fine.
                 // On retry, the next call will find pending() > 0 and pick it up.
-                Err(crate::Error::Timeout)
+                Err(crate::PtpError::Timeout)
             }
         }
     }
 
-    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error> {
+    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::PtpError> {
         let mut ep = self.interrupt_in.lock().await;
 
         // Submit a new transfer only if none is already pending.
@@ -788,7 +790,7 @@ impl Transport for NusbTransport {
         &self,
         transaction_id: u32,
         idle_timeout: Duration,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), crate::PtpError> {
         // Step 1: Send CLASS_CANCEL control request (bRequest=0x64).
         //
         // 300ms timeout matches libmtp and Windows behavior. This is a
@@ -859,7 +861,9 @@ impl Transport for NusbTransport {
                                     }
                                 }
                                 Err(TransferError::Cancelled) => Ok(true),
-                                Err(TransferError::Disconnected) => Err(crate::Error::Disconnected),
+                                Err(TransferError::Disconnected) => {
+                                    Err(crate::PtpError::Disconnected)
+                                }
                                 Err(_) => Ok(true),
                             }
                         }
@@ -939,7 +943,7 @@ impl Transport for NusbTransport {
     ///    mismatch" or "expected Response container type (3), got 2"
     ///    (observed on the Panasonic Lumix DMC-TZ61, issue #12, after a
     ///    Ctrl-C'd listing).
-    async fn reset_device(&self) -> Result<(), crate::Error> {
+    async fn reset_device(&self) -> Result<(), crate::PtpError> {
         // Step 1: DEVICE_RESET control request.
         self.interface
             .control_out(

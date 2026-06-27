@@ -123,9 +123,9 @@ const CONTAINER_TYPE_DATA: u16 = 2;
 
 #[async_trait]
 impl Transport for VirtualTransport {
-    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error> {
+    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::PtpError> {
         if data.len() < 12 {
-            return Err(crate::Error::invalid_data("container too small"));
+            return Err(crate::PtpError::invalid_data("container too small"));
         }
 
         let _length = unpack_u32(&data[0..4])?;
@@ -178,14 +178,14 @@ impl Transport for VirtualTransport {
                         );
                     }
                     None => {
-                        return Err(crate::Error::invalid_data(
+                        return Err(crate::PtpError::invalid_data(
                             "received data container without pending command",
                         ));
                     }
                 }
             }
             _ => {
-                return Err(crate::Error::invalid_data(format!(
+                return Err(crate::PtpError::invalid_data(format!(
                     "unexpected container type: {}",
                     container_type
                 )));
@@ -195,15 +195,15 @@ impl Transport for VirtualTransport {
         Ok(())
     }
 
-    async fn receive_bulk(&self, _max_size: usize) -> Result<Vec<u8>, crate::Error> {
+    async fn receive_bulk(&self, _max_size: usize) -> Result<Vec<u8>, crate::PtpError> {
         let mut state = self.state.lock().unwrap();
         match state.response_queue.pop_front() {
             Some(data) => Ok(data),
-            None => Err(crate::Error::invalid_data("no response available")),
+            None => Err(crate::PtpError::invalid_data("no response available")),
         }
     }
 
-    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error> {
+    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::PtpError> {
         // Check for events (drop lock before any await)
         {
             let mut state = self.state.lock().unwrap();
@@ -213,14 +213,14 @@ impl Transport for VirtualTransport {
         }
         // No events: wait, then return Timeout
         futures_timer::Delay::new(self.event_poll_interval).await;
-        Err(crate::Error::Timeout)
+        Err(crate::PtpError::Timeout)
     }
 
     async fn cancel_transfer(
         &self,
         _transaction_id: u32,
         _idle_timeout: std::time::Duration,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), crate::PtpError> {
         // Virtual device has no USB pipe to drain, so just clear any pending state.
         let mut state = self.state.lock().unwrap();
         state.pending_command = None;
@@ -232,8 +232,7 @@ impl Transport for VirtualTransport {
 #[cfg(test)]
 mod tests {
     use super::config::{VirtualDeviceConfig, VirtualStorageConfig};
-    use crate::mtp::MtpDevice;
-    use crate::ptp::ObjectFormatCode;
+    use crate::mtp::{ByteRange, MtpDevice, ObjectFormat};
     use std::time::Duration;
 
     fn test_config(dir: &std::path::Path) -> VirtualDeviceConfig {
@@ -308,7 +307,7 @@ mod tests {
 
         assert_eq!(storages.len(), 1);
         assert_eq!(storages[0].info().description, "Internal Storage");
-        assert!(storages[0].info().max_capacity > 0);
+        assert!(storages[0].info().total_capacity > 0);
     }
 
     #[tokio::test]
@@ -358,7 +357,7 @@ mod tests {
         // Verify folder detection
         let docs = items.iter().find(|i| i.filename == "Documents").unwrap();
         assert!(docs.is_folder());
-        assert_eq!(docs.format, ObjectFormatCode::Association);
+        assert_eq!(docs.format, ObjectFormat::ASSOCIATION);
 
         // Verify file metadata
         let txt = items.iter().find(|i| i.filename == "hello.txt").unwrap();
@@ -378,7 +377,7 @@ mod tests {
         let items = storages[0].list_objects(None).await.unwrap();
         let obj = &items[0];
 
-        let data = storages[0].download(obj.handle).await.unwrap();
+        let data = storages[0].download_to_vec(obj.handle).await.unwrap();
         assert_eq!(data.as_slice(), content);
     }
 
@@ -395,24 +394,15 @@ mod tests {
         let obj = &items[0];
 
         // Read from the beginning.
-        let head = storages[0]
-            .download_partial(obj.handle, 0, 100)
-            .await
-            .unwrap();
+        let head = storages[0].read_range(obj.handle, 0, 100).await.unwrap();
         assert_eq!(head, &content[0..100]);
 
         // Read from the middle.
-        let middle = storages[0]
-            .download_partial(obj.handle, 500, 100)
-            .await
-            .unwrap();
+        let middle = storages[0].read_range(obj.handle, 500, 100).await.unwrap();
         assert_eq!(middle, &content[500..600]);
 
         // Read past the end: device returns whatever's left.
-        let tail = storages[0]
-            .download_partial(obj.handle, 990, 1000)
-            .await
-            .unwrap();
+        let tail = storages[0].read_range(obj.handle, 990, 1000).await.unwrap();
         assert_eq!(tail, &content[990..1000]);
     }
 
@@ -429,22 +419,13 @@ mod tests {
         let obj = &items[0];
 
         // Same scenarios as the 32-bit version, using the 64-bit op.
-        let head = storages[0]
-            .download_partial_64(obj.handle, 0, 100)
-            .await
-            .unwrap();
+        let head = storages[0].read_range(obj.handle, 0, 100).await.unwrap();
         assert_eq!(head, &content[0..100]);
 
-        let middle = storages[0]
-            .download_partial_64(obj.handle, 500, 100)
-            .await
-            .unwrap();
+        let middle = storages[0].read_range(obj.handle, 500, 100).await.unwrap();
         assert_eq!(middle, &content[500..600]);
 
-        let tail = storages[0]
-            .download_partial_64(obj.handle, 990, 1000)
-            .await
-            .unwrap();
+        let tail = storages[0].read_range(obj.handle, 990, 1000).await.unwrap();
         assert_eq!(tail, &content[990..1000]);
     }
 
@@ -469,7 +450,7 @@ mod tests {
         // Offset = 2^32 + 10. If the hi u32 were dropped, this would read from byte 10.
         let offset_beyond_4gb: u64 = (1u64 << 32) + 10;
         let data = storages[0]
-            .download_partial_64(obj.handle, offset_beyond_4gb, 50)
+            .read_range(obj.handle, offset_beyond_4gb, 50)
             .await
             .unwrap();
         assert!(
@@ -503,7 +484,7 @@ mod tests {
 
         for offset in [0u64, 1, 100, 2500, 4999] {
             let dl = storages[0]
-                .download_stream_from_offset(obj.handle, offset)
+                .download(obj.handle, ByteRange::From(offset))
                 .await
                 .unwrap();
             assert_eq!(
@@ -531,10 +512,16 @@ mod tests {
         let storages = device.storages().await.unwrap();
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
-        let full = collect_download(storages[0].download_stream(obj.handle).await.unwrap()).await;
+        let full = collect_download(
+            storages[0]
+                .download(obj.handle, ByteRange::Full)
+                .await
+                .unwrap(),
+        )
+        .await;
         let from_zero = collect_download(
             storages[0]
-                .download_stream_from_offset(obj.handle, 0)
+                .download(obj.handle, ByteRange::From(0))
                 .await
                 .unwrap(),
         )
@@ -556,7 +543,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         let mut dl = storages[0]
-            .download_stream_from_offset(obj.handle, content.len() as u64)
+            .download(obj.handle, ByteRange::From(content.len() as u64))
             .await
             .unwrap();
         // Empty tail: the very first poll must be a clean EOF (None), not a hang
@@ -588,10 +575,10 @@ mod tests {
         // `FileDownload` isn't `Debug`, so match the result directly instead of
         // `expect_err`.
         match storages[0]
-            .download_stream_from_offset(obj.handle, content.len() as u64 + 1)
+            .download(obj.handle, ByteRange::From(content.len() as u64 + 1))
             .await
         {
-            Err(crate::Error::InvalidData { .. }) => {}
+            Err(crate::mtp::Error::InvalidData { .. }) => {}
             Err(other) => panic!("expected InvalidData for offset past size, got {other:?}"),
             Ok(_) => panic!("offset past size must error, not return a stream (it would hang)"),
         }
@@ -614,7 +601,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         let mut dl = storages[0]
-            .download_stream_from_offset(obj.handle, 1000)
+            .download(obj.handle, ByteRange::From(1000))
             .await
             .unwrap();
         // Pull one chunk, then cancel mid-stream (the resume use case: stop to
@@ -632,7 +619,7 @@ mod tests {
         // And a fresh full resume from offset 0 still returns the whole file.
         let full = collect_download(
             storages[0]
-                .download_stream_from_offset(obj.handle, 0)
+                .download(obj.handle, ByteRange::From(0))
                 .await
                 .unwrap(),
         )
@@ -665,7 +652,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         let dl = storages[0]
-            .download_windowed(obj.handle, 1024)
+            .download_windowed(obj.handle, ByteRange::Full, 1024)
             .await
             .unwrap();
         assert_eq!(dl.size(), content.len() as u64, "size() is the full object");
@@ -673,7 +660,7 @@ mod tests {
         assert_eq!(windowed, content, "windowed reassembly must equal the file");
 
         // Equals a plain full download too.
-        let full = storages[0].download(obj.handle).await.unwrap();
+        let full = storages[0].download_to_vec(obj.handle).await.unwrap();
         assert_eq!(windowed, full);
 
         // And equals a manual download_partial_64 reassembly (the primitive the
@@ -681,10 +668,7 @@ mod tests {
         let mut manual = Vec::new();
         let mut off = 0u64;
         while off < content.len() as u64 {
-            let chunk = storages[0]
-                .download_partial_64(obj.handle, off, 1024)
-                .await
-                .unwrap();
+            let chunk = storages[0].read_range(obj.handle, off, 1024).await.unwrap();
             if chunk.is_empty() {
                 break;
             }
@@ -727,7 +711,7 @@ mod tests {
 
         for offset in [0u64, 1, 100, 2500, 4999] {
             let dl = storages[0]
-                .download_windowed_from_offset(obj.handle, offset, 512)
+                .download_windowed(obj.handle, ByteRange::From(offset), 512)
                 .await
                 .unwrap();
             assert_eq!(
@@ -758,7 +742,7 @@ mod tests {
 
         let from_zero = collect_windowed(
             storages[0]
-                .download_windowed_from_offset(obj.handle, 0, 256)
+                .download_windowed(obj.handle, ByteRange::From(0), 256)
                 .await
                 .unwrap(),
         )
@@ -778,7 +762,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         let mut dl = storages[0]
-            .download_windowed_from_offset(obj.handle, content.len() as u64, 64)
+            .download_windowed(obj.handle, ByteRange::From(content.len() as u64), 64)
             .await
             .unwrap();
         // offset == size: the first window is a clean None, no read issued.
@@ -805,10 +789,10 @@ mod tests {
 
         // `WindowedDownload` isn't `Debug`, so match the result directly.
         match storages[0]
-            .download_windowed_from_offset(obj.handle, content.len() as u64 + 1, 64)
+            .download_windowed(obj.handle, ByteRange::From(content.len() as u64 + 1), 64)
             .await
         {
-            Err(crate::Error::InvalidData { .. }) => {}
+            Err(crate::mtp::Error::InvalidData { .. }) => {}
             Err(other) => panic!("expected InvalidData for offset past size, got {other:?}"),
             Ok(_) => panic!("offset past size must error, not return a download"),
         }
@@ -830,7 +814,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         let mut dl = storages[0]
-            .download_windowed(obj.handle, 256)
+            .download_windowed(obj.handle, ByteRange::Full, 256)
             .await
             .unwrap();
         let mut sizes = Vec::new();
@@ -863,7 +847,10 @@ mod tests {
             vec![0]
         ));
 
-        let mut dl = storages[0].download_windowed(obj.handle, 64).await.unwrap();
+        let mut dl = storages[0]
+            .download_windowed(obj.handle, ByteRange::Full, 64)
+            .await
+            .unwrap();
         assert!(
             dl.next_window().await.is_none(),
             "empty file: first window is a clean None"
@@ -872,10 +859,7 @@ mod tests {
         // Prove no read was issued: the armed cap is still pending. Issue one real
         // partial read now: it pops the still-armed cap and comes back empty,
         // which only holds if next_window() left the cap untouched.
-        let probe = storages[0]
-            .download_partial_64(obj.handle, 0, 64)
-            .await
-            .unwrap();
+        let probe = storages[0].read_range(obj.handle, 0, 64).await.unwrap();
         assert!(probe.is_empty(), "the still-armed cap fires on this read");
     }
 
@@ -891,7 +875,7 @@ mod tests {
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
         let mut dl = storages[0]
-            .download_windowed(obj.handle, 512)
+            .download_windowed(obj.handle, ByteRange::Full, 512)
             .await
             .unwrap();
         // First window reads fine.
@@ -904,7 +888,7 @@ mod tests {
             vec![0]
         ));
         match dl.next_window().await {
-            Some(Err(crate::Error::InvalidData { .. })) => {}
+            Some(Err(crate::mtp::Error::InvalidData { .. })) => {}
             Some(Err(other)) => panic!("expected InvalidData stall error, got {other:?}"),
             Some(Ok(b)) => panic!("expected a stall error, got {} bytes", b.len()),
             None => panic!("a 0-byte read mid-file must be an error, NOT a clean EOF"),
@@ -931,7 +915,7 @@ mod tests {
         ));
 
         let mut dl = storages[0]
-            .download_windowed(obj.handle, 512)
+            .download_windowed(obj.handle, ByteRange::Full, 512)
             .await
             .unwrap();
         let w1 = dl.next_window().await.unwrap().unwrap();
@@ -969,7 +953,7 @@ mod tests {
             .unwrap();
 
         let mut dl = storages[0]
-            .download_windowed(big.handle, 512)
+            .download_windowed(big.handle, ByteRange::Full, 512)
             .await
             .unwrap();
 
@@ -1012,7 +996,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello upload");
 
         // Verify we can download it back
-        let data = storages[0].download(handle).await.unwrap();
+        let data = storages[0].download_to_vec(handle).await.unwrap();
         assert_eq!(data.as_slice(), b"hello upload");
     }
 
@@ -1058,7 +1042,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_surfaces_partial_handle_on_midstream_error() {
-        use crate::error::UploadError;
+        use crate::mtp::UploadError;
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("Download")).unwrap();
@@ -1081,7 +1065,7 @@ mod tests {
         // The created handle must be surfaced so the caller can clean up or resume.
         let UploadError { source, partial } = err;
         assert!(
-            matches!(source, crate::Error::Io(_)),
+            matches!(source, crate::mtp::Error::Io { .. }),
             "expected the underlying I/O error, got {source:?}"
         );
         let handle = partial.expect("partial handle must be Some after SendObjectInfo succeeded");
@@ -1107,7 +1091,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_surfaces_partial_handle_on_cancel() {
-        use crate::error::UploadError;
+        use crate::mtp::UploadError;
         use std::ops::ControlFlow;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1134,7 +1118,7 @@ mod tests {
 
         let UploadError { source, partial } = err;
         assert!(
-            matches!(source, crate::Error::Cancelled),
+            matches!(source, crate::mtp::Error::Cancelled),
             "cancellation must map to Error::Cancelled, got {source:?}"
         );
         assert!(
@@ -1158,13 +1142,13 @@ mod tests {
             .expect("a full upload should succeed");
 
         // Object is present and complete at the returned handle.
-        let data = storages[0].download(handle).await.unwrap();
+        let data = storages[0].download_to_vec(handle).await.unwrap();
         assert_eq!(data.as_slice(), b"hello upload");
     }
 
     #[tokio::test]
     async fn upload_to_readonly_storage_has_no_partial() {
-        use crate::error::UploadError;
+        use crate::mtp::UploadError;
 
         let dir = tempfile::tempdir().unwrap();
         let config = test_config_readonly(dir.path());
@@ -1211,12 +1195,17 @@ mod tests {
         let (reported_old, new_handle) =
             crate::rekey_virtual_object("rekey-test-001", std::path::Path::new("Download"))
                 .expect("a listed object must be re-keyable");
+        // `rekey_virtual_object` reports low-level `ptp::ObjectHandle`s (u32),
+        // while the high-level listing yields neutral `mtp::ObjectHandle`s (u64);
+        // they carry the same numeric id, so compare on the raw value.
         assert_eq!(
-            reported_old, cached_handle,
+            u64::from(reported_old.0),
+            cached_handle.0,
             "rekey should report the handle the host had cached"
         );
         assert_ne!(
-            new_handle, cached_handle,
+            u64::from(new_handle.0),
+            cached_handle.0,
             "rekey must assign a fresh handle"
         );
 
@@ -1231,14 +1220,8 @@ mod tests {
             .await
             .expect_err("uploading into a re-keyed (stale) parent handle must fail");
         assert!(
-            matches!(
-                err.source,
-                crate::Error::Protocol {
-                    code: crate::ptp::ResponseCode::InvalidParentObject,
-                    ..
-                }
-            ),
-            "expected an InvalidParentObject rejection, got {:?}",
+            matches!(err.source, crate::mtp::Error::StaleHandle),
+            "expected an InvalidParentObject rejection (neutral StaleHandle), got {:?}",
             err.source
         );
         assert!(
@@ -1254,21 +1237,26 @@ mod tests {
             .unwrap()
             .handle;
         assert_eq!(
-            relisted_handle, new_handle,
+            relisted_handle.0,
+            u64::from(new_handle.0),
             "re-listing the parent must surface the re-keyed handle"
         );
 
         // ...and uploading into the refreshed handle lands in the same folder.
         let handle = storages[0]
             .upload(
-                Some(new_handle),
+                Some(relisted_handle),
                 crate::mtp::NewObjectInfo::file("after.txt", 5),
                 bytes_stream(b"hello"),
             )
             .await
             .expect("upload into the refreshed handle should succeed");
         assert_eq!(
-            storages[0].download(handle).await.unwrap().as_slice(),
+            storages[0]
+                .download_to_vec(handle)
+                .await
+                .unwrap()
+                .as_slice(),
             b"hello"
         );
         assert!(
@@ -1379,10 +1367,7 @@ mod tests {
         let storages = device.storages().await.unwrap();
 
         // Verify read-only access capability is reported
-        assert_ne!(
-            storages[0].info().access_capability,
-            crate::ptp::AccessCapability::ReadWrite
-        );
+        assert!(!storages[0].info().is_writable);
 
         // Upload should fail
         let info = crate::mtp::NewObjectInfo::file("new.txt", 4);
@@ -1424,7 +1409,7 @@ mod tests {
 
         let device = MtpDevice::builder().open_virtual(config).await.unwrap();
         let storages = device.storages().await.unwrap();
-        let free_before = storages[0].info().free_space_bytes;
+        let free_before = storages[0].info().free_space;
 
         // Upload a file
         let info = crate::mtp::NewObjectInfo::file("big.bin", 1000);
@@ -1436,7 +1421,7 @@ mod tests {
 
         // Re-fetch storage info
         let storages2 = device.storages().await.unwrap();
-        let free_after = storages2[0].info().free_space_bytes;
+        let free_after = storages2[0].info().free_space;
 
         assert!(free_after < free_before);
         assert_eq!(free_before - free_after, 1000);
@@ -1489,7 +1474,7 @@ mod tests {
 
         // No operations performed, so no events
         let result = device.next_event().await;
-        assert!(matches!(result, Err(crate::Error::Timeout)));
+        assert!(matches!(result, Err(crate::mtp::Error::Timeout)));
     }
 
     #[tokio::test]
@@ -1594,7 +1579,7 @@ mod tests {
         loop {
             match device.next_event().await {
                 Ok(event) => return Some(event),
-                Err(crate::Error::Timeout) => {
+                Err(crate::mtp::Error::Timeout) => {
                     if tokio::time::Instant::now() >= deadline {
                         return None;
                     }
@@ -1981,7 +1966,7 @@ mod tests {
         loop {
             match device.next_event().await {
                 Ok(e) => event_types.push(e),
-                Err(crate::Error::Timeout) => break,
+                Err(crate::mtp::Error::Timeout) => break,
                 Err(_) => break,
             }
         }

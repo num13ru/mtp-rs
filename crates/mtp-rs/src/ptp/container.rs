@@ -55,9 +55,9 @@ impl ContainerType {
 /// Determine the container type from a raw buffer.
 ///
 /// Returns an error if the buffer is too small or contains an invalid container type.
-pub fn container_type(buf: &[u8]) -> Result<ContainerType, crate::Error> {
+pub fn container_type(buf: &[u8]) -> Result<ContainerType, crate::PtpError> {
     if buf.len() < HEADER_SIZE {
-        return Err(crate::Error::invalid_data(format!(
+        return Err(crate::PtpError::invalid_data(format!(
             "container too small: need at least {} bytes, have {}",
             HEADER_SIZE,
             buf.len()
@@ -65,8 +65,9 @@ pub fn container_type(buf: &[u8]) -> Result<ContainerType, crate::Error> {
     }
 
     let type_code = unpack_u16(&buf[4..6])?;
-    ContainerType::from_code(type_code)
-        .ok_or_else(|| crate::Error::invalid_data(format!("invalid container type: {}", type_code)))
+    ContainerType::from_code(type_code).ok_or_else(|| {
+        crate::PtpError::invalid_data(format!("invalid container type: {}", type_code))
+    })
 }
 
 /// Command container sent to the device.
@@ -134,9 +135,9 @@ impl DataContainer {
     }
 
     /// Parse a data container from bytes.
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::PtpError> {
         if buf.len() < HEADER_SIZE {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "data container too small: need at least {} bytes, have {}",
                 HEADER_SIZE,
                 buf.len()
@@ -150,7 +151,7 @@ impl DataContainer {
 
         // Validate container type
         if type_code != ContainerType::Data.to_code() {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "expected Data container type ({}), got {}",
                 ContainerType::Data.to_code(),
                 type_code
@@ -159,13 +160,13 @@ impl DataContainer {
 
         // Validate length - must be at least header size and not exceed buffer
         if length < HEADER_SIZE {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "data container length too small: {} < header size {}",
                 length, HEADER_SIZE
             )));
         }
         if buf.len() < length {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "data container length mismatch: header says {}, have {}",
                 length,
                 buf.len()
@@ -196,9 +197,9 @@ pub struct ResponseContainer {
 
 impl ResponseContainer {
     /// Parse a response container from bytes.
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::PtpError> {
         if buf.len() < HEADER_SIZE {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "response container too small: need at least {} bytes, have {}",
                 HEADER_SIZE,
                 buf.len()
@@ -212,7 +213,7 @@ impl ResponseContainer {
 
         // Validate container type
         if type_code != ContainerType::Response.to_code() {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "expected Response container type ({}), got {}",
                 ContainerType::Response.to_code(),
                 type_code
@@ -221,7 +222,7 @@ impl ResponseContainer {
 
         // Validate length
         if buf.len() < length {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "response container length mismatch: header says {}, have {}",
                 length,
                 buf.len()
@@ -231,7 +232,7 @@ impl ResponseContainer {
         // Parse parameters
         let param_bytes = length - HEADER_SIZE;
         if param_bytes % 4 != 0 {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "response parameter bytes not aligned: {} bytes",
                 param_bytes
             )));
@@ -290,11 +291,11 @@ impl EventContainer {
     ///
     /// Events can have 0-3 parameters, so valid sizes are 12-24 bytes
     /// (header + 0-3 u32 params). Missing parameters default to 0.
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::PtpError> {
         const MAX_EVENT_SIZE: usize = HEADER_SIZE + 12; // 24 bytes max (3 params)
 
         if buf.len() < HEADER_SIZE {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "event container too small: need at least {} bytes, have {}",
                 HEADER_SIZE,
                 buf.len()
@@ -308,7 +309,7 @@ impl EventContainer {
 
         // Validate container type
         if type_code != ContainerType::Event.to_code() {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "expected Event container type ({}), got {}",
                 ContainerType::Event.to_code(),
                 type_code
@@ -317,7 +318,7 @@ impl EventContainer {
 
         // Validate length: must be between 12 (header only) and 24 (header + 3 params)
         if !(HEADER_SIZE..=MAX_EVENT_SIZE).contains(&length) {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "event container invalid size: expected 12-24, got {}",
                 length
             )));
@@ -326,7 +327,7 @@ impl EventContainer {
         // Validate parameter alignment (must be multiple of 4 bytes after header)
         let param_bytes = length - HEADER_SIZE;
         if param_bytes % 4 != 0 {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "event parameter bytes not aligned: {} bytes",
                 param_bytes
             )));
@@ -334,7 +335,7 @@ impl EventContainer {
 
         // Validate buffer has enough data
         if buf.len() < length {
-            return Err(crate::Error::invalid_data(format!(
+            return Err(crate::PtpError::invalid_data(format!(
                 "event container buffer too small: need {}, have {}",
                 length,
                 buf.len()

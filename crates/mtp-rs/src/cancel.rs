@@ -3,7 +3,7 @@
 //! [`CancelToken`] is a cheap-to-clone handle that callers pass into operations
 //! like [`Storage::list_objects`](crate::mtp::Storage::list_objects) so they can
 //! be aborted from another task. The operation checks the token between USB
-//! roundtrips; when set, it returns [`Error::Cancelled`](crate::Error::Cancelled)
+//! roundtrips; when set, it returns [`Error::Cancelled`](crate::PtpError::Cancelled)
 //! within one roundtrip's worth of latency instead of running to completion.
 //!
 //! # When to use this
@@ -113,10 +113,10 @@ impl CancelToken {
 /// Helper: checks an optional cancel token and returns `Err(Error::Cancelled)`
 /// when set. Use at iteration boundaries inside long operations.
 #[inline]
-pub(crate) fn bail_if_cancelled(token: Option<&CancelToken>) -> Result<(), crate::Error> {
+pub(crate) fn bail_if_cancelled(token: Option<&CancelToken>) -> Result<(), crate::PtpError> {
     if let Some(t) = token {
         if t.is_cancelled() {
-            return Err(crate::Error::Cancelled);
+            return Err(crate::PtpError::Cancelled);
         }
     }
     Ok(())
@@ -171,6 +171,6 @@ mod tests {
         let token = CancelToken::new();
         token.cancel();
         let err = bail_if_cancelled(Some(&token)).unwrap_err();
-        assert!(matches!(err, crate::Error::Cancelled));
+        assert!(matches!(err, crate::PtpError::Cancelled));
     }
 }

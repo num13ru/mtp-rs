@@ -1,38 +1,23 @@
 //! MtpDevice - the main entry point for MTP operations.
 
-use crate::mtp::{DeviceEvent, Storage};
-use crate::ptp::{DeviceInfo, ObjectHandle, PtpSession, StorageId};
+use crate::mtp::backend::usb::UsbBackend;
+use crate::mtp::backend::MtpBackend;
+use crate::mtp::{Capabilities, DeviceEvent, DeviceInfo, Error, Storage, StorageId};
+use crate::ptp::PtpSession;
 use crate::transport::{NusbTransport, Transport};
-use crate::Error;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// Internal shared state for MtpDevice.
-pub(crate) struct MtpDeviceInner {
-    pub(crate) session: Arc<PtpSession>,
-    pub(crate) device_info: DeviceInfo,
-}
-
-impl MtpDeviceInner {
-    /// Check if the device is an Android device.
-    ///
-    /// Detected by looking for "android.com" in the vendor extension descriptor.
-    /// Android devices have known MTP quirks (e.g., ObjectHandle::ALL doesn't work
-    /// for recursive listing).
-    #[must_use]
-    pub fn is_android(&self) -> bool {
-        self.device_info
-            .vendor_extension_desc
-            .to_lowercase()
-            .contains("android.com")
-    }
-}
 
 /// An MTP device connection.
 ///
 /// This is the main entry point for interacting with MTP devices.
 /// Use `MtpDevice::open_first()` to connect to the first available device,
 /// or `MtpDevice::builder()` for more control.
+///
+/// The device is a thin façade over a backend-neutral implementation (the internal `MtpBackend`
+/// trait). Today the only backend is PTP-over-USB (which also drives the virtual and mock
+/// transports); a Windows WPD backend is planned. Consumers work against the neutral
+/// [`crate::mtp`] types throughout.
 ///
 /// # Example
 ///
@@ -51,14 +36,14 @@ impl MtpDeviceInner {
 /// for storage in device.storages().await? {
 ///     println!("Storage: {} ({} free)",
 ///              storage.info().description,
-///              storage.info().free_space_bytes);
+///              storage.info().free_space);
 /// }
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Clone)]
 pub struct MtpDevice {
-    inner: Arc<MtpDeviceInner>,
+    pub(crate) backend: Arc<dyn MtpBackend>,
 }
 
 impl MtpDevice {
@@ -137,104 +122,63 @@ impl MtpDevice {
         Ok(result)
     }
 
-    /// Get device information.
+    /// Get device information (backend-neutral identity).
     #[must_use]
     pub fn device_info(&self) -> &DeviceInfo {
-        &self.inner.device_info
+        self.backend.device_info()
     }
 
-    /// Get a reference to the underlying [`PtpSession`].
+    /// What this device supports (backend-neutral capabilities).
     ///
-    /// Provides direct access to low-level PTP operations
-    /// ([`execute`](PtpSession::execute),
-    /// [`execute_with_send`](PtpSession::execute_with_send),
-    /// [`execute_with_receive`](PtpSession::execute_with_receive))
-    /// and per-device knobs like
-    /// [`set_split_header_data`](PtpSession::set_split_header_data).
+    /// Replaces the old per-operation accessors. Advertised support can still be wrong on some
+    /// devices (see the Fujifilm quirk in `AGENTS.md`), so treat these as a strong hint.
     #[must_use]
-    pub fn session(&self) -> &PtpSession {
-        &self.inner.session
+    pub fn capabilities(&self) -> &Capabilities {
+        self.backend.capabilities()
     }
 
-    /// Check if the device supports renaming objects.
+    /// Whether the device supports renaming objects.
     ///
-    /// This checks for support of the SetObjectPropValue operation (0x9804),
-    /// which is required to rename files and folders via the ObjectFileName property.
-    ///
-    /// # Returns
-    ///
-    /// Returns true if the device advertises SetObjectPropValue support.
+    /// Convenience over [`capabilities()`](Self::capabilities)`.can_rename`.
     #[must_use]
     pub fn supports_rename(&self) -> bool {
-        self.inner.device_info.supports_rename()
+        self.backend.capabilities().can_rename
     }
 
-    /// Check if the device supports creating objects (uploads and folders).
+    /// Whether the device supports creating objects (uploads and folders).
     ///
-    /// This checks for support of both SendObjectInfo (0x100C) and
-    /// SendObject (0x100D), which together form the two-phase object
-    /// creation flow. Read-only devices (for example, PTP cameras) typically
-    /// don't advertise these.
-    ///
-    /// Note: some devices advertise these operations but still reject writes
-    /// per-storage or per-format (Fuji cameras report ReadWrite capability yet
-    /// return StoreReadOnly). A `true` here means uploads are worth attempting,
-    /// not that they're guaranteed to succeed.
-    ///
-    /// # Returns
-    ///
-    /// Returns true if the device advertises both SendObjectInfo and SendObject.
+    /// Convenience over [`capabilities()`](Self::capabilities)`.can_upload`.
     #[must_use]
     pub fn supports_upload(&self) -> bool {
-        self.inner.device_info.supports_upload()
+        self.backend.capabilities().can_upload
     }
 
     /// Get all storages on the device.
     pub async fn storages(&self) -> Result<Vec<Storage>, Error> {
-        let ids = self.inner.session.get_storage_ids().await?;
-        let mut storages = Vec::with_capacity(ids.len());
-        for id in ids {
-            let info = self.inner.session.get_storage_info(id).await?;
-            storages.push(Storage::new(self.inner.clone(), id, info));
-        }
-        Ok(storages)
+        let infos = self.backend.storages().await?;
+        Ok(infos
+            .into_iter()
+            .map(|info| Storage::new(Arc::clone(&self.backend), info.id, info))
+            .collect())
     }
 
     /// Get a specific storage by ID.
     pub async fn storage(&self, id: StorageId) -> Result<Storage, Error> {
-        let info = self.inner.session.get_storage_info(id).await?;
-        Ok(Storage::new(self.inner.clone(), id, info))
-    }
-
-    /// Get object handles in a storage.
-    ///
-    /// # Arguments
-    ///
-    /// * `storage_id` - Storage to search, or `StorageId::ALL` for all storages
-    /// * `parent` - Parent folder handle, or `None` for root level only,
-    ///   or `Some(ObjectHandle::ALL)` for recursive listing
-    pub async fn get_object_handles(
-        &self,
-        storage_id: StorageId,
-        parent: Option<ObjectHandle>,
-    ) -> Result<Vec<ObjectHandle>, Error> {
-        self.inner
-            .session
-            .get_object_handles(storage_id, None, parent)
-            .await
+        let info = self.backend.storage_info(id).await?;
+        Ok(Storage::new(Arc::clone(&self.backend), id, info))
     }
 
     /// Receive the next event from the device.
     ///
-    /// This method awaits **indefinitely** on the USB interrupt endpoint until an
+    /// This method awaits **indefinitely** on the underlying event channel until an
     /// event arrives or the device disconnects. Always wrap this in
     /// `tokio::time::timeout` (or equivalent) so you can check for shutdown.
     ///
     /// # Concurrency
     ///
-    /// Event reading uses the USB interrupt endpoint, which is independent from the
-    /// bulk endpoints used by file operations (`list_objects`, `get_object`, etc.).
-    /// It is safe to call `next_event()` concurrently with other `MtpDevice` methods.
+    /// On the USB backend, event reading uses the USB interrupt endpoint, which is
+    /// independent from the bulk endpoints used by file operations, so it is safe to
+    /// call `next_event()` concurrently with other `MtpDevice` methods.
     ///
     /// If you wrap `MtpDevice` in a shared lock (for example, `Arc<Mutex<MtpDevice>>`),
     /// do **not** hold that lock while awaiting `next_event()`: it will block all file
@@ -282,21 +226,12 @@ impl MtpDevice {
     /// # }
     /// ```
     pub async fn next_event(&self) -> Result<DeviceEvent, Error> {
-        match self.inner.session.poll_event().await? {
-            Some(container) => Ok(DeviceEvent::from_container(&container)),
-            None => Err(Error::Timeout),
-        }
+        self.backend.next_event().await
     }
 
-    /// Close the connection (also happens on drop).
+    /// Close the connection (best-effort; also happens on drop).
     pub async fn close(self) -> Result<(), Error> {
-        // Try to close gracefully, but Arc might have multiple references
-        if let Ok(inner) = Arc::try_unwrap(self.inner) {
-            if let Ok(session) = Arc::try_unwrap(inner.session) {
-                session.close().await?;
-            }
-        }
-        Ok(())
+        self.backend.close().await
     }
 }
 
@@ -447,30 +382,6 @@ impl MtpDeviceBuilder {
     ///
     /// This is the open-side counterpart to [`MtpDevice::list_devices_with_known`]:
     /// pair them with the same list to enumerate and open the same set of devices.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use mtp_rs::mtp::MtpDevice;
-    ///
-    /// # async fn example() -> Result<(), mtp_rs::Error> {
-    /// let known = &[(0x045E, 0x0710)];
-    ///
-    /// // Enumerate with the extra VID/PID...
-    /// let devices = MtpDevice::list_devices_with_known(known)?;
-    /// let info = devices.into_iter().next().ok_or(mtp_rs::Error::NoDevice)?;
-    ///
-    /// // ...and open with the same list so the builder can find the device.
-    /// let device = MtpDevice::builder()
-    ///     .known_devices(known)
-    ///     .open_by_location(info.location_id)
-    ///     .await?;
-    ///
-    /// // Apply any per-device knobs after opening.
-    /// device.session().set_split_header_data(true);
-    /// # Ok(())
-    /// # }
-    /// ```
     #[must_use]
     pub fn known_devices(mut self, known: &[(u16, u16)]) -> Self {
         self.known_devices = known.to_vec();
@@ -480,8 +391,11 @@ impl MtpDeviceBuilder {
     /// Open the first available device.
     pub async fn open_first(self) -> Result<MtpDevice, Error> {
         let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
-        let device_info = devices.into_iter().next().ok_or(Error::NoDevice)?;
-        let device = device_info.open().map_err(Error::Usb)?;
+        let device_info = devices
+            .into_iter()
+            .next()
+            .ok_or(crate::PtpError::NoDevice)?;
+        let device = device_info.open().map_err(crate::PtpError::Usb)?;
         self.open_nusb_device(device).await
     }
 
@@ -501,8 +415,8 @@ impl MtpDeviceBuilder {
         let device_info = devices
             .into_iter()
             .find(|d| d.location_id == location_id)
-            .ok_or(Error::NoDevice)?;
-        let device = device_info.open().map_err(Error::Usb)?;
+            .ok_or(crate::PtpError::NoDevice)?;
+        let device = device_info.open().map_err(crate::PtpError::Usb)?;
         self.open_nusb_device(device).await
     }
 
@@ -523,8 +437,8 @@ impl MtpDeviceBuilder {
         let device_info = devices
             .into_iter()
             .find(|d| d.serial_number.as_deref() == Some(serial))
-            .ok_or(Error::NoDevice)?;
-        let device = device_info.open().map_err(Error::Usb)?;
+            .ok_or(crate::PtpError::NoDevice)?;
+        let device = device_info.open().map_err(crate::PtpError::Usb)?;
         self.open_nusb_device(device).await
     }
 
@@ -536,9 +450,7 @@ impl MtpDeviceBuilder {
     /// `open_by_serial` / `open_by_location`.
     ///
     /// The interface scan is permissive: strict MTP-class match first, then
-    /// fallback to any interface with the MTP endpoint layout. Per-device knobs
-    /// like [`PtpSession::set_split_header_data`] can be applied after opening
-    /// via [`MtpDevice::session()`].
+    /// fallback to any interface with the MTP endpoint layout.
     ///
     /// # Example
     ///
@@ -546,7 +458,7 @@ impl MtpDeviceBuilder {
     /// use mtp_rs::mtp::MtpDevice;
     /// use nusb::MaybeFuture;
     ///
-    /// # async fn example() -> Result<(), mtp_rs::Error> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let nusb_device = nusb::list_devices()
     ///     .wait()?
     ///     .find(|d: &nusb::DeviceInfo| {
@@ -577,12 +489,10 @@ impl MtpDeviceBuilder {
             session.set_split_header_data(true);
         }
 
-        let inner = Arc::new(MtpDeviceInner {
-            session,
-            device_info,
-        });
-
-        Ok(MtpDevice { inner })
+        let backend = UsbBackend::new(session, device_info);
+        Ok(MtpDevice {
+            backend: Arc::new(backend),
+        })
     }
 
     /// Open a virtual device backed by local filesystem directories.
@@ -639,12 +549,10 @@ impl MtpDeviceBuilder {
         // Get device info
         let device_info = session.get_device_info().await?;
 
-        let inner = Arc::new(MtpDeviceInner {
-            session,
-            device_info,
-        });
-
-        Ok(MtpDevice { inner })
+        let backend = UsbBackend::new(session, device_info);
+        Ok(MtpDevice {
+            backend: Arc::new(backend),
+        })
     }
 }
 

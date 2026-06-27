@@ -6,7 +6,7 @@
 use crate::ptp::{
     DevicePropDesc, DevicePropertyCode, OperationCode, PropertyDataType, PropertyValue,
 };
-use crate::Error;
+use crate::PtpError as Error;
 
 use super::PtpSession;
 
@@ -229,7 +229,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::Error::Protocol {
+            Err(crate::PtpError::Protocol {
                 code: ResponseCode::DevicePropNotSupported,
                 ..
             })
@@ -332,7 +332,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::Error::Protocol {
+            Err(crate::PtpError::Protocol {
                 code: ResponseCode::InvalidDevicePropValue,
                 ..
             })

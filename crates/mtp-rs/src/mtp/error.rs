@@ -121,9 +121,9 @@ impl Error {
     }
 }
 
-impl From<crate::error::Error> for Error {
-    fn from(e: crate::error::Error) -> Self {
-        use crate::error::Error as Low;
+impl From<crate::error::PtpError> for Error {
+    fn from(e: crate::error::PtpError) -> Self {
+        use crate::error::PtpError as Low;
         let exclusive = e.is_exclusive_access();
         match e {
             Low::Protocol { code, .. } => map_response_code(code),
@@ -199,5 +199,14 @@ pub struct UploadError {
 impl From<UploadError> for Error {
     fn from(e: UploadError) -> Self {
         e.source
+    }
+}
+
+impl From<crate::error::PtpUploadError> for UploadError {
+    fn from(e: crate::error::PtpUploadError) -> Self {
+        UploadError {
+            source: e.source.into(),
+            partial: e.partial.map(Into::into),
+        }
     }
 }

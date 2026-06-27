@@ -25,7 +25,7 @@ pub struct MockTransport {
     queued_interrupts: Mutex<VecDeque<Vec<u8>>>,
     actual_sends: Mutex<Vec<Vec<u8>>>,
     cancel_calls: Mutex<Vec<u32>>,
-    cancel_results: Mutex<VecDeque<Result<(), crate::Error>>>,
+    cancel_results: Mutex<VecDeque<Result<(), crate::PtpError>>>,
     /// When set, the next `receive_bulk` call never resolves (until the caller's
     /// future is dropped). Models a transaction abandoned mid-receive: the
     /// command went out, but the host never reads the device's response.
@@ -126,7 +126,7 @@ impl MockTransport {
     }
 
     /// Queue a result for the next `cancel_transfer` call.
-    pub fn queue_cancel_result(&self, result: Result<(), crate::Error>) {
+    pub fn queue_cancel_result(&self, result: Result<(), crate::PtpError>) {
         self.cancel_results.lock().push_back(result);
     }
 
@@ -154,7 +154,7 @@ impl Default for MockTransport {
 
 #[async_trait]
 impl Transport for MockTransport {
-    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::Error> {
+    async fn send_bulk(&self, data: &[u8]) -> Result<(), crate::PtpError> {
         // Store sent data for verification
         self.actual_sends.lock().push(data.to_vec());
 
@@ -162,7 +162,7 @@ impl Transport for MockTransport {
         let expected = self.expected_sends.lock().pop_front();
         if let Some(expected_data) = expected {
             if data != expected_data.as_slice() {
-                return Err(crate::Error::invalid_data(format!(
+                return Err(crate::PtpError::invalid_data(format!(
                     "send mismatch: expected {:?}, got {:?}",
                     expected_data, data
                 )));
@@ -172,7 +172,7 @@ impl Transport for MockTransport {
         Ok(())
     }
 
-    async fn receive_bulk(&self, _max_size: usize) -> Result<Vec<u8>, crate::Error> {
+    async fn receive_bulk(&self, _max_size: usize) -> Result<Vec<u8>, crate::PtpError> {
         // Models a transaction abandoned mid-receive: hang until the caller's
         // future is dropped. `pending()` never resolves, so dropping the
         // outer future is the only way out (exactly what cancellation does).
@@ -183,22 +183,22 @@ impl Transport for MockTransport {
         self.queued_responses
             .lock()
             .pop_front()
-            .ok_or(crate::Error::NoDevice)
+            .ok_or(crate::PtpError::NoDevice)
     }
 
-    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::Error> {
+    async fn receive_interrupt(&self) -> Result<Vec<u8>, crate::PtpError> {
         // Return next queued interrupt or error if none
         self.queued_interrupts
             .lock()
             .pop_front()
-            .ok_or(crate::Error::NoDevice)
+            .ok_or(crate::PtpError::NoDevice)
     }
 
     async fn cancel_transfer(
         &self,
         transaction_id: u32,
         _idle_timeout: Duration,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), crate::PtpError> {
         self.cancel_calls.lock().push(transaction_id);
         // Real transports drain the bulk IN and interrupt pipes here, leaving
         // the session clean for the next operation. Model that by discarding

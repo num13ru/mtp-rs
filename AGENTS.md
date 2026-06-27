@@ -38,18 +38,46 @@ docs/                        # Protocol, architecture, debugging, release proces
 ## Architecture
 
 ```
-mtp:: (MtpDevice, Storage)    <-- Android/media devices
-  |
-ptp:: (PtpSession)            <-- Cameras, protocol work
+mtp:: (MtpDevice, Storage, FileDownload, ObjectListing)   <-- backend-neutral high-level API
+  |  Box<dyn MtpBackend>  (mtp::backend, pub(crate))
+  +-- UsbBackend (mtp::backend::usb): PTP over Transport (nusb | virtual | mock)
+  +-- WpdBackend (planned, cfg(windows)): WPD over COM
+ptp:: (PtpSession)            <-- Cameras, protocol work (USB-only by nature)
   |
 transport:: (Transport trait)
   |
 nusb (USB)  or  VirtualTransport (filesystem, feature = "virtual-device")
 ```
 
+The `mtp::` layer is **backend-neutral**: it speaks neutral types (`mtp::{ObjectHandle, StorageId,
+ObjectInfo, ObjectFormat, DeviceInfo, StorageInfo, Capabilities, DateTime}`) and the neutral
+`mtp::Error`, and dispatches through the `MtpBackend` trait. `MtpDevice`/`Storage` are thin façades
+over `Box<dyn MtpBackend>`; `UsbBackend` is the sole implementation today and holds the `PtpSession`,
+converting PTP↔neutral only at its boundary (via `to_ptp`/`from_ptp` on the neutral types and
+`From<PtpError> for mtp::Error`). All device-quirk logic (root-listing fast path, Android/Samsung/Fuji
+fallbacks, >4 GB size resolution, SIC cancel, recovery, the upload partial-handle contract) lives in
+`UsbBackend`. The virtual device and mock are **not** separate backends — they're `Transport`s under
+`UsbBackend`, so every existing test exercises the real backend path. A Windows WPD backend is the
+planned second `MtpBackend` (see `docs/windows-wpd-backend-plan.md`).
+
+**Errors:** `mtp::Error` (re-exported as the crate-root `Error`) is the neutral high-level error with
+backend-agnostic variants (`NotFound`, `StaleHandle`, `AccessDenied`, `Unsupported`, `Busy`,
+`StorageFull`, `Cancelled`, `Disconnected`, …). The rich low-level PTP error is `PtpError` (root and
+`ptp::PtpError`); `ptp::` keeps its detailed response-code errors for camera/protocol users.
+
 **Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `MtpDeviceBuilder::open_virtual()` (feature-gated)
 
-**Key types:** `ObjectHandle`, `StorageId` (newtypes), `AccessCapability`, `OperationCode`, `UsbSpeed` (negotiated USB link speed surfaced on `MtpDeviceInfo::speed` / `UsbDeviceInfo::speed`; both info structs are `#[non_exhaustive]`, so add fields freely without breaking consumers).
+**Key types:** `ObjectHandle`, `StorageId` (opaque `u64` newtypes, session-scoped tokens — not wire
+values), `ObjectFormat` (raw MTP format code + category helpers), `Capabilities` (replaces the old
+`is_android`/`supports_*` accessors; `MtpDevice::capabilities()`, plus convenience
+`supports_rename()`/`supports_upload()`), `ByteRange { Full, From(off), Range { offset, len } }`
+(drives `download`/`download_windowed`), `UsbSpeed` (negotiated USB link speed on
+`MtpDeviceInfo::speed` / `UsbDeviceInfo::speed`; both info structs are `#[non_exhaustive]`).
+
+**Download API:** three patterns over `ByteRange` — streaming `Storage::download(handle, range)`
+(holds the session, returns `FileDownload`), session-releasing `Storage::download_windowed(handle,
+range, window_size)` (returns `WindowedDownload`), and buffered `Storage::download_to_vec(handle)` /
+`Storage::read_range(handle, offset, len)` / `Storage::thumbnail(handle)`.
 
 ## Known device quirks
 

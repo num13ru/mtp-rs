@@ -1,28 +1,26 @@
-//! Storage operations.
+//! Storage operations (a thin façade over the active backend).
 
 use crate::cancel::{bail_if_cancelled, CancelToken};
+use crate::mtp::backend::{BackendListing, ByteRange, MtpBackend, ProgressFn};
 use crate::mtp::object::NewObjectInfo;
 use crate::mtp::stream::{FileDownload, Progress, WindowedDownload, DEFAULT_DOWNLOAD_WINDOW};
-use crate::ptp::{ObjectHandle, ObjectInfo, StorageId, StorageInfo};
-use crate::{Error, UploadError};
+use crate::mtp::{Error, ObjectHandle, ObjectInfo, StorageId, StorageInfo, UploadError};
 use bytes::Bytes;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use super::device::MtpDeviceInner;
-
 /// An in-progress directory listing that yields [`ObjectInfo`] items one at a time.
 ///
-/// Created by [`Storage::list_objects_stream()`]. After `GetObjectHandles` completes,
-/// the total count is known immediately. Each call to [`next()`](Self::next) fetches
-/// one `GetObjectInfo` from USB, so the consumer can report progress (e.g.,
+/// Created by [`Storage::list_objects_stream()`]. After the device returns the handle list, the
+/// total count is known immediately ([`total()`](Self::total)). Each call to [`next()`](Self::next)
+/// fetches one object's metadata, so the consumer can report progress (e.g.,
 /// "Loading files (42 of 500)...") as items arrive.
 ///
 /// # Important
 ///
-/// The MTP session is busy while this listing is active. You must consume
-/// all items (or drop the listing) before calling other storage methods.
+/// The device is busy while this listing is active. You must consume all items (or drop the
+/// listing) before calling other storage methods.
 ///
 /// # Example
 ///
@@ -44,101 +42,63 @@ use super::device::MtpDeviceInner;
 /// # }
 /// ```
 pub struct ObjectListing {
-    inner: Arc<MtpDeviceInner>,
-    handles: Vec<ObjectHandle>,
-    /// Index of the next handle to fetch.
-    cursor: usize,
-    /// Parent filter: if Some, only items matching this parent are yielded.
-    parent_filter: Option<ParentFilter>,
-    /// Optional cancellation handle. When set and flipped, [`next`](Self::next)
-    /// returns `Some(Err(Error::Cancelled))` at the next per-handle boundary.
-    cancel: Option<CancelToken>,
-}
-
-/// Describes how to filter objects by parent handle.
-enum ParentFilter {
-    /// Accept objects whose parent matches exactly.
-    Exact(ObjectHandle),
-    /// Android root: accept parent 0 or 0xFFFFFFFF.
-    AndroidRoot,
+    inner: BackendListing,
+    /// Items the backend has already yielded (post-filter).
+    fetched: usize,
 }
 
 impl ObjectListing {
-    /// Total number of object handles returned by the device.
-    ///
-    /// When a parent filter is active (e.g., Fuji devices that return all objects
-    /// for root), some items may be skipped, so the actual yielded count can be lower.
-    #[must_use]
-    pub fn total(&self) -> usize {
-        self.handles.len()
+    fn new(inner: BackendListing) -> Self {
+        Self { inner, fetched: 0 }
     }
 
-    /// Number of handles processed so far (including filtered-out items).
+    /// Total number of object handles returned by the device.
+    ///
+    /// When a parent filter is active (e.g. devices that return all objects for root), some items
+    /// may be skipped, so the actual yielded count can be lower.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.inner.total
+    }
+
+    /// Number of items yielded so far.
     #[must_use]
     pub fn fetched(&self) -> usize {
-        self.cursor
+        self.fetched
     }
 
     /// Fetch the next object from the device.
     ///
-    /// Returns `None` when all handles have been processed.
-    /// Items that don't match the parent filter are silently skipped.
+    /// Returns `None` when the listing is exhausted. Items that don't match the parent filter are
+    /// skipped by the backend.
     ///
-    /// If a [`CancelToken`] was passed via
-    /// [`Storage::list_objects_stream_with_cancel`] and it's been cancelled,
-    /// this returns `Some(Err(Error::Cancelled))` at the next per-handle
-    /// boundary (typically within one `GetObjectInfo` USB roundtrip).
+    /// If a [`CancelToken`] was passed via [`Storage::list_objects_stream_with_cancel`] and it's
+    /// been cancelled, this returns `Some(Err(Error::Cancelled))` at the next per-handle boundary.
     pub async fn next(&mut self) -> Option<Result<ObjectInfo, Error>> {
-        loop {
-            if self.cursor >= self.handles.len() {
-                return None;
+        match self.inner.items.next().await {
+            Some(Ok(info)) => {
+                self.fetched += 1;
+                Some(Ok(info))
             }
-
-            // Cooperative cancel check before issuing the per-handle USB
-            // roundtrip. On a 1k-photo listing this is the actual stop point.
-            if let Err(e) = bail_if_cancelled(self.cancel.as_ref()) {
-                return Some(Err(e));
-            }
-
-            let handle = self.handles[self.cursor];
-            self.cursor += 1;
-
-            let mut info = match self.inner.session.get_object_info_full(handle).await {
-                Ok(info) => info,
-                Err(e) => return Some(Err(e)),
-            };
-            info.handle = handle;
-
-            // Apply parent filter if present
-            if let Some(filter) = &self.parent_filter {
-                let matches = match filter {
-                    ParentFilter::Exact(expected) => info.parent == *expected,
-                    ParentFilter::AndroidRoot => info.parent.0 == 0 || info.parent.0 == 0xFFFFFFFF,
-                };
-                if !matches {
-                    continue;
-                }
-            }
-
-            return Some(Ok(info));
+            other => other,
         }
     }
 }
 
 /// A storage location on an MTP device.
 ///
-/// `Storage` holds an `Arc<MtpDeviceInner>` so it can outlive the original
+/// `Storage` holds a shared reference to the active backend so it can outlive the original
 /// `MtpDevice` and be used from multiple tasks.
 pub struct Storage {
-    inner: Arc<MtpDeviceInner>,
+    backend: Arc<dyn MtpBackend>,
     id: StorageId,
     info: StorageInfo,
 }
 
 impl Storage {
     /// Create a new Storage (internal).
-    pub(crate) fn new(inner: Arc<MtpDeviceInner>, id: StorageId, info: StorageInfo) -> Self {
-        Self { inner, id, info }
+    pub(crate) fn new(backend: Arc<dyn MtpBackend>, id: StorageId, info: StorageInfo) -> Self {
+        Self { backend, id, info }
     }
 
     #[must_use]
@@ -154,20 +114,21 @@ impl Storage {
 
     /// Refresh storage info from device (updates free space, etc.).
     pub async fn refresh(&mut self) -> Result<(), Error> {
-        self.info = self.inner.session.get_storage_info(self.id).await?;
+        self.info = self.backend.storage_info(self.id).await?;
         Ok(())
     }
+
+    // =========================================================================
+    // Listing
+    // =========================================================================
 
     /// List objects in a folder (None = root), returning all results at once.
     ///
     /// For progress reporting during large listings, use
     /// [`list_objects_stream()`](Self::list_objects_stream) instead.
     ///
-    /// This method handles various device quirks:
-    /// - Root listing tries parent=0xFFFFFFFF first (fast path for Android, Kindle, etc.)
-    /// - Falls back to parent=0 only when the device rejects 0xFFFFFFFF
-    /// - Samsung devices: return InvalidObjectHandle for parent=0, so we fall back to recursive
-    /// - Fuji devices: return all objects for root, so we filter by parent handle
+    /// The backend handles device quirks (root-listing fast path and Android/Samsung/Fuji
+    /// fallbacks).
     pub async fn list_objects(
         &self,
         parent: Option<ObjectHandle>,
@@ -175,16 +136,11 @@ impl Storage {
         self.list_objects_with_cancel(parent, None).await
     }
 
-    /// Like [`list_objects`](Self::list_objects), but takes a cooperative
-    /// cancellation token.
+    /// Like [`list_objects`](Self::list_objects), but takes a cooperative cancellation token.
     ///
-    /// When `cancel` is `Some(&token)` and the token has been cancelled, the
-    /// call bails between per-handle fetches with `Err(Error::Cancelled)`.
-    /// Useful for large folders (1k+ entries on Android), where the
-    /// `GetObjectInfo` per-handle loop dominates wall-clock time.
-    ///
-    /// Pass `None` for backwards-compatible behavior identical to
-    /// `list_objects`.
+    /// When `cancel` is `Some(&token)` and the token has been cancelled, the call bails between
+    /// per-handle fetches with `Err(Error::Cancelled)`. Useful for large folders (1k+ entries on
+    /// Android), where the per-handle loop dominates wall-clock time.
     pub async fn list_objects_with_cancel(
         &self,
         parent: Option<ObjectHandle>,
@@ -200,20 +156,9 @@ impl Storage {
 
     /// List objects in a folder as a streaming [`ObjectListing`].
     ///
-    /// Returns immediately after `GetObjectHandles` completes. The total count
-    /// is then known via [`ObjectListing::total()`], and each call to
-    /// [`ObjectListing::next()`] fetches one object's metadata from USB.
-    ///
-    /// For root listings (`parent=None`), tries `parent=0xFFFFFFFF` first: this
-    /// returns only root-level handles on Android, Kindle, and many other devices.
-    /// Falls back to `parent=0` only when the device rejects `0xFFFFFFFF` with an
-    /// error. An empty result from `0xFFFFFFFF` is treated as an empty storage,
-    /// not as a reason to fall back.
-    ///
-    /// This enables progress reporting (e.g., "Loading 42 of 500...") during
-    /// what would otherwise be a single blocking `list_objects()` call.
-    ///
-    /// Handles the same device quirks as [`list_objects()`](Self::list_objects).
+    /// Returns immediately after the device returns the handle list. The total count is then known
+    /// via [`ObjectListing::total()`], and each call to [`ObjectListing::next()`] fetches one
+    /// object's metadata.
     ///
     /// # Example
     ///
@@ -241,153 +186,25 @@ impl Storage {
         self.list_objects_stream_with_cancel(parent, None).await
     }
 
-    /// Like [`list_objects_stream`](Self::list_objects_stream), but the returned
-    /// [`ObjectListing`] carries an optional [`CancelToken`]. Every call to
-    /// [`ObjectListing::next`] checks the token before issuing the next
-    /// `GetObjectInfo` USB roundtrip, so a flipped token bails within one
-    /// roundtrip's worth of latency instead of running to completion.
+    /// Like [`list_objects_stream`](Self::list_objects_stream), but the returned [`ObjectListing`]
+    /// carries an optional [`CancelToken`]. Every call to [`ObjectListing::next`] checks the token
+    /// before issuing the next metadata roundtrip, so a flipped token bails within one roundtrip's
+    /// worth of latency instead of running to completion.
     pub async fn list_objects_stream_with_cancel(
         &self,
         parent: Option<ObjectHandle>,
         cancel: Option<&CancelToken>,
     ) -> Result<ObjectListing, Error> {
-        bail_if_cancelled(cancel)?;
-
-        // For root listings, try parent=0xFFFFFFFF first. Many devices (Android,
-        // Kindle, others) return only root-level handles for this value, while
-        // parent=0 returns every object on the storage. Fall back to parent=0
-        // only when the device rejects 0xFFFFFFFF with an error.
-        if parent.is_none() {
-            let fast = self
-                .inner
-                .session
-                .get_object_handles(self.id, None, Some(ObjectHandle::ALL))
-                .await;
-
-            match fast {
-                Ok(handles) => {
-                    return Ok(ObjectListing {
-                        inner: Arc::clone(&self.inner),
-                        handles,
-                        cursor: 0,
-                        parent_filter: Some(ParentFilter::AndroidRoot),
-                        cancel: cancel.cloned(),
-                    });
-                }
-                Err(_) => {
-                    // 0xFFFFFFFF rejected; fall through to parent=0 path
-                }
-            }
-        }
-
-        bail_if_cancelled(cancel)?;
-
-        let result = self
-            .inner
-            .session
-            .get_object_handles(self.id, None, parent)
-            .await;
-
-        let handles = match result {
-            Ok(h) => h,
-            Err(Error::Protocol {
-                code: crate::ptp::ResponseCode::InvalidObjectHandle,
-                ..
-            }) if parent.is_none() => {
-                // Samsung fallback: use recursive listing and filter to root items
-                return self.list_objects_stream_samsung_fallback(cancel).await;
-            }
-            Err(e) => return Err(e),
-        };
-
-        let parent_filter = Some(ParentFilter::Exact(parent.unwrap_or(ObjectHandle::ROOT)));
-
-        Ok(ObjectListing {
-            inner: Arc::clone(&self.inner),
-            handles,
-            cursor: 0,
-            parent_filter,
-            cancel: cancel.cloned(),
-        })
-    }
-
-    /// Samsung fallback returning a streaming [`ObjectListing`].
-    async fn list_objects_stream_samsung_fallback(
-        &self,
-        cancel: Option<&CancelToken>,
-    ) -> Result<ObjectListing, Error> {
-        let handles = self
-            .inner
-            .session
-            .get_object_handles(self.id, None, Some(ObjectHandle::ALL))
-            .await?;
-
-        Ok(ObjectListing {
-            inner: Arc::clone(&self.inner),
-            handles,
-            cursor: 0,
-            // Root items have parent 0 or 0xFFFFFFFF (depending on device)
-            parent_filter: Some(ParentFilter::AndroidRoot),
-            cancel: cancel.cloned(),
-        })
+        let listing = self.backend.list(self.id, parent, cancel).await?;
+        Ok(ObjectListing::new(listing))
     }
 
     /// List objects recursively.
     ///
-    /// This method automatically detects Android devices and uses manual traversal
-    /// for them, since Android's MTP implementation doesn't support the native
-    /// `ObjectHandle::ALL` recursive listing.
-    ///
-    /// For non-Android devices, it tries native recursive listing first and falls
-    /// back to manual traversal if the results look incomplete.
+    /// Walks the folder tree manually via [`list_objects`](Self::list_objects), which already
+    /// applies the backend's root/quirk handling. Works the same across all devices, including
+    /// Android (whose native `GetObjectHandles` recursion is broken).
     pub async fn list_objects_recursive(
-        &self,
-        parent: Option<ObjectHandle>,
-    ) -> Result<Vec<ObjectInfo>, Error> {
-        if self.inner.is_android() {
-            return self.list_objects_recursive_manual(parent).await;
-        }
-
-        let native_result = self.list_objects_recursive_native(parent).await?;
-
-        // Heuristic: if we only got folders and no files, native listing
-        // probably didn't work - fall back to manual traversal
-        let has_files = native_result.iter().any(|o| o.is_file());
-        if !native_result.is_empty() && !has_files {
-            return self.list_objects_recursive_manual(parent).await;
-        }
-
-        Ok(native_result)
-    }
-
-    /// List objects recursively using native MTP recursive listing.
-    pub async fn list_objects_recursive_native(
-        &self,
-        parent: Option<ObjectHandle>,
-    ) -> Result<Vec<ObjectInfo>, Error> {
-        let recursive_parent = if parent.is_none() {
-            Some(ObjectHandle::ALL)
-        } else {
-            parent
-        };
-
-        let handles = self
-            .inner
-            .session
-            .get_object_handles(self.id, None, recursive_parent)
-            .await?;
-
-        let mut objects = Vec::with_capacity(handles.len());
-        for handle in handles {
-            let mut info = self.inner.session.get_object_info_full(handle).await?;
-            info.handle = handle;
-            objects.push(info);
-        }
-        Ok(objects)
-    }
-
-    /// List objects recursively using manual folder traversal.
-    pub async fn list_objects_recursive_manual(
         &self,
         parent: Option<ObjectHandle>,
     ) -> Result<Vec<ObjectInfo>, Error> {
@@ -396,7 +213,6 @@ impl Storage {
 
         while let Some(current_parent) = folders_to_visit.pop() {
             let objects = self.list_objects(current_parent).await?;
-
             for obj in objects {
                 if obj.is_folder() {
                     folders_to_visit.push(Some(obj.handle));
@@ -404,394 +220,88 @@ impl Storage {
                 result.push(obj);
             }
         }
-
         Ok(result)
     }
 
     /// Get object metadata by handle.
     ///
-    /// Files larger than 4 GB have their u64 size auto-resolved via
-    /// `GetObjectPropValue(ObjectSize)`; the standard `ObjectInfo` dataset
-    /// only encodes a u32 size which saturates at 4 GB - 1.
+    /// Files larger than 4 GB have their u64 size auto-resolved by the backend.
     pub async fn get_object_info(&self, handle: ObjectHandle) -> Result<ObjectInfo, Error> {
-        let mut info = self.inner.session.get_object_info_full(handle).await?;
-        info.handle = handle;
-        Ok(info)
+        self.backend.object_info(handle).await
     }
 
     // =========================================================================
     // Download operations
     // =========================================================================
 
-    /// Download a file and return all bytes.
+    /// Download a whole file and return all bytes.
     ///
-    /// For small to medium files where you want all the data in memory.
-    /// For large files or streaming to disk, use [`download_stream()`](Self::download_stream).
-    pub async fn download(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
-        self.inner.session.get_object(handle).await
+    /// For small to medium files where you want all the data in memory. For large files or
+    /// streaming to disk, use [`download`](Self::download).
+    pub async fn download_to_vec(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
+        self.backend.read_range(handle, 0, None).await
     }
 
-    /// Download a partial file (byte range).
+    /// Read a bounded byte range into a `Vec<u8>` (single shot, buffered).
     ///
-    /// Uses the standard `GetPartialObject` operation, which has a 32-bit offset.
-    /// Offsets beyond 4 GB will be silently truncated. For files larger than 4 GB,
-    /// use [`download_partial_64()`](Self::download_partial_64) instead.
-    pub async fn download_partial(
+    /// Uses the device's 64-bit partial-read operation, so offsets beyond 4 GB work on devices that
+    /// advertise it. `len` is capped at `u32::MAX` per call.
+    pub async fn read_range(
         &self,
         handle: ObjectHandle,
         offset: u64,
-        size: u32,
+        len: u32,
     ) -> Result<Vec<u8>, Error> {
-        self.inner
-            .session
-            .get_partial_object(handle, offset, size)
-            .await
+        self.backend.read_range(handle, offset, Some(len)).await
     }
 
-    /// Download a partial file (byte range) with 64-bit offset support.
+    /// Fetch the thumbnail image bytes for an object.
+    pub async fn thumbnail(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
+        self.backend.thumbnail(handle).await
+    }
+
+    /// Download a file as a stream (true streaming), holding the session for the whole file.
     ///
-    /// Uses the Android/MTP extension `GetPartialObject64`, which supports offsets
-    /// beyond 4 GB. Only works on devices that advertise support for it (most modern
-    /// Android devices do); others return `OperationNotSupported`.
-    pub async fn download_partial_64(
+    /// Yields data chunks as they arrive without buffering the entire file in memory. This is the
+    /// raw-speed path; it holds the device's one session open for the whole file (see [`download`]
+    /// docs). For a long read where the device must stay responsive to other work, use
+    /// [`download_windowed`](Self::download_windowed) instead.
+    ///
+    /// [`download`]: Self::download
+    pub async fn download(
         &self,
         handle: ObjectHandle,
-        offset: u64,
-        size: u32,
-    ) -> Result<Vec<u8>, Error> {
-        self.inner
-            .session
-            .get_partial_object_64(handle, offset, size)
-            .await
-    }
-
-    pub async fn download_thumbnail(&self, handle: ObjectHandle) -> Result<Vec<u8>, Error> {
-        self.inner.session.get_thumb(handle).await
-    }
-
-    /// Download a file as a stream (true USB streaming).
-    ///
-    /// Unlike [`download()`](Self::download), this method yields data chunks
-    /// directly from USB as they arrive, without buffering the entire file
-    /// in memory.
-    ///
-    /// **For most downloads, prefer [`download_windowed()`](Self::download_windowed).**
-    /// This continuous-stream form maximizes throughput but holds the device's
-    /// single PTP session for the whole file (see Session monopoly below). Reach
-    /// for it only when you want raw speed and nothing else needs the device
-    /// during the read (a CLI `get`, a batch export).
-    ///
-    /// # Important
-    ///
-    /// The MTP session is locked while the download is active. You must either
-    /// consume the entire download or call [`FileDownload::cancel()`] before
-    /// dropping it.
-    ///
-    /// # ⚠️ Session monopoly
-    ///
-    /// MTP allows exactly one PTP session per device, and this download holds it
-    /// open for the **whole file**. While it's in flight the device can't service
-    /// any other operation (a folder listing, navigation, metadata read) until
-    /// the download finishes or is cancelled (and cancelling a multi-GB in-flight
-    /// read costs ~35 s, since the USB cancel must drain the backlog). For a long
-    /// read where the device must stay responsive to other work, use
-    /// [`download_windowed()`](Self::download_windowed) instead: it reads the file
-    /// as a sequence of small bounded windows and frees the session between each
-    /// one, so listings and navigation slip in between windows.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use mtp_rs::mtp::MtpDevice;
-    /// use mtp_rs::ObjectHandle;
-    /// use tokio::io::AsyncWriteExt;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let device = MtpDevice::open_first().await?;
-    /// # let storages = device.storages().await?;
-    /// # let storage = &storages[0];
-    /// # let handle = ObjectHandle(1);
-    /// let mut download = storage.download_stream(handle).await?;
-    /// println!("Downloading {} bytes...", download.size());
-    ///
-    /// let mut file = tokio::fs::File::create("output.bin").await?;
-    /// while let Some(chunk) = download.next_chunk().await {
-    ///     let bytes = chunk?;
-    ///     file.write_all(&bytes).await?;
-    ///     println!("Progress: {:.1}%", download.progress() * 100.0);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn download_stream(&self, handle: ObjectHandle) -> Result<FileDownload, Error> {
-        let info = self.get_object_info(handle).await?;
-        let size = info.size;
-
-        let stream = self
-            .inner
-            .session
-            .execute_with_receive_stream(crate::ptp::OperationCode::GetObject, &[handle.0])
-            .await?;
-
-        Ok(FileDownload::new(size, stream))
-    }
-
-    /// Download a file as a stream, starting at a byte offset (resumable download).
-    ///
-    /// Like [`download_stream()`](Self::download_stream), but begins reading at
-    /// `offset` and streams the remaining `[offset, size)` bytes to end-of-file.
-    /// This is what makes a download *resumable*: a consumer can abort an
-    /// in-flight download (via [`FileDownload::cancel()`], which releases the
-    /// one-per-device MTP session so listings work again), remember how many
-    /// bytes it kept, and later reopen from exactly that offset to fetch the
-    /// rest.
-    ///
-    /// Internally this drives the same streaming-receive machinery as
-    /// `download_stream`, but with `GetPartialObject64` (64-bit offset, so files
-    /// larger than 4 GB resume correctly) instead of `GetObject`. The returned
-    /// [`FileDownload`] reports the **full** object `size()` (not the segment
-    /// length), so progress and ETA stay correct across a resume:
-    /// [`bytes_received()`](FileDownload::bytes_received) starts at 0 for this
-    /// segment, but the consumer knows it already holds `offset` bytes.
-    ///
-    /// # Offset semantics
-    ///
-    /// - `offset == 0` is equivalent to [`download_stream()`](Self::download_stream)
-    ///   (the whole file), just routed through `GetPartialObject64`.
-    /// - `offset == size` yields an empty stream that completes cleanly at EOF
-    ///   (zero chunks), so "resume a file that's already complete" is a no-op,
-    ///   not an error.
-    /// - `offset > size` is a precondition violation and returns
-    ///   [`Error::InvalidData`] immediately, before any USB I/O: it never hangs
-    ///   waiting for bytes the device can't supply.
-    ///
-    /// # Per-call length cap
-    ///
-    /// `GetPartialObject64` carries a 32-bit `max_bytes` count, so a single call
-    /// requests at most `u32::MAX` (~4 GiB) bytes from the offset. When the
-    /// remaining tail is larger than that, this call streams only the first
-    /// `u32::MAX` bytes of it; resume again from the new offset to continue. (For
-    /// the typical resume-a-paused-copy use case the consumer reopens per
-    /// pause/resume cycle anyway, so each segment is well under the cap.)
-    ///
-    /// # Device support
-    ///
-    /// Requires the device to advertise `GetPartialObject64` (`0x95C1`); most
-    /// modern Android devices do. Devices that don't return
-    /// [`Error::Protocol`] with `OperationNotSupported` on the first chunk.
-    ///
-    /// # Important
-    ///
-    /// Same session-locking contract as [`download_stream()`](Self::download_stream):
-    /// the MTP session is locked while the download is active, so you must either
-    /// consume the entire stream or call [`FileDownload::cancel()`] before
-    /// dropping it. Cancelling mid-stream drains the pipe and frees the session
-    /// (the whole point of a resumable download), leaving the device usable for
-    /// the next operation.
-    ///
-    /// # ⚠️ Session monopoly
-    ///
-    /// Like [`download_stream()`](Self::download_stream), this holds the device's
-    /// one PTP session open for the **whole** `[offset, size)` segment, so the
-    /// device can't service listings or navigation until it finishes or is
-    /// cancelled. If you instead want to read a large file while keeping the
-    /// device responsive to other operations throughout (rather than as an
-    /// explicit suspend/resume around `cancel()`), reach for
-    /// [`download_windowed()`](Self::download_windowed) /
-    /// [`download_windowed_from_offset()`](Self::download_windowed_from_offset),
-    /// which free the session between every window.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use mtp_rs::mtp::{MtpDevice, DEFAULT_CANCEL_TIMEOUT};
-    /// use mtp_rs::ObjectHandle;
-    /// use tokio::io::AsyncWriteExt;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let device = MtpDevice::open_first().await?;
-    /// # let storages = device.storages().await?;
-    /// # let storage = &storages[0];
-    /// # let handle = ObjectHandle(1);
-    /// // Download the first half, then stop to free the session.
-    /// let mut download = storage.download_stream(handle).await?;
-    /// let mut file = tokio::fs::File::create("output.bin").await?;
-    /// let mut kept: u64 = 0;
-    /// while kept < download.size() / 2 {
-    ///     let Some(chunk) = download.next_chunk().await else { break };
-    ///     let bytes = chunk?;
-    ///     file.write_all(&bytes).await?;
-    ///     kept += bytes.len() as u64;
-    /// }
-    /// download.cancel(DEFAULT_CANCEL_TIMEOUT).await?; // releases the MTP session
-    ///
-    /// // ... navigate the device, do other listings ...
-    ///
-    /// // Resume from where we stopped and append the rest.
-    /// let mut resumed = storage.download_stream_from_offset(handle, kept).await?;
-    /// while let Some(chunk) = resumed.next_chunk().await {
-    ///     file.write_all(&chunk?).await?;
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn download_stream_from_offset(
-        &self,
-        handle: ObjectHandle,
-        offset: u64,
+        range: ByteRange,
     ) -> Result<FileDownload, Error> {
-        let info = self.get_object_info(handle).await?;
-        let size = info.size;
-
-        if offset > size {
-            return Err(Error::invalid_data(format!(
-                "resume offset {offset} is past the object size {size}"
-            )));
-        }
-
-        // offset == 0 is the whole file; offset == size is an empty tail. Both
-        // fall through to the same GetPartialObject64 request; the device
-        // returns the right number of bytes (all, or none) and the stream ends
-        // cleanly at the response container.
-        let remaining = size - offset;
-        // GetPartialObject64's max_bytes is a u32. A single call can ask for at
-        // most u32::MAX bytes; a larger tail is fetched across multiple resumes
-        // (documented above). Clamp so the wire value never overflows.
-        let max_bytes = u32::try_from(remaining).unwrap_or(u32::MAX);
-
-        let offset_lo = offset as u32;
-        let offset_hi = (offset >> 32) as u32;
-
-        let stream = self
-            .inner
-            .session
-            .execute_with_receive_stream(
-                crate::ptp::OperationCode::GetPartialObject64,
-                &[handle.0, offset_lo, offset_hi, max_bytes],
-            )
-            .await?;
-
-        // Report the full object size so a resumed download's progress/ETA stays
-        // anchored to the whole file, not just this segment.
-        Ok(FileDownload::new(size, stream))
+        let dl = self.backend.download(handle, range).await?;
+        Ok(FileDownload::new(dl.size, dl.body))
     }
 
-    /// Read a large file as a sequence of bounded windows, **freeing the PTP
-    /// session between every window** so the device stays responsive.
+    /// Read a large file as a sequence of bounded windows, **freeing the session between every
+    /// window** so the device stays responsive.
     ///
-    /// Unlike [`download_stream()`](Self::download_stream), which holds the
-    /// device's one PTP session open for the entire file, this returns a
-    /// [`WindowedDownload`] whose
-    /// [`next_window()`](WindowedDownload::next_window) reads the file one bounded
-    /// `GetPartialObject64` transaction at a time and **releases the session on
-    /// each return**. Between two `next_window()` calls the session is free, so a
-    /// consumer can interleave other device work (service a pending folder
-    /// listing, navigate, check a cancel flag) without aborting the read. This
-    /// makes "stay responsive to listings/navigation during a long read" easy:
-    /// a listing issued between windows just works, at its natural cost.
+    /// Each [`next_window()`](WindowedDownload::next_window) is a single bounded read that completes
+    /// and releases the device. Between two `next_window()` calls a consumer can interleave other
+    /// device work (service a pending folder listing, navigate, check a cancel flag) without
+    /// aborting the read.
     ///
-    /// `window_size` is the maximum bytes per window (the `GetPartialObject64`
-    /// `max_bytes`, a u32). It's a real, open parameter: mtp-rs stays
-    /// unopinionated. [`DEFAULT_DOWNLOAD_WINDOW`] (8 MiB) is a documented
-    /// suggestion (~80 ms/window on a Pixel 9 Pro XL: small enough to interleave,
-    /// large enough for throughput); [`download_windowed_default()`](Self::download_windowed_default)
-    /// uses it. A `window_size` of 0 is clamped to 1.
-    ///
-    /// # The consumer owns the policy
-    ///
-    /// [`WindowedDownload`] owns only the bookkeeping (total size, offset, window
-    /// sizing, EOF). It owns **no** policy: no pause, debounce, or gate. The
-    /// consumer interposes whatever it wants *between* `next_window()` calls.
-    /// That boundary is intentional: the library provides the mechanism, the
-    /// consumer provides the policy.
-    ///
-    /// # No `cancel()` needed
-    ///
-    /// To stop early, just stop calling `next_window()` and drop the
-    /// [`WindowedDownload`]: nothing is held between windows, so there's no
-    /// session to drain and [`Drop`] is a no-op. Contrast
-    /// [`FileDownload`], which holds the session open and **must** be consumed or
-    /// [`cancel()`](FileDownload::cancel)led before drop.
-    ///
-    /// [`size()`](WindowedDownload::size) reports the **full** object size, so
-    /// progress/ETA stays anchored to the whole file.
-    ///
-    /// # Device support
-    ///
-    /// Requires the device to advertise `GetPartialObject64` (`0x95C1`); most
-    /// modern Android devices do. Devices that don't return [`Error::Protocol`]
-    /// with `OperationNotSupported` on the first window.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use mtp_rs::mtp::{MtpDevice, DEFAULT_DOWNLOAD_WINDOW};
-    /// use mtp_rs::ObjectHandle;
-    /// use tokio::io::AsyncWriteExt;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let device = MtpDevice::open_first().await?;
-    /// # let storages = device.storages().await?;
-    /// # let storage = &storages[0];
-    /// # let handle = ObjectHandle(1);
-    /// let mut download = storage.download_windowed(handle, DEFAULT_DOWNLOAD_WINDOW).await?;
-    /// println!("Reading {} bytes...", download.size());
-    ///
-    /// let mut file = tokio::fs::File::create("output.bin").await?;
-    /// while let Some(window) = download.next_window().await {
-    ///     let bytes = window?;
-    ///     file.write_all(&bytes).await?;
-    ///     // The session is FREE here, so do other device work between windows.
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// `window_size` is the maximum bytes per window. [`DEFAULT_DOWNLOAD_WINDOW`] (8 MiB) is a
+    /// documented suggestion; a `window_size` of 0 is clamped to 1.
     pub async fn download_windowed(
         &self,
         handle: ObjectHandle,
+        range: ByteRange,
         window_size: u32,
     ) -> Result<WindowedDownload, Error> {
-        self.download_windowed_from_offset(handle, 0, window_size)
-            .await
-    }
-
-    /// Read a large file in windows starting at a byte offset (resumable
-    /// windowed download).
-    ///
-    /// Like [`download_windowed()`](Self::download_windowed), but the first window
-    /// starts at `offset` and the download covers `[offset, size)`. Useful to
-    /// resume a partially-fetched file while still freeing the session between
-    /// windows.
-    ///
-    /// # Offset semantics (mirrors [`download_stream_from_offset()`](Self::download_stream_from_offset))
-    ///
-    /// - `offset == 0` covers the whole file (equivalent to
-    ///   [`download_windowed()`](Self::download_windowed)).
-    /// - `offset == size` yields a download whose first
-    ///   [`next_window()`](WindowedDownload::next_window) returns `None` (a clean,
-    ///   already-complete no-op), issuing no USB transaction.
-    /// - `offset > size` returns [`Error::InvalidData`] immediately, before any
-    ///   USB I/O.
-    ///
-    /// [`size()`](WindowedDownload::size) still reports the full object size, so
-    /// progress/ETA stays anchored across a resume.
-    pub async fn download_windowed_from_offset(
-        &self,
-        handle: ObjectHandle,
-        offset: u64,
-        window_size: u32,
-    ) -> Result<WindowedDownload, Error> {
-        let info = self.get_object_info(handle).await?;
-        let size = info.size;
-
+        let size = self.backend.object_info(handle).await?.size;
+        let offset = range.offset();
         if offset > size {
             return Err(Error::invalid_data(format!(
                 "windowed download offset {offset} is past the object size {size}"
             )));
         }
-
         Ok(WindowedDownload::new(
-            Arc::clone(&self.inner),
+            Arc::clone(&self.backend),
             handle,
             size,
             offset,
@@ -800,16 +310,12 @@ impl Storage {
     }
 
     /// Read a large file in windows using the default window size
-    /// ([`DEFAULT_DOWNLOAD_WINDOW`], 8 MiB).
-    ///
-    /// Convenience for [`download_windowed(handle, DEFAULT_DOWNLOAD_WINDOW)`](Self::download_windowed).
-    /// Reach for [`download_windowed()`](Self::download_windowed) with an explicit
-    /// `window_size` when you want to tune the responsiveness/throughput tradeoff.
+    /// ([`DEFAULT_DOWNLOAD_WINDOW`], 8 MiB), covering the whole file.
     pub async fn download_windowed_default(
         &self,
         handle: ObjectHandle,
     ) -> Result<WindowedDownload, Error> {
-        self.download_windowed(handle, DEFAULT_DOWNLOAD_WINDOW)
+        self.download_windowed(handle, ByteRange::Full, DEFAULT_DOWNLOAD_WINDOW)
             .await
     }
 
@@ -819,24 +325,15 @@ impl Storage {
 
     /// Upload a file from a stream.
     ///
-    /// The data streams directly to USB in chunks; the protocol only needs the
-    /// total size upfront (provided via `info`), not the whole file in memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `parent` - Parent folder handle (None for root)
-    /// * `info` - Object metadata including filename and size
-    /// * `data` - Stream of data chunks to upload
+    /// The data streams directly to the device in chunks; the protocol only needs the total size
+    /// upfront (provided via `info`), not the whole file in memory.
     ///
     /// # Errors
     ///
-    /// Returns [`UploadError`] on failure. PTP uploads are two-phase:
-    /// `SendObjectInfo` creates the object on the device (yielding a handle),
-    /// then `SendObject` streams the bytes. If the data phase fails, the device
-    /// is left holding a partial (possibly empty or truncated) object, and
-    /// [`UploadError::partial`] carries its handle so you can
-    /// [`delete`](Self::delete) it or retry the data phase to resume. The library
-    /// does **not** auto-delete it. See [`UploadError`] for the full contract.
+    /// Returns [`UploadError`] on failure. Uploads are two-phase: the object is created (yielding a
+    /// handle), then the bytes are streamed. If the data phase fails, the device may keep a partial
+    /// object, and [`UploadError::partial`] carries its handle so you can [`delete`](Self::delete)
+    /// it or retry the data phase to resume. The library does **not** auto-delete it.
     pub async fn upload<S>(
         &self,
         parent: Option<ObjectHandle>,
@@ -844,93 +341,33 @@ impl Storage {
         data: S,
     ) -> Result<ObjectHandle, UploadError>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send + 'static,
     {
-        self.upload_with_progress(parent, info, data, |_| ControlFlow::Continue(()))
+        self.backend
+            .upload(self.id, parent, info, Box::pin(data), None)
             .await
     }
 
-    /// Upload a file with progress callback.
+    /// Upload a file with a progress callback.
     ///
-    /// Progress is reported as data is read from the stream. Return
-    /// `ControlFlow::Break(())` from the callback to cancel the upload.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`UploadError`] on failure or cancellation. When the failure
-    /// happens after the object was created (any error or cancellation during
-    /// the data phase), [`UploadError::partial`] carries the handle of the
-    /// possibly-partial object the device still holds, so you can
-    /// [`delete`](Self::delete) it or retry the data phase to resume. The library
-    /// does **not** auto-delete it. Cancellation surfaces as
-    /// [`Error::Cancelled`](crate::Error::Cancelled) in
-    /// [`UploadError::source`]. See [`UploadError`] for the full contract.
+    /// Progress is reported as data is read from the stream. Return `ControlFlow::Break(())` from
+    /// the callback to cancel the upload (which surfaces as [`Error::Cancelled`] in
+    /// [`UploadError::source`]).
     pub async fn upload_with_progress<S, F>(
         &self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: S,
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<ObjectHandle, UploadError>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send,
-        F: FnMut(Progress) -> ControlFlow<()> + Send,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send + 'static,
+        F: FnMut(Progress) -> ControlFlow<()> + Send + 'static,
     {
-        use futures::StreamExt;
-
-        let total_size = info.size;
-        let object_info = info.to_object_info();
-        let parent_handle = parent.unwrap_or(ObjectHandle::ROOT);
-
-        // Phase 1: SendObjectInfo. No object exists yet, so a failure here has no
-        // partial to surface.
-        let (_, _, handle) = self
-            .inner
-            .session
-            .send_object_info(self.id, parent_handle, &object_info)
+        let progress: ProgressFn = Box::new(on_progress);
+        self.backend
+            .upload(self.id, parent, info, Box::pin(data), Some(progress))
             .await
-            .map_err(|source| UploadError {
-                source,
-                partial: None,
-            })?;
-
-        // Wrap the stream to report progress and support cancellation.
-        let mut bytes_sent = 0u64;
-        let progress_stream = data.map(move |chunk_result| {
-            let chunk = chunk_result?;
-            bytes_sent += chunk.len() as u64;
-            let progress = Progress {
-                bytes_transferred: bytes_sent,
-                total_bytes: Some(total_size),
-            };
-            if let ControlFlow::Break(()) = on_progress(progress) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "cancelled",
-                ));
-            }
-            Ok(chunk)
-        });
-
-        // Phase 2: SendObject. The object already exists on the device, so any
-        // failure (genuine error or cancellation) surfaces the handle as
-        // `partial` for the caller to delete or resume. We do NOT delete it here.
-        self.inner
-            .session
-            .send_object_stream(total_size, progress_stream)
-            .await
-            .map_err(|e| match &e {
-                Error::Io(io_err) if io_err.kind() == std::io::ErrorKind::Interrupted => {
-                    Error::Cancelled
-                }
-                _ => e,
-            })
-            .map_err(|source| UploadError {
-                source,
-                partial: Some(handle),
-            })?;
-
-        Ok(handle)
     }
 
     // =========================================================================
@@ -942,40 +379,25 @@ impl Storage {
         parent: Option<ObjectHandle>,
         name: &str,
     ) -> Result<ObjectHandle, Error> {
-        let info = NewObjectInfo::folder(name);
-        let object_info = info.to_object_info();
-        let parent_handle = parent.unwrap_or(ObjectHandle::ROOT);
-
-        let (_, _, handle) = self
-            .inner
-            .session
-            .send_object_info(self.id, parent_handle, &object_info)
-            .await?;
-
-        Ok(handle)
+        self.backend.create_folder(self.id, parent, name).await
     }
 
     pub async fn delete(&self, handle: ObjectHandle) -> Result<(), Error> {
-        self.inner.session.delete_object(handle).await
+        self.backend.delete(handle, None).await
     }
 
-    /// Like [`delete`](Self::delete), but bails with `Err(Error::Cancelled)`
-    /// before issuing the PTP `DeleteObject` request when the token is set.
-    ///
-    /// The PTP `DeleteObject` is a single fast transaction (no internal loop),
-    /// so the meaningful cancel point is _between_ recursive iterations on the
-    /// caller side. This entry point lets callers thread the same token through
-    /// list and delete without juggling two API shapes.
+    /// Like [`delete`](Self::delete), but bails with `Err(Error::Cancelled)` before issuing the
+    /// delete request when the token is set.
     pub async fn delete_with_cancel(
         &self,
         handle: ObjectHandle,
         cancel: Option<&CancelToken>,
     ) -> Result<(), Error> {
         bail_if_cancelled(cancel)?;
-        self.inner.session.delete_object(handle).await
+        self.backend.delete(handle, cancel).await
     }
 
-    /// Move an object to a different folder.
+    /// Move an object to a different folder (optionally a different storage).
     pub async fn move_object(
         &self,
         handle: ObjectHandle,
@@ -983,10 +405,7 @@ impl Storage {
         new_storage: Option<StorageId>,
     ) -> Result<(), Error> {
         let storage = new_storage.unwrap_or(self.id);
-        self.inner
-            .session
-            .move_object(handle, storage, new_parent)
-            .await
+        self.backend.move_object(handle, new_parent, storage).await
     }
 
     pub async fn copy_object(
@@ -996,640 +415,13 @@ impl Storage {
         new_storage: Option<StorageId>,
     ) -> Result<ObjectHandle, Error> {
         let storage = new_storage.unwrap_or(self.id);
-        self.inner
-            .session
-            .copy_object(handle, storage, new_parent)
-            .await
+        self.backend.copy_object(handle, new_parent, storage).await
     }
 
     /// Rename an object (file or folder).
     ///
-    /// Not all devices support renaming. Use `MtpDevice::supports_rename()`
-    /// to check if this operation is available.
+    /// Not all devices support renaming. Use `MtpDevice::supports_rename()` to check.
     pub async fn rename(&self, handle: ObjectHandle, new_name: &str) -> Result<(), Error> {
-        self.inner.session.rename_object(handle, new_name).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ptp::{
-        pack_u16, pack_u32, pack_u32_array, ContainerType, DateTime, DeviceInfo, ObjectFormatCode,
-        OperationCode, PtpSession, ResponseCode, StorageInfo,
-    };
-    use crate::transport::mock::MockTransport;
-
-    // -- Test helpers (same protocol-level helpers as session tests) -----------
-
-    fn mock_transport() -> (Arc<dyn crate::transport::Transport>, Arc<MockTransport>) {
-        let mock = Arc::new(MockTransport::new());
-        let transport: Arc<dyn crate::transport::Transport> = Arc::clone(&mock) as _;
-        (transport, mock)
-    }
-
-    fn ok_response(tx_id: u32) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(12);
-        buf.extend_from_slice(&pack_u32(12));
-        buf.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
-        buf.extend_from_slice(&pack_u16(ResponseCode::Ok.into()));
-        buf.extend_from_slice(&pack_u32(tx_id));
-        buf
-    }
-
-    fn error_response(tx_id: u32, code: ResponseCode) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(12);
-        buf.extend_from_slice(&pack_u32(12));
-        buf.extend_from_slice(&pack_u16(ContainerType::Response.to_code()));
-        buf.extend_from_slice(&pack_u16(code.into()));
-        buf.extend_from_slice(&pack_u32(tx_id));
-        buf
-    }
-
-    fn data_container(tx_id: u32, code: OperationCode, payload: &[u8]) -> Vec<u8> {
-        let len = 12 + payload.len();
-        let mut buf = Vec::with_capacity(len);
-        buf.extend_from_slice(&pack_u32(len as u32));
-        buf.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
-        buf.extend_from_slice(&pack_u16(code.into()));
-        buf.extend_from_slice(&pack_u32(tx_id));
-        buf.extend_from_slice(payload);
-        buf
-    }
-
-    // -- Storage-level helpers ------------------------------------------------
-
-    /// Build a Storage backed by a mock transport for testing.
-    ///
-    /// Queues the OpenSession response automatically. The caller must queue
-    /// further responses before calling list methods.
-    async fn mock_storage(
-        transport: Arc<dyn crate::transport::Transport>,
-        vendor_extension_desc: &str,
-    ) -> Storage {
-        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
-        let inner = Arc::new(MtpDeviceInner {
-            session,
-            device_info: DeviceInfo {
-                vendor_extension_desc: vendor_extension_desc.to_string(),
-                ..DeviceInfo::default()
-            },
-        });
-        Storage::new(inner, StorageId(1), StorageInfo::default())
-    }
-
-    /// Build a minimal ObjectInfo binary payload with a given filename and parent.
-    fn object_info_bytes(filename: &str, parent: u32) -> Vec<u8> {
-        let info = ObjectInfo {
-            storage_id: StorageId(1),
-            format: ObjectFormatCode::Jpeg,
-            parent: ObjectHandle(parent),
-            filename: filename.to_string(),
-            created: Some(DateTime {
-                year: 2024,
-                month: 1,
-                day: 1,
-                hour: 0,
-                minute: 0,
-                second: 0,
-            }),
-            ..ObjectInfo::default()
-        };
-        info.to_bytes().unwrap()
-    }
-
-    /// Queue GetObjectHandles response (data + ok) for a given transaction ID.
-    fn queue_handles(mock: &MockTransport, tx_id: u32, handles: &[u32]) {
-        let data = pack_u32_array(handles);
-        mock.queue_response(data_container(
-            tx_id,
-            OperationCode::GetObjectHandles,
-            &data,
-        ));
-        mock.queue_response(ok_response(tx_id));
-    }
-
-    /// Queue GetObjectInfo response (data + ok) for a given transaction ID.
-    fn queue_object_info(mock: &MockTransport, tx_id: u32, filename: &str, parent: u32) {
-        let data = object_info_bytes(filename, parent);
-        mock.queue_response(data_container(tx_id, OperationCode::GetObjectInfo, &data));
-        mock.queue_response(ok_response(tx_id));
-    }
-
-    // -- Tests ----------------------------------------------------------------
-
-    #[tokio::test]
-    async fn stream_returns_objects_with_correct_counters() {
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        queue_handles(&mock, 1, &[10, 20, 30]);
-        queue_object_info(&mock, 2, "photo.jpg", 0);
-        queue_object_info(&mock, 3, "video.mp4", 0);
-        queue_object_info(&mock, 4, "notes.txt", 0);
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        assert_eq!(listing.total(), 3);
-        assert_eq!(listing.fetched(), 0);
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "photo.jpg");
-        assert_eq!(first.handle, ObjectHandle(10));
-        assert_eq!(listing.fetched(), 1);
-
-        let second = listing.next().await.unwrap().unwrap();
-        assert_eq!(second.filename, "video.mp4");
-        assert_eq!(second.handle, ObjectHandle(20));
-        assert_eq!(listing.fetched(), 2);
-
-        let third = listing.next().await.unwrap().unwrap();
-        assert_eq!(third.filename, "notes.txt");
-        assert_eq!(third.handle, ObjectHandle(30));
-        assert_eq!(listing.fetched(), 3);
-
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_empty_directory() {
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_handles(&mock, 1, &[]);
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        assert_eq!(listing.total(), 0);
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_filters_by_parent() {
-        // Root fast path (0xFFFFFFFF) uses AndroidRoot filter, which rejects
-        // objects whose parent is neither 0 nor 0xFFFFFFFF.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        queue_handles(&mock, 1, &[10, 20, 30]);
-        queue_object_info(&mock, 2, "root_file.jpg", 0); // parent=ROOT, included
-        queue_object_info(&mock, 3, "nested.jpg", 99); // parent=99, filtered out
-        queue_object_info(&mock, 4, "another_root.txt", 0); // parent=ROOT, included
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        assert_eq!(listing.total(), 3); // Total handles from device
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "root_file.jpg");
-        assert_eq!(listing.fetched(), 1);
-
-        let second = listing.next().await.unwrap().unwrap();
-        assert_eq!(second.filename, "another_root.txt");
-        assert_eq!(listing.fetched(), 3); // Processed all 3 (including filtered one)
-
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_root_accepts_both_parent_values() {
-        // Root fast path uses AndroidRoot filter: accepts parent 0 or 0xFFFFFFFF
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        queue_handles(&mock, 1, &[10, 20, 30]);
-        queue_object_info(&mock, 2, "dcim", 0); // parent=0, root
-        queue_object_info(&mock, 3, "download", 0xFFFFFFFF); // parent=ALL, also root
-        queue_object_info(&mock, 4, "nested", 42); // not root
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "dcim");
-
-        let second = listing.next().await.unwrap().unwrap();
-        assert_eq!(second.filename, "download");
-
-        assert!(listing.next().await.is_none()); // "nested" filtered out
-    }
-
-    #[tokio::test]
-    async fn stream_subfolder_listing() {
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        let parent_handle = 42u32;
-        queue_handles(&mock, 1, &[100, 101]);
-        queue_object_info(&mock, 2, "IMG_001.jpg", parent_handle);
-        queue_object_info(&mock, 3, "IMG_002.jpg", parent_handle);
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage
-            .list_objects_stream(Some(ObjectHandle(parent_handle)))
-            .await
-            .unwrap();
-
-        assert_eq!(listing.total(), 2);
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "IMG_001.jpg");
-        let second = listing.next().await.unwrap().unwrap();
-        assert_eq!(second.filename, "IMG_002.jpg");
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_propagates_mid_listing_error() {
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        queue_handles(&mock, 1, &[10, 20]);
-        queue_object_info(&mock, 2, "good.jpg", 0);
-        // Handle 20: device returns error instead of object info
-        mock.queue_response(error_response(3, ResponseCode::InvalidObjectHandle));
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "good.jpg");
-
-        let second = listing.next().await.unwrap();
-        assert!(second.is_err());
-    }
-
-    #[tokio::test]
-    async fn list_objects_matches_stream_collect() {
-        // Verify list_objects() returns identical results to collecting the stream
-        let (transport1, mock1) = mock_transport();
-        let (transport2, mock2) = mock_transport();
-
-        for mock in [&mock1, &mock2] {
-            mock.queue_response(ok_response(0)); // OpenSession
-            queue_handles(mock, 1, &[10, 20]);
-            queue_object_info(mock, 2, "a.jpg", 0);
-            queue_object_info(mock, 3, "b.txt", 0);
-        }
-
-        let storage1 = mock_storage(transport1, "").await;
-        let storage2 = mock_storage(transport2, "").await;
-
-        let all_at_once = storage1.list_objects(None).await.unwrap();
-
-        let mut listing = storage2.list_objects_stream(None).await.unwrap();
-        let mut streamed = Vec::new();
-        while let Some(result) = listing.next().await {
-            streamed.push(result.unwrap());
-        }
-
-        assert_eq!(all_at_once.len(), streamed.len());
-        for (a, b) in all_at_once.iter().zip(streamed.iter()) {
-            assert_eq!(a.filename, b.filename);
-            assert_eq!(a.handle, b.handle);
-        }
-    }
-
-    // -- Root listing fast-path / fallback tests --------------------------------
-
-    #[tokio::test]
-    async fn stream_root_falls_back_on_error() {
-        // When 0xFFFFFFFF is rejected, falls through to parent=0 with Exact(ROOT)
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        // Fast path (0xFFFFFFFF): device rejects with InvalidObjectHandle
-        mock.queue_response(error_response(1, ResponseCode::InvalidObjectHandle));
-
-        // Fallback path (parent=0): returns root objects
-        queue_handles(&mock, 2, &[10, 20]);
-        queue_object_info(&mock, 3, "root.jpg", 0);
-        queue_object_info(&mock, 4, "nested.jpg", 99); // filtered by Exact(ROOT)
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        assert_eq!(listing.total(), 2);
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "root.jpg");
-
-        // nested.jpg has parent=99, filtered out by Exact(ROOT)
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_root_empty_is_not_fallback() {
-        // Empty Ok([]) from 0xFFFFFFFF is a valid empty storage, not a fallback trigger
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        queue_handles(&mock, 1, &[]); // fast path returns empty
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        assert_eq!(listing.total(), 0);
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_kindle_root_uses_fast_path() {
-        // Non-Android device (Kindle) benefits from 0xFFFFFFFF fast path
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        queue_handles(&mock, 1, &[100, 101, 102]);
-        queue_object_info(&mock, 2, "documents", 0);
-        queue_object_info(&mock, 3, "system", 0);
-        queue_object_info(&mock, 4, "fonts", 0);
-
-        let storage = mock_storage(transport, "microsoft.com/WMDRMPD:10.1").await;
-        let mut listing = storage.list_objects_stream(None).await.unwrap();
-
-        assert_eq!(listing.total(), 3);
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "documents");
-        let second = listing.next().await.unwrap().unwrap();
-        assert_eq!(second.filename, "system");
-        let third = listing.next().await.unwrap().unwrap();
-        assert_eq!(third.filename, "fonts");
-
-        assert!(listing.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn stream_subfolder_skips_fast_path() {
-        // Subfolder listing should not attempt 0xFFFFFFFF; only one get_object_handles call
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        let parent_handle = 50u32;
-        queue_handles(&mock, 1, &[200, 201]);
-        queue_object_info(&mock, 2, "child_a.txt", parent_handle);
-        queue_object_info(&mock, 3, "child_b.txt", parent_handle);
-
-        let storage = mock_storage(transport, "").await;
-        let mut listing = storage
-            .list_objects_stream(Some(ObjectHandle(parent_handle)))
-            .await
-            .unwrap();
-
-        assert_eq!(listing.total(), 2);
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "child_a.txt");
-        let second = listing.next().await.unwrap().unwrap();
-        assert_eq!(second.filename, "child_b.txt");
-        assert!(listing.next().await.is_none());
-    }
-
-    // -- Full-size (>4 GB) resolution via GetObjectPropValue ------------------
-
-    /// Build an ObjectInfo payload with a specific `size`. Sizes > u32::MAX are
-    /// serialized as u32::MAX by `ObjectInfo::to_bytes`, matching real-device behavior.
-    fn object_info_bytes_with_size(filename: &str, parent: u32, size: u64) -> Vec<u8> {
-        let info = ObjectInfo {
-            storage_id: StorageId(1),
-            format: ObjectFormatCode::Jpeg,
-            parent: ObjectHandle(parent),
-            filename: filename.to_string(),
-            size,
-            ..ObjectInfo::default()
-        };
-        info.to_bytes().unwrap()
-    }
-
-    fn queue_object_info_with_size(
-        mock: &MockTransport,
-        tx_id: u32,
-        filename: &str,
-        parent: u32,
-        size: u64,
-    ) {
-        let data = object_info_bytes_with_size(filename, parent, size);
-        mock.queue_response(data_container(tx_id, OperationCode::GetObjectInfo, &data));
-        mock.queue_response(ok_response(tx_id));
-    }
-
-    fn queue_object_size_prop(mock: &MockTransport, tx_id: u32, size: u64) {
-        let payload = crate::ptp::pack_u64(size);
-        mock.queue_response(data_container(
-            tx_id,
-            OperationCode::GetObjectPropValue,
-            &payload,
-        ));
-        mock.queue_response(ok_response(tx_id));
-    }
-
-    #[tokio::test]
-    async fn get_object_info_resolves_saturated_size() {
-        // Simulate a 5 GB file: ObjectInfo reports u32::MAX, GetObjectPropValue returns real u64.
-        const REAL_SIZE: u64 = 5 * 1024 * 1024 * 1024;
-
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_object_info_with_size(&mock, 1, "big.mkv", 0, REAL_SIZE);
-        queue_object_size_prop(&mock, 2, REAL_SIZE);
-
-        let storage = mock_storage(transport, "").await;
-        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
-
-        assert_eq!(info.filename, "big.mkv");
-        assert_eq!(info.size, REAL_SIZE, "size should be resolved to full u64");
-    }
-
-    #[tokio::test]
-    async fn get_object_info_skips_lookup_when_size_fits_u32() {
-        // Under u32::MAX: GetObjectPropValue must NOT be called. If it were, the test
-        // would hang or fail because we only queue one response.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_object_info_with_size(&mock, 1, "small.jpg", 0, 1_000_000);
-
-        let storage = mock_storage(transport, "").await;
-        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
-
-        assert_eq!(info.size, 1_000_000);
-    }
-
-    #[tokio::test]
-    async fn get_object_info_falls_back_when_prop_lookup_fails() {
-        // Device reports saturated size but doesn't support GetObjectPropValue.
-        // Caller should receive the saturated value rather than an error.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_object_info_with_size(&mock, 1, "big.mkv", 0, 8 * 1024 * 1024 * 1024);
-        mock.queue_response(error_response(2, ResponseCode::OperationNotSupported));
-
-        let storage = mock_storage(transport, "").await;
-        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
-
-        assert_eq!(
-            info.size,
-            u64::from(u32::MAX),
-            "should keep saturated u32::MAX when prop lookup fails"
-        );
-    }
-
-    #[tokio::test]
-    async fn get_object_info_exactly_u32_max_triggers_lookup() {
-        // A file whose real size happens to equal u32::MAX is ambiguous: we can't
-        // distinguish it from a saturated >4GB file. The lookup runs and returns the
-        // true size, which in this case happens to match. Verify we handle it correctly.
-        const REAL_SIZE: u64 = u32::MAX as u64;
-
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_object_info_with_size(&mock, 1, "edge.bin", 0, REAL_SIZE);
-        queue_object_size_prop(&mock, 2, REAL_SIZE);
-
-        let storage = mock_storage(transport, "").await;
-        let info = storage.get_object_info(ObjectHandle(42)).await.unwrap();
-
-        assert_eq!(info.size, REAL_SIZE);
-    }
-
-    // -- CancelToken support --------------------------------------------------
-
-    #[tokio::test]
-    async fn cancel_before_first_handle_bails_immediately() {
-        // Cancel set before the first GetObjectInfo is issued: no per-handle
-        // USB calls happen at all. We only queue the OpenSession and the
-        // GetObjectHandles responses; if `next()` issued a GetObjectInfo,
-        // the mock would block waiting for an unqueued response.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_handles(&mock, 1, &[10, 20, 30]);
-
-        let storage = mock_storage(transport, "").await;
-        let cancel = CancelToken::new();
-        let mut listing = storage
-            .list_objects_stream_with_cancel(None, Some(&cancel))
-            .await
-            .unwrap();
-
-        assert_eq!(listing.total(), 3);
-
-        // Flip cancel before pulling any handles.
-        cancel.cancel();
-
-        let first = listing.next().await.expect("expected Some(Err(Cancelled))");
-        assert!(matches!(first, Err(Error::Cancelled)));
-    }
-
-    #[tokio::test]
-    async fn cancel_mid_listing_bails_at_next_boundary() {
-        // Queue two GetObjectInfo responses; pull one successfully, then cancel
-        // and assert the next call returns Cancelled instead of fetching the
-        // third (which we never queue).
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_handles(&mock, 1, &[10, 20, 30]);
-        queue_object_info(&mock, 2, "first.jpg", 0);
-        // Only one GetObjectInfo is queued; if cancel didn't short-circuit,
-        // the test would block on the unqueued second response.
-
-        let storage = mock_storage(transport, "").await;
-        let cancel = CancelToken::new();
-        let mut listing = storage
-            .list_objects_stream_with_cancel(None, Some(&cancel))
-            .await
-            .unwrap();
-
-        let first = listing.next().await.unwrap().unwrap();
-        assert_eq!(first.filename, "first.jpg");
-
-        // Cancel between iterations; the next() call should see it before the
-        // second GetObjectInfo USB roundtrip.
-        cancel.cancel();
-
-        let second = listing.next().await.expect("expected Some(Err(Cancelled))");
-        assert!(matches!(second, Err(Error::Cancelled)));
-    }
-
-    #[tokio::test]
-    async fn cancel_via_list_objects_returns_cancelled_error() {
-        // list_objects_with_cancel surfaces the inner Cancelled error to the
-        // caller, not a Vec.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_handles(&mock, 1, &[10, 20, 30]);
-
-        let storage = mock_storage(transport, "").await;
-        let cancel = CancelToken::new();
-        cancel.cancel();
-
-        let result = storage.list_objects_with_cancel(None, Some(&cancel)).await;
-        assert!(matches!(result, Err(Error::Cancelled)));
-    }
-
-    #[tokio::test]
-    async fn delete_with_cancel_bails_before_request() {
-        // delete_with_cancel must NOT issue the DeleteObject request when the
-        // token is set. We don't queue any response after the OpenSession; if
-        // the implementation issued the request, the call would block waiting
-        // for an unqueued response.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-
-        let storage = mock_storage(transport, "").await;
-        let cancel = CancelToken::new();
-        cancel.cancel();
-
-        let result = storage
-            .delete_with_cancel(ObjectHandle(1), Some(&cancel))
-            .await;
-        assert!(matches!(result, Err(Error::Cancelled)));
-    }
-
-    #[tokio::test]
-    async fn delete_with_cancel_no_token_runs_normally() {
-        // None token: behaves identically to delete().
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        mock.queue_response(ok_response(1)); // DeleteObject
-
-        let storage = mock_storage(transport, "").await;
-        let result = storage.delete_with_cancel(ObjectHandle(1), None).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn cancel_does_not_affect_unset_token() {
-        // Sanity: the new code path with `cancel: None` must produce identical
-        // results to the legacy `list_objects` API.
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_handles(&mock, 1, &[10, 20]);
-        queue_object_info(&mock, 2, "a.jpg", 0);
-        queue_object_info(&mock, 3, "b.jpg", 0);
-
-        let storage = mock_storage(transport, "").await;
-        let objects = storage.list_objects_with_cancel(None, None).await.unwrap();
-        assert_eq!(objects.len(), 2);
-        assert_eq!(objects[0].filename, "a.jpg");
-        assert_eq!(objects[1].filename, "b.jpg");
-    }
-
-    #[tokio::test]
-    async fn list_objects_stream_resolves_saturated_size() {
-        // Verify the fix also applies to the streaming listing path.
-        const REAL_SIZE: u64 = 6 * 1024 * 1024 * 1024;
-
-        let (transport, mock) = mock_transport();
-        mock.queue_response(ok_response(0)); // OpenSession
-        queue_handles(&mock, 1, &[10, 20]);
-        queue_object_info_with_size(&mock, 2, "small.jpg", 0, 500_000);
-        queue_object_info_with_size(&mock, 3, "huge.mkv", 0, REAL_SIZE);
-        queue_object_size_prop(&mock, 4, REAL_SIZE);
-
-        let storage = mock_storage(transport, "").await;
-        let objects = storage.list_objects(None).await.unwrap();
-
-        assert_eq!(objects.len(), 2);
-        assert_eq!(objects[0].size, 500_000);
-        assert_eq!(objects[1].size, REAL_SIZE);
+        self.backend.rename(handle, new_name).await
     }
 }

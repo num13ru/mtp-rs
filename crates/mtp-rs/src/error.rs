@@ -5,7 +5,7 @@ use thiserror::Error;
 
 /// The main error type for mtp-rs operations.
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum PtpError {
     /// USB communication error
     #[error("USB error: {0}")]
     Usb(#[from] nusb::Error),
@@ -65,40 +65,41 @@ pub enum Error {
 /// behavior is device-dependent, and PTP's two-phase model is designed so a
 /// failed `SendObject` can be retried against the same handle (resume).
 ///
-/// [`From<UploadError> for Error`] keeps `?` ergonomic for callers working in an
-/// [`enum@Error`] context; they drop the [`partial`](Self::partial) handle unless
-/// they match on `UploadError` explicitly.
+/// [`From<PtpUploadError> for PtpError`] keeps `?` ergonomic for callers working in a
+/// [`enum@PtpError`] context; they drop the [`partial`](Self::partial) handle unless
+/// they match on `PtpUploadError` explicitly.
+///
+/// This is the low-level PTP-layer upload error. The high-level [`crate::mtp`] API
+/// has its own backend-neutral [`crate::mtp::UploadError`].
 #[derive(Debug, Error)]
 #[error("{source}")]
-pub struct UploadError {
+pub struct PtpUploadError {
     /// The underlying failure (I/O, protocol, cancellation, timeout, …).
     #[source]
-    pub source: Error,
+    pub source: PtpError,
     /// The handle of the partially-written object the device may still hold.
     ///
     /// `Some` iff `SendObjectInfo` succeeded but the data phase did not complete
     /// (genuine error OR cancellation). The object may be empty or truncated. The
-    /// caller decides: delete it (for example, [`Storage::delete`]) to discard the
-    /// corrupt artifact, or retry the data phase to resume.
+    /// caller decides: delete it to discard the corrupt artifact, or retry the
+    /// data phase to resume.
     ///
     /// `None` iff no object was created (for example, `SendObjectInfo` itself
     /// failed because the storage is read-only or the parent is invalid).
-    ///
-    /// [`Storage::delete`]: crate::mtp::Storage::delete
     pub partial: Option<ObjectHandle>,
 }
 
-impl From<UploadError> for Error {
-    fn from(e: UploadError) -> Self {
+impl From<PtpUploadError> for PtpError {
+    fn from(e: PtpUploadError) -> Self {
         e.source
     }
 }
 
-impl Error {
+impl PtpError {
     /// Create an invalid data error with a message.
     #[must_use]
     pub fn invalid_data(message: impl Into<String>) -> Self {
-        Error::InvalidData {
+        PtpError::InvalidData {
             message: message.into(),
         }
     }
@@ -112,10 +113,10 @@ impl Error {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Error::Protocol {
+            PtpError::Protocol {
                 code: crate::ptp::ResponseCode::DeviceBusy,
                 ..
-            } | Error::Timeout
+            } | PtpError::Timeout
         )
     }
 
@@ -123,7 +124,7 @@ impl Error {
     #[must_use]
     pub fn response_code(&self) -> Option<crate::ptp::ResponseCode> {
         match self {
-            Error::Protocol { code, .. } => Some(*code),
+            PtpError::Protocol { code, .. } => Some(*code),
             _ => None,
         }
     }
@@ -150,7 +151,7 @@ impl Error {
     #[must_use]
     pub fn is_exclusive_access(&self) -> bool {
         match self {
-            Error::Usb(io_err) => {
+            PtpError::Usb(io_err) => {
                 let msg = io_err.to_string().to_lowercase();
                 // macOS: "could not be opened for exclusive access"
                 // Linux: typically EBUSY, but message varies
@@ -159,7 +160,7 @@ impl Error {
                     || msg.contains("device or resource busy")
                     || (msg.contains("access") && msg.contains("denied"))
             }
-            Error::Io(io_err) => {
+            PtpError::Io(io_err) => {
                 let msg = io_err.to_string().to_lowercase();
                 msg.contains("exclusive access")
                     || msg.contains("device or resource busy")
@@ -179,7 +180,7 @@ mod tests {
     fn test_is_exclusive_access_macos_message() {
         // macOS nusb error message (tested via Io variant; same logic as Usb variant)
         let io_err = IoError::other("could not be opened for exclusive access");
-        let err = Error::Io(io_err);
+        let err = PtpError::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
@@ -187,7 +188,7 @@ mod tests {
     fn test_is_exclusive_access_linux_busy() {
         // Linux EBUSY style message (tested via Io variant; same logic as Usb variant)
         let io_err = IoError::other("Device or resource busy");
-        let err = Error::Io(io_err);
+        let err = PtpError::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
@@ -195,7 +196,7 @@ mod tests {
     fn test_is_exclusive_access_windows_denied() {
         // Windows access denied style message (tested via Io variant; same logic as Usb variant)
         let io_err = IoError::new(ErrorKind::PermissionDenied, "Access is denied");
-        let err = Error::Io(io_err);
+        let err = PtpError::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
@@ -203,18 +204,18 @@ mod tests {
     fn test_is_exclusive_access_io_error() {
         // Also works for Io variant
         let io_err = IoError::other("could not be opened for exclusive access");
-        let err = Error::Io(io_err);
+        let err = PtpError::Io(io_err);
         assert!(err.is_exclusive_access());
     }
 
     #[test]
     fn test_is_exclusive_access_false_for_other_errors() {
-        assert!(!Error::Timeout.is_exclusive_access());
-        assert!(!Error::Disconnected.is_exclusive_access());
-        assert!(!Error::NoDevice.is_exclusive_access());
-        assert!(!Error::invalid_data("some error").is_exclusive_access());
+        assert!(!PtpError::Timeout.is_exclusive_access());
+        assert!(!PtpError::Disconnected.is_exclusive_access());
+        assert!(!PtpError::NoDevice.is_exclusive_access());
+        assert!(!PtpError::invalid_data("some error").is_exclusive_access());
 
         let io_err = IoError::new(ErrorKind::NotFound, "device not found");
-        assert!(!Error::Io(io_err).is_exclusive_access());
+        assert!(!PtpError::Io(io_err).is_exclusive_access());
     }
 }

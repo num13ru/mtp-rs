@@ -63,7 +63,7 @@ impl PropertyValue {
     pub fn from_bytes(
         buf: &[u8],
         data_type: PropertyDataType,
-    ) -> Result<(Self, usize), crate::Error> {
+    ) -> Result<(Self, usize), crate::PtpError> {
         match data_type {
             PropertyDataType::Int8 => {
                 let val = unpack_i8(buf)?;
@@ -104,7 +104,7 @@ impl PropertyValue {
             PropertyDataType::Undefined
             | PropertyDataType::Int128
             | PropertyDataType::Uint128
-            | PropertyDataType::Unknown(_) => Err(crate::Error::invalid_data(format!(
+            | PropertyDataType::Unknown(_) => Err(crate::PtpError::invalid_data(format!(
                 "unsupported property data type: {:?}",
                 data_type
             ))),
@@ -192,7 +192,7 @@ impl PropertyRange {
     pub fn from_bytes(
         buf: &[u8],
         data_type: PropertyDataType,
-    ) -> Result<(Self, usize), crate::Error> {
+    ) -> Result<(Self, usize), crate::PtpError> {
         let mut offset = 0;
 
         let (min, consumed) = PropertyValue::from_bytes(&buf[offset..], data_type)?;
@@ -250,7 +250,7 @@ impl DevicePropDesc {
     ///
     /// The buffer should contain the DevicePropDesc dataset as returned
     /// by GetDevicePropDesc.
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::PtpError> {
         let mut offset = 0;
 
         // 1. PropertyCode (u16)
@@ -263,7 +263,7 @@ impl DevicePropDesc {
 
         // 3. GetSet (u8): 0x00 = read-only, 0x01 = read-write
         if buf.len() <= offset {
-            return Err(crate::Error::invalid_data(
+            return Err(crate::PtpError::invalid_data(
                 "DevicePropDesc: insufficient bytes for GetSet",
             ));
         }
@@ -280,7 +280,7 @@ impl DevicePropDesc {
 
         // 6. FormFlag (u8)
         if buf.len() <= offset {
-            return Err(crate::Error::invalid_data(
+            return Err(crate::PtpError::invalid_data(
                 "DevicePropDesc: insufficient bytes for FormFlag",
             ));
         }

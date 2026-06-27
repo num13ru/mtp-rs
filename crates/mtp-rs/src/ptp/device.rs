@@ -5,7 +5,7 @@ use crate::ptp::{
     OperationCode, PtpSession, ResponseCode, ResponseContainer,
 };
 use crate::transport::{NusbTransport, Transport};
-use crate::Error;
+use crate::PtpError as Error;
 use std::sync::Arc;
 use std::time::Duration;
 

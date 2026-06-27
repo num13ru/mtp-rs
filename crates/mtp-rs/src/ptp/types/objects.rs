@@ -72,7 +72,7 @@ impl ObjectInfo {
     /// Parse ObjectInfo from a byte buffer.
     ///
     /// The buffer should contain the ObjectInfo dataset as returned by GetObjectInfo.
-    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::Error> {
+    pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::PtpError> {
         let mut offset = 0;
 
         // 1. StorageID (u32)
@@ -179,7 +179,7 @@ impl ObjectInfo {
     /// Used for SendObjectInfo operation.
     ///
     /// Returns an error if the created or modified DateTime contains invalid values.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::Error> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::PtpError> {
         let mut buf = Vec::new();
 
         // 1. StorageID (u32)

@@ -14,7 +14,7 @@ use crate::ptp::{
     OperationCode, ResponseCode, ResponseContainer, SessionId, TransactionId,
 };
 use crate::transport::Transport;
-use crate::Error;
+use crate::PtpError as Error;
 use futures::lock::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -329,8 +329,8 @@ impl PtpSession {
     /// Execute a PTP operation without a data phase.
     ///
     /// Exposed for vendor-specific or otherwise non-standard PTP operations
-    /// that aren't covered by the high-level API. Access via
-    /// [`MtpDevice::session()`](crate::mtp::MtpDevice::session).
+    /// that aren't covered by the high-level API. Obtain a session via
+    /// [`PtpDevice::open_session()`](crate::ptp::PtpDevice::open_session).
     pub async fn execute(
         &self,
         operation: OperationCode,
@@ -377,14 +377,14 @@ impl PtpSession {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use mtp_rs::mtp::MtpDevice;
-    /// use mtp_rs::ptp::{OperationCode, ResponseCode};
+    /// use mtp_rs::ptp::{OperationCode, PtpDevice, ResponseCode};
     ///
-    /// # async fn example() -> Result<(), mtp_rs::Error> {
-    /// let device = MtpDevice::open_first().await?;
+    /// # async fn example() -> Result<(), mtp_rs::PtpError> {
+    /// let device = PtpDevice::open_first().await?;
+    /// let session = device.open_session().await?;
     ///
     /// // Execute a vendor-specific operation (0x9501)
-    /// let (response, data) = device.session()
+    /// let (response, data) = session
     ///     .execute_with_receive(OperationCode::Unknown(0x9501), &[])
     ///     .await?;
     ///

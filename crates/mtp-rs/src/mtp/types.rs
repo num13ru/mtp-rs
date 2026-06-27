@@ -9,9 +9,10 @@
 //! the reverse) bridges the two so the `UsbBackend` converts only at its edge.
 
 use crate::ptp::{
-    AccessCapability, DateTime as PtpDateTime, DeviceInfo as PtpDeviceInfo, FilesystemType as PtpFs,
-    ObjectFormatCode, ObjectHandle as PtpObjectHandle, ObjectInfo as PtpObjectInfo, OperationCode,
-    StorageId as PtpStorageId, StorageInfo as PtpStorageInfo, StorageType as PtpStorageType,
+    AccessCapability, DateTime as PtpDateTime, DeviceInfo as PtpDeviceInfo,
+    FilesystemType as PtpFs, ObjectFormatCode, ObjectHandle as PtpObjectHandle,
+    ObjectInfo as PtpObjectInfo, OperationCode, StorageId as PtpStorageId,
+    StorageInfo as PtpStorageInfo, StorageType as PtpStorageType,
 };
 
 /// Opaque handle for an object on a device.
@@ -306,6 +307,8 @@ impl DeviceInfo {
 /// Description of a single storage on a device, backend-neutral.
 #[derive(Debug, Clone, Default)]
 pub struct StorageInfo {
+    /// Opaque identifier for this storage (see [`StorageId`]).
+    pub id: StorageId,
     /// Human-readable description (e.g. "Internal shared storage").
     pub description: String,
     /// Volume identifier, if any.
@@ -325,6 +328,9 @@ pub struct StorageInfo {
 impl StorageInfo {
     pub(crate) fn from_ptp(s: &PtpStorageInfo) -> Self {
         StorageInfo {
+            // The PTP StorageInfo dataset doesn't carry its own id; the backend fills it in after
+            // the GetStorageInfo call that already knows the id.
+            id: StorageId::default(),
             description: s.description.clone(),
             volume_identifier: s.volume_identifier.clone(),
             total_capacity: s.max_capacity,
