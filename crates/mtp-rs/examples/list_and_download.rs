@@ -3,7 +3,7 @@
 //! Run with: cargo run --example list_and_download
 
 use mtp_rs::mtp::MtpDevice;
-use mtp_rs::ptp::ObjectInfo;
+use mtp_rs::ObjectInfo;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // bounded windows and frees the device's single PTP session between each,
         // so other operations (listings, navigation) stay responsive during a
         // long download. (For raw throughput when nothing else needs the device,
-        // `download_stream` reads in one continuous transfer instead.)
+        // `download(handle, ByteRange::Full)` reads in one continuous transfer instead.)
         let start = std::time::Instant::now();
         let mut download = storage.download_windowed_default(img.handle).await?;
         let total_size = download.size();

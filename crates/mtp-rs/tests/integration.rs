@@ -46,7 +46,7 @@
 //! ```
 
 use mtp_rs::mtp::Storage;
-use mtp_rs::ptp::ObjectHandle;
+use mtp_rs::{ByteRange, ObjectHandle};
 use serial_test::serial;
 use std::time::Instant;
 
@@ -80,6 +80,9 @@ macro_rules! try_device {
         match $expr {
             Ok(v) => v,
             Err(e) => {
+                // Normalize to the neutral error so the helpers work for both
+                // high-level (`mtp::Error`) and low-level (`ptp::PtpError`) calls.
+                let e: mtp_rs::Error = e.into();
                 if is_hardware_error(&e) {
                     tlog!("SKIPPING: {} - {:?}", $context, e);
                     print_device_help(&e);
@@ -431,8 +434,8 @@ mod readonly {
             tlog!(
                 "  {} - {:.2} GB free / {:.2} GB total",
                 info.description,
-                info.free_space_bytes as f64 / 1e9,
-                info.max_capacity as f64 / 1e9
+                info.free_space as f64 / 1e9,
+                info.total_capacity as f64 / 1e9
             );
         }
     }
@@ -508,7 +511,10 @@ mod readonly {
         };
         tlog!("Downloading {} ({} bytes)", file_name, file_size);
 
-        let mut download = try_device!(storage.download_stream(handle).await, "start download");
+        let mut download = try_device!(
+            storage.download(handle, ByteRange::Full).await,
+            "start download"
+        );
         let total = download.size();
         let mut last_percent = 0u64;
 
@@ -560,9 +566,9 @@ mod readonly {
         let mut storages = try_device!(device.storages().await, "get storages");
         let storage = &mut storages[0];
 
-        let before = storage.info().free_space_bytes;
+        let before = storage.info().free_space;
         try_device!(storage.refresh().await, "refresh storage");
-        let after = storage.info().free_space_bytes;
+        let after = storage.info().free_space;
         tlog!("Free space: {} -> {} bytes", before, after);
     }
 
@@ -583,7 +589,10 @@ mod readonly {
         };
         tlog!("Starting download of {} ({} bytes)", file_name, file_size);
 
-        let mut download = try_device!(storage.download_stream(handle).await, "start download");
+        let mut download = try_device!(
+            storage.download(handle, ByteRange::Full).await,
+            "start download"
+        );
 
         // Read just one chunk, then cancel
         let chunk = download.next_chunk().await.expect("expected a chunk");
@@ -612,7 +621,10 @@ mod readonly {
         assert!(!objects.is_empty());
 
         // Do a second download to prove streaming still works
-        let mut download2 = try_device!(storage.download_stream(handle).await, "second download");
+        let mut download2 = try_device!(
+            storage.download(handle, ByteRange::Full).await,
+            "second download"
+        );
         let mut total = 0u64;
         while let Some(result) = download2.next_chunk().await {
             total += result.expect("download2 error").len() as u64;
@@ -676,7 +688,10 @@ mod readonly {
             };
             tlog!("Starting download of {} ({} bytes)", file_name, _file_size);
 
-            let mut download = try_device!(storage.download_stream(handle).await, "start download");
+            let mut download = try_device!(
+                storage.download(handle, ByteRange::Full).await,
+                "start download"
+            );
 
             // Read one chunk
             let chunk = download.next_chunk().await.expect("expected a chunk");
@@ -785,7 +800,10 @@ mod readonly {
         };
         tlog!("Streaming {} ({} bytes)", file_name, file_size);
 
-        let mut download = try_device!(storage.download_stream(handle).await, "start download");
+        let mut download = try_device!(
+            storage.download(handle, ByteRange::Full).await,
+            "start download"
+        );
         assert_eq!(download.size(), file_size);
 
         let mut total_received = 0u64;
@@ -845,7 +863,10 @@ mod readonly {
 
         // Reference: a plain full streaming download, reduced to a 64-bit FNV-1a
         // checksum so we don't hold the whole file in RAM twice.
-        let mut reference = try_device!(storage.download_stream(handle).await, "start stream");
+        let mut reference = try_device!(
+            storage.download(handle, ByteRange::Full).await,
+            "start stream"
+        );
         assert_eq!(reference.size(), file_size);
         let mut ref_hash = FNV_OFFSET;
         let mut ref_len = 0u64;
@@ -1004,20 +1025,17 @@ mod destructive {
         assert_eq!(obj_info.size, content_bytes.len() as u64);
 
         // Download and verify content
-        let downloaded = storage.download(handle).await.expect("download failed");
+        let downloaded = storage
+            .download_to_vec(handle)
+            .await
+            .expect("download failed");
         assert_eq!(downloaded, content_bytes);
         tlog!("Content verified");
 
         // Delete and verify
         storage.delete(handle).await.expect("delete failed");
         let result = storage.get_object_info(handle).await;
-        assert!(matches!(
-            result,
-            Err(Error::Protocol {
-                code: mtp_rs::ptp::ResponseCode::InvalidObjectHandle,
-                ..
-            })
-        ));
+        assert!(matches!(result, Err(Error::StaleHandle | Error::NotFound)));
         tlog!("Upload/download/delete PASSED");
     }
 
@@ -1095,10 +1113,7 @@ mod destructive {
                 assert_eq!(info.filename, renamed);
                 tlog!("Rename verified");
             }
-            Err(Error::Protocol {
-                code: mtp_rs::ptp::ResponseCode::OperationNotSupported,
-                ..
-            }) => {
+            Err(Error::Unsupported) => {
                 tlog!("Rename not actually supported (device lied)");
             }
             Err(e) => {
@@ -1144,7 +1159,10 @@ mod destructive {
             .expect("get info failed");
         assert_eq!(obj_info.size, total_size as u64);
 
-        let downloaded = storage.download(handle).await.expect("download failed");
+        let downloaded = storage
+            .download_to_vec(handle)
+            .await
+            .expect("download failed");
         for i in 0..num_chunks {
             let start = i * chunk_size;
             assert!(downloaded[start..start + chunk_size]
@@ -1184,7 +1202,7 @@ mod destructive {
 
         // Download
         let download = storage
-            .download_stream(source_handle)
+            .download(source_handle, ByteRange::Full)
             .await
             .expect("download failed");
         let data = download.collect().await.expect("collect failed");
@@ -1201,7 +1219,7 @@ mod destructive {
 
         // Verify
         let copy_data = storage
-            .download(dest_handle)
+            .download_to_vec(dest_handle)
             .await
             .expect("download copy failed");
         assert_eq!(copy_data, data);

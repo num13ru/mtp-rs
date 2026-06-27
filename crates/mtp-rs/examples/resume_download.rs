@@ -60,7 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // are on disk, cancel. cancel() drains the USB pipe and releases the
     // one-per-device MTP session, so the device can be navigated while "paused".
     let mut assembled = Vec::with_capacity(obj.size as usize);
-    let mut download = storage.download_stream(obj.handle).await?;
+    let mut download = storage
+        .download(obj.handle, mtp_rs::ByteRange::Full)
+        .await?;
     while (assembled.len() as u64) < kept {
         let Some(chunk) = download.next_chunk().await else {
             break;
@@ -88,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Phase 2: resume from the kept offset and append the rest. ---
     println!("Resuming from offset {kept}...");
     let mut resumed = storage
-        .download_stream_from_offset(obj.handle, kept)
+        .download(obj.handle, mtp_rs::ByteRange::From(kept))
         .await?;
     // size() reports the FULL object size, even on a resume, so progress stays
     // anchored to the whole file.
@@ -100,7 +102,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Resume complete. Assembled {} bytes.\n", assembled.len());
 
     // --- Verify the assembled file (prefix + resumed tail) matches the source. ---
-    let full = storage.download_stream(obj.handle).await?.collect().await?;
+    let full = storage
+        .download(obj.handle, mtp_rs::ByteRange::Full)
+        .await?
+        .collect()
+        .await?;
     assert_eq!(
         assembled, full,
         "prefix + resumed tail must equal a full download"

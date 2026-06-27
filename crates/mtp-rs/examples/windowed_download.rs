@@ -2,9 +2,9 @@
 //!
 //! Demonstrates `Storage::download_windowed`: read a file as a sequence of small
 //! bounded windows, and BETWEEN windows run another device operation (a folder
-//! listing) to prove the one-per-device PTP session is free the whole time. A
-//! plain `download_stream` would hold that session open for the entire file, so
-//! the listing couldn't run until the read finished or was cancelled.
+//! listing) to prove the one-per-device PTP session is free the whole time.
+//! A plain `download(handle, ByteRange::Full)` would hold that session open for the
+//! entire file, so the listing couldn't run until the read finished or was cancelled.
 //!
 //! Finally it reassembles the windows and verifies they're byte-exact against a
 //! plain full download.
@@ -67,7 +67,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // DEFAULT_DOWNLOAD_WINDOW of 8 MiB is the documented suggestion for real
     // hardware; here a small window just makes the loop visibly iterate).
     let window_size = 32 * 1024;
-    let mut download = storage.download_windowed(obj.handle, window_size).await?;
+    let mut download = storage
+        .download_windowed(obj.handle, mtp_rs::ByteRange::Full, window_size)
+        .await?;
     // size() reports the FULL object size, so progress stays anchored.
     assert_eq!(download.size(), obj.size);
 
@@ -86,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // The session is FREE right here. Run a real device op BETWEEN windows.
-        // A held-open download_stream couldn't do this. The consumer interposes
+        // A held-open `download(..., ByteRange::Full)` couldn't do this. The consumer interposes
         // whatever policy it wants here; the library holds no session lock.
         let listed = storage.list_objects(None).await?;
         listings_between += 1;
@@ -103,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Verify the reassembled file matches a plain full download (and the source).
-    let full = storage.download(obj.handle).await?;
+    let full = storage.download_to_vec(obj.handle).await?;
     assert_eq!(
         assembled, full,
         "windowed reassembly must equal a full download"

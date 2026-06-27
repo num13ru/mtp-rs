@@ -46,13 +46,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "=== Test 2: Recursive listing (bounded to {} objects) ===",
         MAX_OBJECTS
     );
-    println!(
-        "Device is Android: {}",
-        device
-            .device_info()
-            .vendor_extension_desc
-            .contains("android.com")
-    );
     let start = std::time::Instant::now();
     let mut rec_folders = 0usize;
     let mut rec_files = 0usize;
@@ -133,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match small_file {
         Some(file) => {
             println!("Downloading: {} ({} bytes)", file.filename, file.size);
-            let data = storage.download(file.handle).await?;
+            let data = storage.download_to_vec(file.handle).await?;
             println!("Downloaded {} bytes successfully!", data.len());
 
             // Verify size matches
@@ -161,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Found file in '{}': {} ({} bytes)",
                         folder.filename, file.filename, file.size
                     );
-                    let data = storage.download(file.handle).await?;
+                    let data = storage.download_to_vec(file.handle).await?;
                     println!("Downloaded {} bytes successfully!", data.len());
 
                     if data.len() as u64 == file.size {

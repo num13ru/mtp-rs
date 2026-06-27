@@ -85,7 +85,7 @@ impl MtpRsBackend {
         handle: ObjectHandle,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let storage = self.storage().await?;
-        let data = storage.download(handle).await?;
+        let data = storage.download_to_vec(handle).await?;
         Ok(data)
     }
 
