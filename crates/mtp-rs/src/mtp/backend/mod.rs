@@ -58,7 +58,11 @@ impl ByteRange {
 }
 
 /// A progress callback for uploads. Returning [`ControlFlow::Break`] cancels the transfer.
-pub(crate) type ProgressFn = Box<dyn FnMut(Progress) -> ControlFlow<()> + Send>;
+///
+/// Lifetime-parameterized (not `'static`) so a consumer can pass a callback that borrows local
+/// state — the upload is awaited to completion within the call, so the borrow need only outlive
+/// that call.
+pub(crate) type ProgressFn<'a> = Box<dyn FnMut(Progress) -> ControlFlow<()> + Send + 'a>;
 
 /// A boxed, backend-neutral stream of upload data chunks.
 pub(crate) type UploadStream<'a> =
@@ -144,7 +148,7 @@ pub(crate) trait MtpBackend: Send + Sync {
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: UploadStream<'_>,
-        progress: Option<ProgressFn>,
+        progress: Option<ProgressFn<'_>>,
     ) -> Result<ObjectHandle, UploadError>;
 
     /// Create a folder named `name` under `parent` on `storage`.

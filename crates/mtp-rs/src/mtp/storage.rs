@@ -334,14 +334,14 @@ impl Storage {
     /// handle), then the bytes are streamed. If the data phase fails, the device may keep a partial
     /// object, and [`UploadError::partial`] carries its handle so you can [`delete`](Self::delete)
     /// it or retry the data phase to resume. The library does **not** auto-delete it.
-    pub async fn upload<S>(
-        &self,
+    pub async fn upload<'a, S>(
+        &'a self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: S,
     ) -> Result<ObjectHandle, UploadError>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send + 'static,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send + 'a,
     {
         self.backend
             .upload(self.id, parent, info, Box::pin(data), None)
@@ -353,18 +353,18 @@ impl Storage {
     /// Progress is reported as data is read from the stream. Return `ControlFlow::Break(())` from
     /// the callback to cancel the upload (which surfaces as [`Error::Cancelled`] in
     /// [`UploadError::source`]).
-    pub async fn upload_with_progress<S, F>(
-        &self,
+    pub async fn upload_with_progress<'a, S, F>(
+        &'a self,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: S,
         on_progress: F,
     ) -> Result<ObjectHandle, UploadError>
     where
-        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send + 'static,
-        F: FnMut(Progress) -> ControlFlow<()> + Send + 'static,
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send + 'a,
+        F: FnMut(Progress) -> ControlFlow<()> + Send + 'a,
     {
-        let progress: ProgressFn = Box::new(on_progress);
+        let progress: ProgressFn<'a> = Box::new(on_progress);
         self.backend
             .upload(self.id, parent, info, Box::pin(data), Some(progress))
             .await

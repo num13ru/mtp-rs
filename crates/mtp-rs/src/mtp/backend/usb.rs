@@ -319,7 +319,7 @@ impl MtpBackend for UsbBackend {
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
         data: UploadStream<'_>,
-        progress: Option<ProgressFn>,
+        progress: Option<ProgressFn<'_>>,
     ) -> Result<ObjectHandle, UploadError> {
         let total_size = info.size;
         let object_info = info.to_object_info();
