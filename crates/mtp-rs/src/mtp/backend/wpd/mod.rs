@@ -23,6 +23,7 @@ use crate::mtp::backend::{
     BackendDownload, BackendListing, ByteRange, DownloadBody, MtpBackend, ProgressFn, UploadStream,
 };
 use crate::mtp::object::NewObjectInfo;
+use crate::mtp::stream::Progress;
 use crate::mtp::{
     Capabilities, DeviceEvent, DeviceInfo, Error, ObjectHandle, ObjectInfo, StorageId, StorageInfo,
     UploadError,
@@ -32,6 +33,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::channel::mpsc;
 use futures::StreamExt;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 /// The Windows WPD-over-COM backend. Holds only the worker handle (channel ends) plus the device's
@@ -168,55 +170,120 @@ impl MtpBackend for WpdBackend {
         Err(Error::Unsupported)
     }
 
-    // ---- write path: Phase 3 (stubbed Unsupported so the read path is testable now) ------------
+    // ---- write path (Phase 3) ------------------------------------------------------------------
 
     async fn upload(
         &self,
-        _storage: StorageId,
-        _parent: Option<ObjectHandle>,
-        _info: NewObjectInfo,
-        _data: UploadStream<'_>,
-        _progress: Option<ProgressFn<'_>>,
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        info: NewObjectInfo,
+        mut data: UploadStream<'_>,
+        mut progress: Option<ProgressFn<'_>>,
     ) -> Result<ObjectHandle, UploadError> {
-        Err(UploadError {
-            source: Error::Unsupported,
-            partial: None,
-        })
+        // WPD writes a known-size object transactionally, so buffer the source here, reporting
+        // progress as bytes arrive and honoring a Break from the callback. Aborting now is *before*
+        // any device-side create, so no partial object exists (partial = None — the documented WPD
+        // divergence from the USB two-phase contract).
+        let mut buf = Vec::with_capacity(info.size as usize);
+        while let Some(chunk) = data.next().await {
+            let chunk = chunk.map_err(|e| UploadError {
+                source: Error::Io {
+                    message: e.to_string(),
+                },
+                partial: None,
+            })?;
+            buf.extend_from_slice(&chunk);
+            if let Some(cb) = progress.as_mut() {
+                let p = Progress {
+                    bytes_transferred: buf.len() as u64,
+                    total_bytes: Some(info.size),
+                };
+                if let ControlFlow::Break(()) = cb(p) {
+                    return Err(UploadError {
+                        source: Error::Cancelled,
+                        partial: None,
+                    });
+                }
+            }
+        }
+        self.handle
+            .call(|reply| actor::Request::Upload {
+                storage,
+                parent,
+                info,
+                data: buf,
+                reply,
+            })
+            .await
+            .map_err(|source| UploadError {
+                source,
+                partial: None,
+            })
     }
 
     async fn create_folder(
         &self,
-        _storage: StorageId,
-        _parent: Option<ObjectHandle>,
-        _name: &str,
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        name: &str,
     ) -> Result<ObjectHandle, Error> {
-        Err(Error::Unsupported)
+        let name = name.to_string();
+        self.handle
+            .call(|reply| actor::Request::CreateFolder {
+                storage,
+                parent,
+                name,
+                reply,
+            })
+            .await
     }
 
-    async fn delete(&self, _obj: ObjectHandle, _cancel: Option<&CancelToken>) -> Result<(), Error> {
-        Err(Error::Unsupported)
+    async fn delete(&self, obj: ObjectHandle, cancel: Option<&CancelToken>) -> Result<(), Error> {
+        if cancel.is_some_and(CancelToken::is_cancelled) {
+            return Err(Error::Cancelled);
+        }
+        self.handle
+            .call(|reply| actor::Request::Delete { obj, reply })
+            .await
     }
 
     async fn move_object(
         &self,
-        _obj: ObjectHandle,
-        _new_parent: ObjectHandle,
-        _new_storage: StorageId,
+        obj: ObjectHandle,
+        new_parent: ObjectHandle,
+        new_storage: StorageId,
     ) -> Result<(), Error> {
-        Err(Error::Unsupported)
+        self.handle
+            .call(|reply| actor::Request::MoveObject {
+                obj,
+                new_parent,
+                new_storage,
+                reply,
+            })
+            .await
     }
 
     async fn copy_object(
         &self,
-        _obj: ObjectHandle,
-        _new_parent: ObjectHandle,
-        _new_storage: StorageId,
+        obj: ObjectHandle,
+        new_parent: ObjectHandle,
+        new_storage: StorageId,
     ) -> Result<ObjectHandle, Error> {
-        Err(Error::Unsupported)
+        self.handle
+            .call(|reply| actor::Request::CopyObject {
+                obj,
+                new_parent,
+                new_storage,
+                reply,
+            })
+            .await
     }
 
-    async fn rename(&self, _obj: ObjectHandle, _new_name: &str) -> Result<(), Error> {
-        Err(Error::Unsupported)
+    async fn rename(&self, obj: ObjectHandle, new_name: &str) -> Result<(), Error> {
+        let name = new_name.to_string();
+        self.handle
+            .call(|reply| actor::Request::Rename { obj, name, reply })
+            .await
     }
 
     async fn next_event(&self) -> Result<DeviceEvent, Error> {

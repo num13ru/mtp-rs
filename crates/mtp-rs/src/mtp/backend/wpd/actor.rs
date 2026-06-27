@@ -9,6 +9,7 @@ use super::com::{self, WpdDevice};
 use super::props::map_hresult;
 use crate::cancel::CancelToken;
 use crate::mtp::backend::ByteRange;
+use crate::mtp::object::NewObjectInfo;
 use crate::mtp::{
     Capabilities, DeviceInfo, Error, ObjectHandle, ObjectInfo, StorageId, StorageInfo,
 };
@@ -61,6 +62,40 @@ pub(crate) enum Request {
         offset: u64,
         len: Option<u32>,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    },
+    CreateFolder {
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        name: String,
+        reply: oneshot::Sender<Result<ObjectHandle, Error>>,
+    },
+    Upload {
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        info: NewObjectInfo,
+        data: Vec<u8>,
+        reply: oneshot::Sender<Result<ObjectHandle, Error>>,
+    },
+    Delete {
+        obj: ObjectHandle,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
+    Rename {
+        obj: ObjectHandle,
+        name: String,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
+    MoveObject {
+        obj: ObjectHandle,
+        new_parent: ObjectHandle,
+        new_storage: StorageId,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
+    CopyObject {
+        obj: ObjectHandle,
+        new_parent: ObjectHandle,
+        new_storage: StorageId,
+        reply: oneshot::Sender<Result<ObjectHandle, Error>>,
     },
     Shutdown,
 }
@@ -182,6 +217,45 @@ fn worker_main(
                 reply,
             } => {
                 let _ = reply.send(handle_read_range(&mut dev, obj, offset, len));
+            }
+            Request::CreateFolder {
+                storage,
+                parent,
+                name,
+                reply,
+            } => {
+                let _ = reply.send(unsafe { dev.create_folder(storage, parent, &name) });
+            }
+            Request::Upload {
+                storage,
+                parent,
+                info,
+                data,
+                reply,
+            } => {
+                let _ = reply.send(unsafe { dev.upload(storage, parent, &info, &data) });
+            }
+            Request::Delete { obj, reply } => {
+                let _ = reply.send(unsafe { dev.delete(obj) });
+            }
+            Request::Rename { obj, name, reply } => {
+                let _ = reply.send(unsafe { dev.rename(obj, &name) });
+            }
+            Request::MoveObject {
+                obj,
+                new_parent,
+                new_storage,
+                reply,
+            } => {
+                let _ = reply.send(unsafe { dev.move_object(obj, new_parent, new_storage) });
+            }
+            Request::CopyObject {
+                obj,
+                new_parent,
+                new_storage,
+                reply,
+            } => {
+                let _ = reply.send(unsafe { dev.copy_object(obj, new_parent, new_storage) });
             }
         }
     }

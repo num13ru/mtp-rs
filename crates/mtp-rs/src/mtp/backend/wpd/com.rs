@@ -5,22 +5,28 @@
 
 use super::consts::WPD_DEVICE_OBJECT_ID;
 use super::ids::IdMap;
-use super::props::{map_hresult, read_object_info, read_parent, set_u32, take_pwstr, wide};
+use super::props::{
+    is_folder_content_type, map_hresult, read_object_info, set_u32, take_pwstr, wide,
+};
 use crate::cancel::CancelToken;
+use crate::mtp::object::NewObjectInfo;
 use crate::mtp::{
-    Capabilities, DeviceInfo, Error, FilesystemType, ObjectHandle, ObjectInfo, StorageId,
-    StorageInfo, StorageType,
+    Capabilities, DeviceInfo, Error, FilesystemType, ObjectFormat, ObjectHandle, ObjectInfo,
+    StorageId, StorageInfo, StorageType,
 };
 use std::collections::HashSet;
 use std::ffi::c_void;
 
+use windows::core::Interface;
 use windows::core::PCWSTR;
 use windows::core::PWSTR;
 use windows::Win32::Devices::PortableDevices::*;
 use windows::Win32::Foundation::S_OK;
+use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows::Win32::System::Com::{
-    CoCreateInstance, IStream, CLSCTX_ALL, STGM_READ, STREAM_SEEK_SET,
+    CoCreateInstance, CoTaskMemAlloc, IStream, CLSCTX_ALL, STGC_DEFAULT, STGM_READ, STREAM_SEEK_SET,
 };
+use windows::Win32::System::Variant::VT_LPWSTR;
 
 /// One device as seen by enumeration (before opening).
 pub(crate) struct DeviceEntry {
@@ -228,16 +234,69 @@ impl WpdDevice {
             .object_id(obj)
             .ok_or(Error::StaleHandle)?
             .to_string();
-        let parent = read_parent(&self.props, &mut self.ids, &wpd_id, &self.storage_wpd_ids);
-        // A standalone lookup doesn't know the storage; leave it default (not asserted by the
-        // conformance suite, which checks filename/size/parent).
-        Ok(read_object_info(
-            &self.props,
-            &mut self.ids,
-            &wpd_id,
+        let id_w = wide(&wpd_id);
+        // Unlike the lenient listing reader, a single lookup must fail for a missing/deleted object,
+        // so GetValues errors propagate and an unreadable name is treated as "not found".
+        let v = self
+            .props
+            .GetValues(PCWSTR(id_w.as_ptr()), None)
+            .map_err(map_hresult)?;
+
+        let filename = v
+            .GetStringValue(&WPD_OBJECT_ORIGINAL_FILE_NAME)
+            .map(|p| take_pwstr(p))
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                v.GetStringValue(&WPD_OBJECT_NAME)
+                    .map(|p| take_pwstr(p))
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            });
+        let Some(filename) = filename else {
+            // Deleted objects keep a bimap entry but resolve no properties.
+            return Err(Error::NotFound);
+        };
+
+        let ctype = v.GetGuidValue(&WPD_OBJECT_CONTENT_TYPE).unwrap_or_default();
+        let folder = is_folder_content_type(&ctype);
+        let size = if folder {
+            0
+        } else {
+            v.GetUnsignedLargeIntegerValue(&WPD_OBJECT_SIZE)
+                .unwrap_or(0)
+        };
+        // A parent that is a storage/functional object means a top-level object (neutral ROOT).
+        let parent_id = v
+            .GetStringValue(&WPD_OBJECT_PARENT_ID)
+            .map(|p| take_pwstr(p))
+            .unwrap_or_default();
+        let parent = if parent_id.is_empty() || self.storage_wpd_ids.contains(&parent_id) {
+            ObjectHandle::ROOT
+        } else {
+            self.ids.object(&parent_id)
+        };
+        let format = if folder {
+            ObjectFormat::ASSOCIATION
+        } else {
+            ObjectFormat::UNDEFINED
+        };
+
+        Ok(ObjectInfo {
+            handle: obj,
+            // A standalone lookup doesn't know the storage; leave default (the conformance suite
+            // checks filename/size/parent, not storage_id, for object_info).
+            storage_id: StorageId::default(),
             parent,
-            StorageId::default(),
-        ))
+            filename,
+            size,
+            format,
+            created: None,
+            modified: None,
+            image_width: 0,
+            image_height: 0,
+            folder,
+        })
     }
 
     /// The full byte size of an object.
@@ -286,6 +345,295 @@ impl WpdDevice {
             detail: "WPD GetStream returned a null stream".into(),
         })
     }
+
+    // ---- write path (Phase 3) ------------------------------------------------------------------
+
+    /// Resolve the WPD parent id for a create/upload under `storage`/`parent` (`None` = storage root).
+    fn parent_wpd_id(
+        &self,
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+    ) -> Result<String, Error> {
+        match parent {
+            None => self
+                .ids
+                .storage_id(storage)
+                .map(str::to_string)
+                .ok_or(Error::NotFound),
+            Some(h) => self
+                .ids
+                .object_id(h)
+                .map(str::to_string)
+                .ok_or(Error::StaleHandle),
+        }
+    }
+
+    /// Resolve a move/copy destination folder WPD id (`ROOT` → the storage root).
+    fn dest_wpd_id(
+        &self,
+        new_storage: StorageId,
+        new_parent: ObjectHandle,
+    ) -> Result<String, Error> {
+        if new_parent == ObjectHandle::ROOT {
+            self.ids
+                .storage_id(new_storage)
+                .map(str::to_string)
+                .ok_or(Error::NotFound)
+        } else {
+            self.ids
+                .object_id(new_parent)
+                .map(str::to_string)
+                .ok_or(Error::StaleHandle)
+        }
+    }
+
+    /// Create a folder, returning its handle.
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn create_folder(
+        &mut self,
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        name: &str,
+    ) -> Result<ObjectHandle, Error> {
+        let parent_wpd = self.parent_wpd_id(storage, parent)?;
+        let values: IPortableDeviceValues =
+            CoCreateInstance(&PortableDeviceValues, None, CLSCTX_ALL).map_err(map_hresult)?;
+        let parent_w = wide(&parent_wpd);
+        let name_w = wide(name);
+        values
+            .SetStringValue(&WPD_OBJECT_PARENT_ID, PCWSTR(parent_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetStringValue(&WPD_OBJECT_NAME, PCWSTR(name_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetStringValue(&WPD_OBJECT_ORIGINAL_FILE_NAME, PCWSTR(name_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetGuidValue(&WPD_OBJECT_CONTENT_TYPE, &WPD_CONTENT_TYPE_FOLDER)
+            .map_err(map_hresult)?;
+
+        let mut new_id = PWSTR::null();
+        self.content
+            .CreateObjectWithPropertiesOnly(&values, &mut new_id)
+            .map_err(map_hresult)?;
+        Ok(self.ids.object(&take_pwstr(new_id)))
+    }
+
+    /// Upload a buffered object (one transactional create + write + commit), returning its handle.
+    ///
+    /// WPD commits atomically: nothing is created until `Commit`, so a failure leaves no partial
+    /// object (the caller surfaces `UploadError::partial = None`, unlike the USB two-phase contract).
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn upload(
+        &mut self,
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        info: &NewObjectInfo,
+        data: &[u8],
+    ) -> Result<ObjectHandle, Error> {
+        let parent_wpd = self.parent_wpd_id(storage, parent)?;
+        let values: IPortableDeviceValues =
+            CoCreateInstance(&PortableDeviceValues, None, CLSCTX_ALL).map_err(map_hresult)?;
+        let parent_w = wide(&parent_wpd);
+        let name_w = wide(&info.filename);
+        values
+            .SetStringValue(&WPD_OBJECT_PARENT_ID, PCWSTR(parent_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetStringValue(&WPD_OBJECT_NAME, PCWSTR(name_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetStringValue(&WPD_OBJECT_ORIGINAL_FILE_NAME, PCWSTR(name_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetUnsignedLargeIntegerValue(&WPD_OBJECT_SIZE, data.len() as u64)
+            .map_err(map_hresult)?;
+        values
+            .SetGuidValue(&WPD_OBJECT_CONTENT_TYPE, &WPD_CONTENT_TYPE_GENERIC_FILE)
+            .map_err(map_hresult)?;
+
+        let mut stream_opt: Option<IStream> = None;
+        let mut optimal: u32 = 0;
+        let mut cookie = PWSTR::null();
+        self.content
+            .CreateObjectWithPropertiesAndData(&values, &mut stream_opt, &mut optimal, &mut cookie)
+            .map_err(map_hresult)?;
+        let _ = take_pwstr(cookie); // free the optional cookie string
+        let stream = stream_opt.ok_or_else(|| Error::Other {
+            detail: "WPD CreateObjectWithPropertiesAndData returned a null stream".into(),
+        })?;
+
+        let mut written = 0usize;
+        while written < data.len() {
+            let chunk = &data[written..];
+            let want = u32::try_from(chunk.len()).unwrap_or(u32::MAX);
+            let mut wrote: u32 = 0;
+            stream
+                .Write(chunk.as_ptr() as *const c_void, want, Some(&mut wrote))
+                .ok()
+                .map_err(map_hresult)?;
+            if wrote == 0 {
+                return Err(Error::Other {
+                    detail: "WPD stream write returned 0 bytes".into(),
+                });
+            }
+            written += wrote as usize;
+        }
+        stream.Commit(STGC_DEFAULT).map_err(map_hresult)?;
+
+        // The new object id is read from the data stream after commit.
+        let data_stream: IPortableDeviceDataStream = stream.cast().map_err(map_hresult)?;
+        let new_id = data_stream.GetObjectID().map_err(map_hresult)?;
+        Ok(self.ids.object(&take_pwstr(new_id)))
+    }
+
+    /// Delete an object (recursively for folders).
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn delete(&mut self, obj: ObjectHandle) -> Result<(), Error> {
+        let wpd_id = self
+            .ids
+            .object_id(obj)
+            .ok_or(Error::StaleHandle)?
+            .to_string();
+        let ids = objid_collection(&wpd_id)?;
+        let mut results: Option<IPortableDevicePropVariantCollection> = None;
+        self.content
+            .Delete(
+                PORTABLE_DEVICE_DELETE_WITH_RECURSION.0 as u32,
+                &ids,
+                &mut results,
+            )
+            .map_err(map_hresult)?;
+        Ok(())
+    }
+
+    /// Rename an object in place.
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn rename(&mut self, obj: ObjectHandle, new_name: &str) -> Result<(), Error> {
+        let wpd_id = self
+            .ids
+            .object_id(obj)
+            .ok_or(Error::StaleHandle)?
+            .to_string();
+        let values: IPortableDeviceValues =
+            CoCreateInstance(&PortableDeviceValues, None, CLSCTX_ALL).map_err(map_hresult)?;
+        let name_w = wide(new_name);
+        values
+            .SetStringValue(&WPD_OBJECT_ORIGINAL_FILE_NAME, PCWSTR(name_w.as_ptr()))
+            .map_err(map_hresult)?;
+        values
+            .SetStringValue(&WPD_OBJECT_NAME, PCWSTR(name_w.as_ptr()))
+            .map_err(map_hresult)?;
+        let objid_w = wide(&wpd_id);
+        self.props
+            .SetValues(PCWSTR(objid_w.as_ptr()), &values)
+            .map_err(map_hresult)?;
+        Ok(())
+    }
+
+    /// Move an object to a new parent folder.
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn move_object(
+        &mut self,
+        obj: ObjectHandle,
+        new_parent: ObjectHandle,
+        new_storage: StorageId,
+    ) -> Result<(), Error> {
+        let wpd_id = self
+            .ids
+            .object_id(obj)
+            .ok_or(Error::StaleHandle)?
+            .to_string();
+        let dest = self.dest_wpd_id(new_storage, new_parent)?;
+        let ids = objid_collection(&wpd_id)?;
+        let dest_w = wide(&dest);
+        let mut results: Option<IPortableDevicePropVariantCollection> = None;
+        self.content
+            .Move(&ids, PCWSTR(dest_w.as_ptr()), &mut results)
+            .map_err(map_hresult)?;
+        Ok(())
+    }
+
+    /// Copy an object into a new parent folder, returning the copy's handle.
+    ///
+    /// WPD's `Copy` reports results as a prop-variant collection that not all drivers populate, so we
+    /// resolve the copy by re-listing the destination and matching the source filename.
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn copy_object(
+        &mut self,
+        obj: ObjectHandle,
+        new_parent: ObjectHandle,
+        new_storage: StorageId,
+    ) -> Result<ObjectHandle, Error> {
+        let wpd_id = self
+            .ids
+            .object_id(obj)
+            .ok_or(Error::StaleHandle)?
+            .to_string();
+        let filename = self.object_info(obj)?.filename;
+        let dest = self.dest_wpd_id(new_storage, new_parent)?;
+        let ids = objid_collection(&wpd_id)?;
+        let dest_w = wide(&dest);
+        let mut results: Option<IPortableDevicePropVariantCollection> = None;
+        self.content
+            .Copy(&ids, PCWSTR(dest_w.as_ptr()), &mut results)
+            .map_err(map_hresult)?;
+
+        let dest_parent = (new_parent != ObjectHandle::ROOT).then_some(new_parent);
+        self.list(new_storage, dest_parent, None)?
+            .into_iter()
+            .find(|o| o.filename == filename)
+            .map(|o| o.handle)
+            .ok_or_else(|| Error::Other {
+                detail: "WPD copy succeeded but the copy was not found in the destination".into(),
+            })
+    }
+}
+
+/// Build a one-element `IPortableDevicePropVariantCollection` holding a `VT_LPWSTR` object id, as
+/// `Delete`/`Move`/`Copy` require.
+unsafe fn objid_collection(wpd_id: &str) -> Result<IPortableDevicePropVariantCollection, Error> {
+    let collection: IPortableDevicePropVariantCollection =
+        CoCreateInstance(&PortableDevicePropVariantCollection, None, CLSCTX_ALL)
+            .map_err(map_hresult)?;
+    let mut pv = make_lpwstr_propvariant(wpd_id)?;
+    let added = collection.Add(&pv);
+    // The collection copies the value; free our copy regardless of the Add result.
+    let _ = PropVariantClear(&mut pv);
+    added.map_err(map_hresult)?;
+    Ok(collection)
+}
+
+/// Construct a `VT_LPWSTR` `PROPVARIANT` owning a COM-allocated copy of `s` (so `PropVariantClear`
+/// can free it).
+unsafe fn make_lpwstr_propvariant(s: &str) -> Result<PROPVARIANT, Error> {
+    let utf16: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = utf16.len() * std::mem::size_of::<u16>();
+    let mem = CoTaskMemAlloc(bytes) as *mut u16;
+    if mem.is_null() {
+        return Err(Error::Io {
+            message: "CoTaskMemAlloc failed for PROPVARIANT string".into(),
+        });
+    }
+    std::ptr::copy_nonoverlapping(utf16.as_ptr(), mem, utf16.len());
+    let mut pv = PROPVARIANT::default();
+    let inner = &mut *pv.Anonymous.Anonymous;
+    inner.vt = VT_LPWSTR;
+    inner.Anonymous.pwszVal = PWSTR(mem);
+    Ok(pv)
 }
 
 /// Bytes read-and-discarded per pass when falling back from an unsupported `Seek`.

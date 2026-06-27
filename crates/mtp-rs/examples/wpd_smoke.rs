@@ -87,7 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Spot-check the ranged/buffered primitive too.
             if file.size >= 16 {
                 let mid = storage.read_range(file.handle, 8, 8).await?;
-                println!("  read_range(8,8) returned {} bytes: {:02x?}", mid.len(), mid);
+                println!(
+                    "  read_range(8,8) returned {} bytes: {:02x?}",
+                    mid.len(),
+                    mid
+                );
             }
         } else {
             println!("  (no downloadable file found under this storage)");

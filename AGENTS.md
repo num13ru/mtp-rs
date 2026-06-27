@@ -366,6 +366,44 @@ Unit tests for the API live in `transport/virtual_device/registry.rs` (`pause_re
 
 `rekey_virtual_object(serial, rel_path)` reassigns a tracked object's handle while leaving the object and its on-disk contents in place: the old handle then returns `InvalidObjectHandle`/`InvalidParentObject`, a fresh listing of the parent surfaces the new handle, and direct children are re-parented. It queues no events (it models the device moving on before the host observes the change), so it reproduces the Android handle re-keying quirk above: the exact precondition for a stale-cached-handle upload/delete failure. The stable-handle virtual device can't otherwise produce it. Drive it with a list → `rekey_virtual_object` → operate sequence to exercise a host's stale-handle recovery path; see `rekey_object_invalidates_old_handle_then_relist_and_upload_recover` in `transport/virtual_device/mod.rs`.
 
+## Windows WPD backend (`cfg(windows)`)
+
+The `mtp::backend::wpd` backend implements `MtpBackend` over the Windows Portable Devices COM API
+(`windows` crate, `cfg(windows)`), as a sibling to `UsbBackend` — *not* a `Transport`, because WPD
+speaks MTP itself and blocks the raw opcodes. See `docs/windows-wpd-backend-plan.md`. Quirks and
+semantics that differ from the USB/PTP backend, all hardware-verified on a Pixel 9 Pro XL:
+
+- **Threading**: one dedicated `std::thread` per open device owns *all* COM pointers (they're
+  apartment-affine / `!Send`), `CoInitializeEx(MTA)`, and serves one request at a time off a channel.
+  `WpdBackend` holds only channel senders → `Send + Sync` with zero `unsafe` in the public path. A
+  streaming download reads `IStream` chunks into a bounded channel; dropping/cancelling the receiver
+  fails the worker's next send, which stops the read and releases the `IStream` — WPD "cancel" is
+  just stop-reading + `Release` (no SIC class-cancel).
+- **Transactional upload (partial-handle differs from USB)**: upload is
+  `CreateObjectWithPropertiesAndData` → write → `Commit`. Nothing exists on the device until `Commit`,
+  so a failure/cancel before it leaves **no** partial object: `UploadError::partial` is always `None`
+  on WPD (unlike the USB two-phase `SendObjectInfo`/`SendObject`, where the data phase can leave a
+  partial the caller must clean up). The backend buffers the source stream (reporting progress + honoring
+  a `ControlFlow::Break` cancel) before the transactional write, since the COM write is sync on the worker.
+- **Forward-only resource streams**: `IStream::Seek` returns `E_NOTIMPL` on the Pixel. `stream_seek`
+  falls back to read-and-discard, so ranged/resumed `download` (`ByteRange::From`/`Range`) and
+  `read_range` stay correct (at the cost of reading the skipped prefix). Verified-seekable streams
+  take the fast path.
+- **`object_info` is strict; listing is lenient**: a single `object_info` lookup must *fail* for a
+  deleted/missing object (it errors `NotFound` when no property resolves), whereas the per-child
+  listing reader is lenient (an unreadable child degrades to a default record rather than failing the
+  whole listing — mirroring the Lumix datetime leniency).
+- **Opaque handles**: `ObjectHandle`/`StorageId` tokens are a *deterministic* hash of the WPD
+  object-id string (`ids.rs`), so a `StorageId` the CLI prints stays valid across its
+  one-process-per-command invocations. A `bimap` resolves tokens back to WPD id strings; a deleted
+  object keeps its bimap entry (so its handle still resolves to a string) but resolves no properties.
+- **Capabilities** are currently sensible MTP defaults (events off); deriving them precisely from
+  `IPortableDeviceCapabilities::GetSupportedCommands` is a TODO. Events (`next_event`) and thumbnails
+  return `Unsupported` for now (events are Phase 4).
+- **Selection**: on Windows, `open_first`/`open_by_serial` default to WPD (`Backend::Auto`), falling
+  back to USB when no WPD device is present; `Backend::Usb` forces PTP-over-USB (e.g. a Zadig-bound
+  camera), `Backend::Wpd` forces WPD.
+
 ## Things to avoid
 
 - C dependencies (libusb, libmtp, `-sys` crates)

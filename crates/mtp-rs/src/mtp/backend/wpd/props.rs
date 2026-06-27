@@ -7,14 +7,13 @@
 
 use crate::mtp::backend::wpd::ids::IdMap;
 use crate::mtp::{Error, ObjectFormat, ObjectHandle, ObjectInfo, StorageId};
-use std::collections::HashSet;
 use std::ffi::c_void;
 
 use windows::core::{Error as WinError, GUID, PWSTR};
 use windows::Win32::Devices::PortableDevices::{
     IPortableDeviceProperties, IPortableDeviceValues, WPD_CONTENT_TYPE_FOLDER,
     WPD_CONTENT_TYPE_FUNCTIONAL_OBJECT, WPD_OBJECT_CONTENT_TYPE, WPD_OBJECT_NAME,
-    WPD_OBJECT_ORIGINAL_FILE_NAME, WPD_OBJECT_PARENT_ID, WPD_OBJECT_SIZE,
+    WPD_OBJECT_ORIGINAL_FILE_NAME, WPD_OBJECT_SIZE,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -152,34 +151,6 @@ pub(crate) unsafe fn read_object_info(
         image_width: 0,
         image_height: 0,
         folder,
-    }
-}
-
-/// Resolve an object's neutral parent handle from its `WPD_OBJECT_PARENT_ID`.
-///
-/// A WPD object whose parent is a storage/functional object is a top-level object, so its neutral
-/// parent is [`ObjectHandle::ROOT`]; otherwise the parent is interned as a normal handle.
-///
-/// # Safety
-/// `props` must be a live `IPortableDeviceProperties` for the open device.
-pub(crate) unsafe fn read_parent(
-    props: &IPortableDeviceProperties,
-    ids: &mut IdMap,
-    wpd_id: &str,
-    storage_wpd_ids: &HashSet<String>,
-) -> ObjectHandle {
-    let id_w = wide(wpd_id);
-    let Ok(v) = props.GetValues(windows::core::PCWSTR(id_w.as_ptr()), None) else {
-        return ObjectHandle::ROOT;
-    };
-    let parent_id = match v.GetStringValue(&WPD_OBJECT_PARENT_ID) {
-        Ok(p) => take_pwstr(p),
-        Err(_) => return ObjectHandle::ROOT,
-    };
-    if parent_id.is_empty() || storage_wpd_ids.contains(&parent_id) {
-        ObjectHandle::ROOT
-    } else {
-        ids.object(&parent_id)
     }
 }
 
