@@ -16,7 +16,7 @@ use crate::mtp::{
 use bytes::Bytes;
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use std::sync::mpsc as std_mpsc;
 use std::thread::JoinHandle;
 
@@ -24,8 +24,8 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITH
 
 /// Bytes read from the device per `IStream::Read`.
 const CHUNK: usize = 256 * 1024;
-/// How many chunks the download channel buffers before back-pressuring the worker.
-const DATA_BOUND: usize = 4;
+/// How many chunks the download/upload channels buffer before back-pressuring the producer.
+pub(crate) const DATA_BOUND: usize = 4;
 
 /// Which device the worker should open.
 pub(crate) enum OpenSpec {
@@ -39,6 +39,21 @@ pub(crate) enum OpenSpec {
 pub(crate) struct DownloadStart {
     pub(crate) size: u64,
     pub(crate) data: mpsc::Receiver<Result<Bytes, Error>>,
+}
+
+/// The streaming-upload verdict the worker sends back once the data channel closes.
+///
+/// Decouples the *device* outcome (committed / aborted / errored) from the *source* outcome (clean
+/// end / cancel / source error) the consumer tracks, so the two are reconciled in [`WpdBackend::upload`].
+pub(crate) enum UploadReply {
+    /// All declared bytes arrived and the object was committed; carries its handle.
+    Committed(ObjectHandle),
+    /// The channel closed before `info.size` bytes (a cancel or a source error): the stream was
+    /// released *without* `Commit`. `partial` is the handle of any object the device left behind
+    /// (probed by re-listing the parent), or `None` if the abort left nothing.
+    ShortClosed { partial: Option<ObjectHandle> },
+    /// The device failed while creating the object or writing a chunk.
+    Error(Error),
 }
 
 /// A unit of work for the COM worker. Each carries the oneshot it replies on.
@@ -63,6 +78,10 @@ pub(crate) enum Request {
         len: Option<u32>,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
+    Thumbnail {
+        obj: ObjectHandle,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    },
     CreateFolder {
         storage: StorageId,
         parent: Option<ObjectHandle>,
@@ -73,8 +92,11 @@ pub(crate) enum Request {
         storage: StorageId,
         parent: Option<ObjectHandle>,
         info: NewObjectInfo,
-        data: Vec<u8>,
-        reply: oneshot::Sender<Result<ObjectHandle, Error>>,
+        /// Bounded chunk channel the consumer forwards source bytes on (back-pressured to
+        /// `DATA_BOUND` chunks). Closing it (dropping the sender) ends the upload: a clean close at
+        /// `info.size` bytes commits, a short close aborts. Nothing buffers the whole file.
+        data: mpsc::Receiver<Bytes>,
+        reply: oneshot::Sender<UploadReply>,
     },
     Delete {
         obj: ObjectHandle,
@@ -145,6 +167,15 @@ impl WpdHandle {
             .send(make(tx))
             .map_err(|_| Error::Disconnected)?;
         rx.await.map_err(|_| Error::Disconnected)?
+    }
+
+    /// Fire-and-forget a request without awaiting its reply.
+    ///
+    /// Used by the streaming upload, where the consumer must drive the source channel *while* the
+    /// worker processes the request, then await the reply separately. Maps a dead worker to
+    /// [`Error::Disconnected`].
+    pub(crate) fn send(&self, req: Request) -> Result<(), Error> {
+        self.req_tx.send(req).map_err(|_| Error::Disconnected)
     }
 
     /// Best-effort shutdown signal (used by `close()`; `Drop` also sends one).
@@ -218,6 +249,9 @@ fn worker_main(
             } => {
                 let _ = reply.send(handle_read_range(&mut dev, obj, offset, len));
             }
+            Request::Thumbnail { obj, reply } => {
+                let _ = reply.send(handle_thumbnail(&mut dev, obj));
+            }
             Request::CreateFolder {
                 storage,
                 parent,
@@ -232,9 +266,7 @@ fn worker_main(
                 info,
                 data,
                 reply,
-            } => {
-                let _ = reply.send(unsafe { dev.upload(storage, parent, &info, &data) });
-            }
+            } => handle_upload(&mut dev, storage, parent, info, data, reply),
             Request::Delete { obj, reply } => {
                 let _ = reply.send(unsafe { dev.delete(obj) });
             }
@@ -390,4 +422,70 @@ fn handle_read_range(
         out.extend_from_slice(&buf[..n]);
     }
     Ok(out)
+}
+
+/// Read an object's thumbnail resource into a `Vec<u8>`.
+///
+/// Objects without a thumbnail resource fail at `GetStream`; the HRESULT maps to
+/// `Unsupported`/`NotFound`, which the caller surfaces as-is.
+fn handle_thumbnail(dev: &mut WpdDevice, obj: ObjectHandle) -> Result<Vec<u8>, Error> {
+    let stream = unsafe { dev.open_thumbnail_stream(obj) }?;
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = unsafe { com::stream_read(&stream, &mut buf) }?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
+    Ok(out)
+}
+
+/// Stream an upload to the device chunk-by-chunk, never buffering the whole file.
+///
+/// Creates the object + data stream up front, then writes each chunk as it arrives over `rx`
+/// (back-pressured by the bounded channel). When `rx` closes: a clean close at exactly `info.size`
+/// bytes commits and returns the new handle; a short close releases the stream *without* committing
+/// and probes the parent for any partial object the device left behind. A device-side create/write
+/// failure short-circuits to [`UploadReply::Error`].
+fn handle_upload(
+    dev: &mut WpdDevice,
+    storage: StorageId,
+    parent: Option<ObjectHandle>,
+    info: NewObjectInfo,
+    mut rx: mpsc::Receiver<Bytes>,
+    reply: oneshot::Sender<UploadReply>,
+) {
+    let stream = match unsafe { dev.create_upload_stream(storage, parent, &info) } {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = reply.send(UploadReply::Error(e));
+            return;
+        }
+    };
+
+    let mut written: u64 = 0;
+    while let Some(chunk) = block_on(rx.next()) {
+        if let Err(e) = unsafe { com::stream_write(&stream, &chunk) } {
+            // Drop the stream (Release without Commit) before reporting the device error.
+            drop(stream);
+            let _ = reply.send(UploadReply::Error(e));
+            return;
+        }
+        written += chunk.len() as u64;
+    }
+
+    if written == info.size {
+        let result = unsafe { dev.commit_upload_stream(&stream) };
+        let _ = reply.send(match result {
+            Ok(handle) => UploadReply::Committed(handle),
+            Err(e) => UploadReply::Error(e),
+        });
+    } else {
+        // Short close: release WITHOUT Commit, then look for any partial the device kept.
+        drop(stream);
+        let partial = unsafe { dev.find_child_by_name(storage, parent, &info.filename) };
+        let _ = reply.send(UploadReply::ShortClosed { partial });
+    }
 }

@@ -422,20 +422,21 @@ impl WpdDevice {
         Ok(self.ids.object(&take_pwstr(new_id)))
     }
 
-    /// Upload a buffered object (one transactional create + write + commit), returning its handle.
+    /// Create the object and open its data stream for a streaming upload (no `Commit` yet).
     ///
-    /// WPD commits atomically: nothing is created until `Commit`, so a failure leaves no partial
-    /// object (the caller surfaces `UploadError::partial = None`, unlike the USB two-phase contract).
+    /// Declares `info.size` up front (MTP needs the total size before the data phase) and returns the
+    /// writable `IStream`. The caller writes chunks with [`stream_write`] as they arrive, then either
+    /// [`commit_upload_stream`](Self::commit_upload_stream) (clean end) or drops the stream (abort).
+    /// Nothing buffers the whole file: peak memory is a few in-flight chunks, not the file size.
     ///
     /// # Safety
     /// COM thread only.
-    pub(crate) unsafe fn upload(
+    pub(crate) unsafe fn create_upload_stream(
         &mut self,
         storage: StorageId,
         parent: Option<ObjectHandle>,
         info: &NewObjectInfo,
-        data: &[u8],
-    ) -> Result<ObjectHandle, Error> {
+    ) -> Result<IStream, Error> {
         let parent_wpd = self.parent_wpd_id(storage, parent)?;
         let values: IPortableDeviceValues =
             CoCreateInstance(&PortableDeviceValues, None, CLSCTX_ALL).map_err(map_hresult)?;
@@ -451,7 +452,7 @@ impl WpdDevice {
             .SetStringValue(&WPD_OBJECT_ORIGINAL_FILE_NAME, PCWSTR(name_w.as_ptr()))
             .map_err(map_hresult)?;
         values
-            .SetUnsignedLargeIntegerValue(&WPD_OBJECT_SIZE, data.len() as u64)
+            .SetUnsignedLargeIntegerValue(&WPD_OBJECT_SIZE, info.size)
             .map_err(map_hresult)?;
         values
             .SetGuidValue(&WPD_OBJECT_CONTENT_TYPE, &WPD_CONTENT_TYPE_GENERIC_FILE)
@@ -464,32 +465,76 @@ impl WpdDevice {
             .CreateObjectWithPropertiesAndData(&values, &mut stream_opt, &mut optimal, &mut cookie)
             .map_err(map_hresult)?;
         let _ = take_pwstr(cookie); // free the optional cookie string
-        let stream = stream_opt.ok_or_else(|| Error::Other {
+        stream_opt.ok_or_else(|| Error::Other {
             detail: "WPD CreateObjectWithPropertiesAndData returned a null stream".into(),
-        })?;
+        })
+    }
 
-        let mut written = 0usize;
-        while written < data.len() {
-            let chunk = &data[written..];
-            let want = u32::try_from(chunk.len()).unwrap_or(u32::MAX);
-            let mut wrote: u32 = 0;
-            stream
-                .Write(chunk.as_ptr() as *const c_void, want, Some(&mut wrote))
-                .ok()
-                .map_err(map_hresult)?;
-            if wrote == 0 {
-                return Err(Error::Other {
-                    detail: "WPD stream write returned 0 bytes".into(),
-                });
-            }
-            written += wrote as usize;
-        }
+    /// Commit a fully-written upload stream and resolve the new object's handle.
+    ///
+    /// # Safety
+    /// COM thread only; `stream` must be the data stream from [`create_upload_stream`] with all
+    /// `info.size` bytes already written.
+    pub(crate) unsafe fn commit_upload_stream(
+        &mut self,
+        stream: &IStream,
+    ) -> Result<ObjectHandle, Error> {
         stream.Commit(STGC_DEFAULT).map_err(map_hresult)?;
-
         // The new object id is read from the data stream after commit.
         let data_stream: IPortableDeviceDataStream = stream.cast().map_err(map_hresult)?;
         let new_id = data_stream.GetObjectID().map_err(map_hresult)?;
         Ok(self.ids.object(&take_pwstr(new_id)))
+    }
+
+    /// Find a direct child of `parent` (a storage when `None`) whose filename matches, returning its
+    /// handle. Used to probe whether an aborted upload left a partial object on the device.
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn find_child_by_name(
+        &mut self,
+        storage: StorageId,
+        parent: Option<ObjectHandle>,
+        name: &str,
+    ) -> Option<ObjectHandle> {
+        self.list(storage, parent, None)
+            .ok()?
+            .into_iter()
+            .find(|o| o.filename == name)
+            .map(|o| o.handle)
+    }
+
+    /// Open the thumbnail-resource read stream for an object.
+    ///
+    /// Mirrors [`open_stream`](Self::open_stream) but requests `WPD_RESOURCE_THUMBNAIL` instead of the
+    /// default resource. Objects with no thumbnail fail here (mapped to `Unsupported`/`NotFound`).
+    ///
+    /// # Safety
+    /// COM thread only.
+    pub(crate) unsafe fn open_thumbnail_stream(
+        &mut self,
+        obj: ObjectHandle,
+    ) -> Result<IStream, Error> {
+        let wpd_id = self
+            .ids
+            .object_id(obj)
+            .ok_or(Error::StaleHandle)?
+            .to_string();
+        let w = wide(&wpd_id);
+        let mut optimal: u32 = 0;
+        let mut stream: Option<IStream> = None;
+        self.resources
+            .GetStream(
+                PCWSTR(w.as_ptr()),
+                &WPD_RESOURCE_THUMBNAIL,
+                STGM_READ.0,
+                &mut optimal,
+                &mut stream,
+            )
+            .map_err(map_hresult)?;
+        stream.ok_or_else(|| Error::Other {
+            detail: "WPD GetStream returned a null thumbnail stream".into(),
+        })
     }
 
     /// Delete an object (recursively for folders).
@@ -688,6 +733,30 @@ pub(crate) unsafe fn stream_read(stream: &IStream, buf: &mut [u8]) -> Result<usi
     Ok(read as usize)
 }
 
+/// Write `data` fully to a stream, looping over short writes.
+///
+/// # Safety
+/// COM thread only; `stream` must be a live writable upload data stream.
+pub(crate) unsafe fn stream_write(stream: &IStream, data: &[u8]) -> Result<(), Error> {
+    let mut written = 0usize;
+    while written < data.len() {
+        let chunk = &data[written..];
+        let want = u32::try_from(chunk.len()).unwrap_or(u32::MAX);
+        let mut wrote: u32 = 0;
+        stream
+            .Write(chunk.as_ptr() as *const c_void, want, Some(&mut wrote))
+            .ok()
+            .map_err(map_hresult)?;
+        if wrote == 0 {
+            return Err(Error::Other {
+                detail: "WPD stream write returned 0 bytes".into(),
+            });
+        }
+        written += wrote as usize;
+    }
+    Ok(())
+}
+
 fn is_cancelled(cancel: Option<&CancelToken>) -> bool {
     cancel.is_some_and(CancelToken::is_cancelled)
 }
@@ -810,7 +879,9 @@ unsafe fn read_storage_info(
 /// Reads `IPortableDeviceCapabilities::GetSupportedCommands` and maps the object-management commands
 /// to the neutral flags. Falls back to permissive MTP defaults if the probe yields nothing (older
 /// driver). `supports_partial_download` is always true (we provide ranged reads via seek or the
-/// read-and-discard fallback); thumbnails and events stay off for now (events are Phase 4).
+/// read-and-discard fallback); `supports_thumbnails` is true (the backend reads the
+/// `WPD_RESOURCE_THUMBNAIL` resource — *whether a given object has one* is resolved at call time,
+/// which is the only place WPD can answer it); events stay off for now (events are Phase 4).
 ///
 /// # Safety
 /// COM thread only.
@@ -843,7 +914,7 @@ unsafe fn probe_capabilities(device: &IPortableDevice) -> Capabilities {
             can_copy: true,
             can_create_folder: true,
             supports_partial_download: true,
-            supports_thumbnails: false,
+            supports_thumbnails: true,
             supports_events: false,
         };
     }
@@ -861,7 +932,7 @@ unsafe fn probe_capabilities(device: &IPortableDevice) -> Capabilities {
         can_copy: has(&WPD_COMMAND_OBJECT_MANAGEMENT_COPY_OBJECTS),
         can_create_folder: has(&WPD_COMMAND_OBJECT_MANAGEMENT_CREATE_OBJECT_WITH_PROPERTIES_ONLY),
         supports_partial_download: true,
-        supports_thumbnails: false,
+        supports_thumbnails: true,
         supports_events: false,
     }
 }

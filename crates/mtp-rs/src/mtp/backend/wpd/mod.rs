@@ -32,7 +32,7 @@ use actor::{OpenSpec, WpdHandle};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::channel::mpsc;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use std::ops::ControlFlow;
 use std::time::Duration;
 
@@ -165,9 +165,12 @@ impl MtpBackend for WpdBackend {
             .await
     }
 
-    async fn thumbnail(&self, _obj: ObjectHandle) -> Result<Vec<u8>, Error> {
-        // TODO(phase-3+): WPD_RESOURCE_THUMBNAIL via GetStream. Reported unsupported for now.
-        Err(Error::Unsupported)
+    async fn thumbnail(&self, obj: ObjectHandle) -> Result<Vec<u8>, Error> {
+        // Reads the WPD_RESOURCE_THUMBNAIL resource on the worker. Objects with no thumbnail fail at
+        // GetStream and surface as Unsupported/NotFound.
+        self.handle
+            .call(|reply| actor::Request::Thumbnail { obj, reply })
+            .await
     }
 
     // ---- write path (Phase 3) ------------------------------------------------------------------
@@ -180,45 +183,98 @@ impl MtpBackend for WpdBackend {
         mut data: UploadStream<'_>,
         mut progress: Option<ProgressFn<'_>>,
     ) -> Result<ObjectHandle, UploadError> {
-        // WPD writes a known-size object transactionally, so buffer the source here, reporting
-        // progress as bytes arrive and honoring a Break from the callback. Aborting now is *before*
-        // any device-side create, so no partial object exists (partial = None — the documented WPD
-        // divergence from the USB two-phase contract).
-        let mut buf = Vec::with_capacity(info.size as usize);
-        while let Some(chunk) = data.next().await {
-            let chunk = chunk.map_err(|e| UploadError {
-                source: Error::Io {
-                    message: e.to_string(),
-                },
-                partial: None,
-            })?;
-            buf.extend_from_slice(&chunk);
-            if let Some(cb) = progress.as_mut() {
-                let p = Progress {
-                    bytes_transferred: buf.len() as u64,
-                    total_bytes: Some(info.size),
-                };
-                if let ControlFlow::Break(()) = cb(p) {
-                    return Err(UploadError {
-                        source: Error::Cancelled,
-                        partial: None,
-                    });
-                }
-            }
-        }
+        // Stream the source straight to the worker over a bounded channel: each chunk is written to
+        // the device as it arrives, so peak memory is a few in-flight chunks, not the file size. A
+        // slow device back-pressures the source via the bounded `send`. The object is created BEFORE
+        // all bytes arrive (incremental writes), so a mid-stream abort can leave a partial — the
+        // worker probes for it and reports it in `UploadReply::ShortClosed { partial }`.
+        let total = info.size;
+        let (mut tx, rx) = mpsc::channel::<Bytes>(actor::DATA_BOUND);
+        let (reply_tx, reply_rx) = futures::channel::oneshot::channel::<actor::UploadReply>();
         self.handle
-            .call(|reply| actor::Request::Upload {
+            .send(actor::Request::Upload {
                 storage,
                 parent,
                 info,
-                data: buf,
-                reply,
+                data: rx,
+                reply: reply_tx,
             })
-            .await
             .map_err(|source| UploadError {
                 source,
                 partial: None,
-            })
+            })?;
+
+        // Why the source stopped, so the worker's device verdict can be reconciled with it.
+        enum Stop {
+            /// Source ended cleanly (saw `None`).
+            Clean,
+            /// The progress callback returned `Break`.
+            Cancelled,
+            /// The source stream yielded an error.
+            Source(std::io::Error),
+        }
+
+        let mut forwarded: u64 = 0;
+        let stop = loop {
+            match data.next().await {
+                None => break Stop::Clean,
+                Some(Err(e)) => break Stop::Source(e),
+                Some(Ok(chunk)) => {
+                    let next = forwarded + chunk.len() as u64;
+                    if let Some(cb) = progress.as_mut() {
+                        let p = Progress {
+                            bytes_transferred: next,
+                            total_bytes: Some(total),
+                        };
+                        if let ControlFlow::Break(()) = cb(p) {
+                            break Stop::Cancelled;
+                        }
+                    }
+                    if tx.send(chunk).await.is_err() {
+                        // Worker dropped the receiver (it errored or finished early); its reply has
+                        // the verdict, so stop driving and go read it.
+                        break Stop::Clean;
+                    }
+                    forwarded = next;
+                }
+            }
+        };
+        // Closing the sender ends the upload for the worker: clean at `info.size` → commit, else abort.
+        drop(tx);
+
+        let reply = reply_rx.await.map_err(|_| UploadError {
+            source: Error::Disconnected,
+            partial: None,
+        })?;
+        match (stop, reply) {
+            // A device create/write error always wins (no partial committed).
+            (_, actor::UploadReply::Error(source)) => Err(UploadError {
+                source,
+                partial: None,
+            }),
+            // All bytes made it and the device committed — success regardless of why the source loop
+            // ended (a `Break`/source-error observed only after the final chunk was already sent).
+            (_, actor::UploadReply::Committed(handle)) => Ok(handle),
+            // Short close from a cancel: report Cancelled with whatever partial the device kept.
+            (Stop::Cancelled, actor::UploadReply::ShortClosed { partial }) => Err(UploadError {
+                source: Error::Cancelled,
+                partial,
+            }),
+            // Short close from a source error: report the I/O error with the partial.
+            (Stop::Source(e), actor::UploadReply::ShortClosed { partial }) => Err(UploadError {
+                source: Error::Io {
+                    message: e.to_string(),
+                },
+                partial,
+            }),
+            // Source ended cleanly but short of the declared size: a truncated upload.
+            (Stop::Clean, actor::UploadReply::ShortClosed { partial }) => Err(UploadError {
+                source: Error::invalid_data(
+                    "upload stream ended before the declared size was reached",
+                ),
+                partial,
+            }),
+        }
     }
 
     async fn create_folder(

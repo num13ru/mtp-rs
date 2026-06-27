@@ -379,16 +379,26 @@ semantics that differ from the USB/PTP backend, all hardware-verified on a Pixel
   streaming download reads `IStream` chunks into a bounded channel; dropping/cancelling the receiver
   fails the worker's next send, which stops the read and releases the `IStream` — WPD "cancel" is
   just stop-reading + `Release` (no SIC class-cancel).
-- **Transactional upload (partial-handle differs from USB)**: upload is
-  `CreateObjectWithPropertiesAndData` → write → `Commit`. Nothing exists on the device until `Commit`,
-  so a failure/cancel before it leaves **no** partial object: `UploadError::partial` is always `None`
-  on WPD (unlike the USB two-phase `SendObjectInfo`/`SendObject`, where the data phase can leave a
-  partial the caller must clean up). The backend buffers the source stream (reporting progress + honoring
-  a `ControlFlow::Break` cancel) before the transactional write, since the COM write is sync on the worker.
+- **Streaming upload, transactional commit (partial-handle differs from USB)**: upload is
+  `CreateObjectWithPropertiesAndData` → write chunks → `Commit`. The source is **streamed** straight to
+  the worker over a bounded channel (`DATA_BOUND`), written chunk-by-chunk as it arrives — nothing
+  buffers the whole file (peak memory ≈ a few in-flight chunks, ~1 MiB; verified ~13 MiB peak working
+  set streaming a 300 MiB upload). The consumer drives the source, reports progress, and honors a
+  `ControlFlow::Break` by closing the channel early. The object is created *before* all bytes arrive,
+  so on a short close the worker releases the stream **without** `Commit` and probes the parent for any
+  leftover partial. **Hardware finding (Pixel 9 Pro XL)**: `Release`-without-`Commit` discards the
+  object entirely — both a cancel-before-any-data *and* a cancel after several MiB were written leave
+  **no** partial object. So `UploadError::partial` is `None` on WPD (unlike the USB two-phase
+  `SendObjectInfo`/`SendObject`, where the data phase can leave a partial the caller must clean up).
+  The probe stays in the path defensively: a device that *did* keep a partial would surface its handle.
 - **Forward-only resource streams**: `IStream::Seek` returns `E_NOTIMPL` on the Pixel. `stream_seek`
   falls back to read-and-discard, so ranged/resumed `download` (`ByteRange::From`/`Range`) and
   `read_range` stay correct (at the cost of reading the skipped prefix). Verified-seekable streams
-  take the fast path.
+  take the fast path. **Caveat**: because the skipped prefix is re-read, a resume from offset is
+  O(offset) on such devices, and the usual "release the session and resume later" win shrinks — the
+  device re-streams every byte before the offset on each resume. Resuming near the *end* of a large
+  file re-reads almost the whole file. Prefer a single in-order pass (`ByteRange::Full` or windowed
+  download) over many small offset resumes when the device's `Seek` is `E_NOTIMPL`.
 - **`object_info` is strict; listing is lenient**: a single `object_info` lookup must *fail* for a
   deleted/missing object (it errors `NotFound` when no property resolves), whereas the per-child
   listing reader is lenient (an unreadable child degrades to a default record rather than failing the
@@ -397,9 +407,11 @@ semantics that differ from the USB/PTP backend, all hardware-verified on a Pixel
   object-id string (`ids.rs`), so a `StorageId` the CLI prints stays valid across its
   one-process-per-command invocations. A `bimap` resolves tokens back to WPD id strings; a deleted
   object keeps its bimap entry (so its handle still resolves to a string) but resolves no properties.
-- **Capabilities** are currently sensible MTP defaults (events off); deriving them precisely from
-  `IPortableDeviceCapabilities::GetSupportedCommands` is a TODO. Events (`next_event`) and thumbnails
-  return `Unsupported` for now (events are Phase 4).
+- **Capabilities** are derived from `IPortableDeviceCapabilities::GetSupportedCommands` (sensible MTP
+  defaults if the probe yields nothing). `supports_thumbnails` is `true`: `thumbnail()` reads the
+  `WPD_RESOURCE_THUMBNAIL` resource on the worker (verified non-empty for a real JPEG on the Pixel);
+  whether a *given* object has one is resolved at call time (objects without a thumbnail fail at
+  `GetStream` → `Unsupported`/`NotFound`). Events (`next_event`) still return `Unsupported` (Phase 4).
 - **Selection**: on Windows, `open_first`/`open_by_serial` default to WPD (`Backend::Auto`), falling
   back to USB when no WPD device is present; `Backend::Usb` forces PTP-over-USB (e.g. a Zadig-bound
   camera), `Backend::Wpd` forces WPD.
