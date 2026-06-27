@@ -50,6 +50,39 @@ jobs:
       - name: Build documentation
         run: cargo doc --no-deps
 
+  windows-wpd:
+    name: Windows WPD backend + conformance
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (stable MSVC)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      # Default-feature build type-checks the WPD-over-COM backend (compiled via
+      # cfg(windows)); it isn't exercised on the Linux/macOS jobs.
+      - name: Build mtp-rs (default features, type-checks WpdBackend)
+        run: cargo build -p mtp-rs
+
+      # Build the default members (mtp-rs + CLI) and all their targets on Windows. We omit
+      # `--workspace` so it respects default-members, which excludes mtp-bench (needs libmtp via
+      # pkg-config and isn't a CI target) — matching the other jobs above.
+      - name: Build default members (all targets)
+        run: cargo build --all-targets
+
+      # Backend-conformance parity suite against the virtual device. The real-device
+      # `conformance_wpd` tests are `#[ignore]`, so a normal run skips them (no phone on CI).
+      - name: Run virtual-device conformance suite
+        run: cargo test -p mtp-rs --features virtual-device --test conformance
+
   msrv:
     name: Verify MSRV (1.85)
     runs-on: ubuntu-latest
