@@ -14,6 +14,28 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-06-28
+
+Library `0.23.0`, CLI `0.5.0`. The headline is **native Windows support** plus a **backend-neutral
+`mtp::` API** that made it possible. This is a breaking release for library consumers.
+
+### Added
+
+- **[lib]** **Native Windows support via a Windows Portable Devices (WPD) COM backend.** On Windows the high-level `mtp::` API now auto-selects WPD, so phones work out of the box — no Zadig, no driver swap, no extra dependencies (mtp-rs uses Windows' own MTP stack). Covers listing, streaming download/upload, delete, rename, move, copy, thumbnails, capabilities, and device events. Pure Rust via the `windows` crate, `cfg(windows)`-gated. Hardware-verified on a Pixel 9 Pro XL. Resolves the Windows half of [#13](https://github.com/vdavid/mtp-rs/issues/13). ([#13](https://github.com/vdavid/mtp-rs/issues/13))
+- **[lib]** `MtpDevice::capabilities()` returns a backend-neutral `Capabilities` (can_upload/delete/rename/move/copy/create_folder, supports_partial_download/thumbnails/events), replacing per-operation-code sniffing.
+- **[lib]** `MtpDeviceBuilder::backend(Backend::{Auto, Usb, Wpd})` to override backend selection (e.g. force PTP-over-USB to a Zadig-bound camera on Windows).
+- **[lib]** `Error::PermissionDenied` / `is_permission_denied()` (Linux udev / `EACCES`), distinct from `ExclusiveAccess`.
+
+### Changed
+
+- **[lib]** **`mtp::` is now backend-neutral (BREAKING).** `ObjectHandle`/`StorageId` are opaque `u64` session tokens; `ObjectInfo`/`DeviceInfo`/`StorageInfo`/`ObjectFormat`/`DateTime` and `mtp::Error` are neutral `mtp::` types (no longer leaked `ptp::` types). The rich low-level error is now `ptp::PtpError`; the `ptp::` API stays for camera/raw-PTP use (USB-only).
+- **[lib]** **Downloads consolidated (BREAKING):** streaming `download(handle, ByteRange)` (whole-file/resume/slice), `download_to_vec`, and session-releasing `download_windowed`, plus `read_range` and `thumbnail`. Replaces the prior `download`/`download_partial`/`download_partial_64`/`download_stream`/`download_stream_from_offset` set.
+- **[lib]** `MtpDevice::session()` removed; raw PTP access is via the `ptp::` module.
+- **[lib]** `Storage::upload`/`upload_with_progress` accept borrowed (non-`'static`) streams and progress callbacks.
+- **[cli]** Migrated to the neutral API and **now works on Windows** via the WPD backend. Same commands and output.
+- **[cli]** Bump `mtp-rs` dependency to 0.23.0.
+- **[workspace]** Internals reorganized around an `MtpBackend` seam (`UsbBackend` over PTP/USB, `WpdBackend` over WPD/COM), with a cross-backend conformance suite run against both the virtual device (CI) and a real device (Windows), plus a Windows CI job.
+
 ## [0.22.0] - 2026-06-27
 
 ### Added
