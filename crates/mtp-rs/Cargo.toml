@@ -49,6 +49,8 @@ windows = { version = "=0.62.2", default-features = false, features = [
     "Win32_System_Variant",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_Devices_PortableDevices",
+    # CfgMgr32 device-tree walk: correlate an nusb USB device to its WPD device by serial.
+    "Win32_Devices_DeviceAndDriverInstallation",
 ] }
 # Direct dep (same version `windows` already pulls in transitively) so the `#[implement]` macro's
 # generated `::windows_core` paths resolve — used to implement the WPD event callback COM object.

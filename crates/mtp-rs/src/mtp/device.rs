@@ -425,6 +425,43 @@ impl MtpDeviceBuilder {
         Ok(None)
     }
 
+    /// As [`try_open_wpd_by_serial`](Self::try_open_wpd_by_serial) but for a USB device (VID/PID plus
+    /// the USB descriptor serial), used to correlate an nusb `location_id` to a WPD device.
+    ///
+    /// The nusb and WPD *device* serials can differ (the Pixel's USB-descriptor serial isn't its WPD
+    /// serial), so the WPD side matches on VID/PID and, only when two identical models share it,
+    /// disambiguates by the USB serial resolved from the device tree.
+    async fn try_open_wpd_for_usb(
+        &self,
+        serial: Option<String>,
+        vid: u16,
+        pid: u16,
+    ) -> Result<Option<MtpDevice>, Error> {
+        #[cfg(windows)]
+        if matches!(self.backend, Backend::Auto | Backend::Wpd) {
+            match crate::mtp::backend::wpd::WpdBackend::open_for_usb(serial.clone(), vid, pid).await
+            {
+                Ok(b) => {
+                    return Ok(Some(MtpDevice {
+                        backend: Arc::new(b),
+                    }))
+                }
+                Err(e) if self.backend == Backend::Wpd || !matches!(e, Error::NoDevice) => {
+                    return Err(e)
+                }
+                Err(_) => {}
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (serial, vid, pid);
+            if self.backend == Backend::Wpd {
+                return Err(Error::Unsupported);
+            }
+        }
+        Ok(None)
+    }
+
     /// Set bulk transfer timeout (default: 30 seconds).
     ///
     /// This timeout applies to file transfers, command responses, and event polling.
@@ -470,6 +507,13 @@ impl MtpDeviceBuilder {
     ///
     /// Use `MtpDevice::list_devices()` to get available location IDs.
     /// Also checks the virtual device registry when the `virtual-device` feature is enabled.
+    ///
+    /// On Windows a phone at the location is bound to the WPD driver and can't be claimed over raw
+    /// USB, so this correlates the location to a WPD device and opens it there (for
+    /// [`Backend::Auto`]/[`Backend::Wpd`]); it falls back to raw USB for WinUSB-bound cameras and on
+    /// other platforms. The correlation is by **VID/PID** (the USB-descriptor serial and the WPD
+    /// serial can differ), so with two attached devices of the *same model* it may open the other
+    /// one — address those by serial instead.
     pub async fn open_by_location(self, location_id: u64) -> Result<MtpDevice, Error> {
         #[cfg(feature = "virtual-device")]
         if let Some(config) =
@@ -483,6 +527,18 @@ impl MtpDeviceBuilder {
             .into_iter()
             .find(|d| d.location_id == location_id)
             .ok_or(crate::PtpError::NoDevice)?;
+
+        if let Some(device) = self
+            .try_open_wpd_for_usb(
+                device_info.serial_number.clone(),
+                device_info.vendor_id,
+                device_info.product_id,
+            )
+            .await?
+        {
+            return Ok(device);
+        }
+
         let device = device_info.open().map_err(crate::PtpError::Usb)?;
         self.open_nusb_device(device).await
     }

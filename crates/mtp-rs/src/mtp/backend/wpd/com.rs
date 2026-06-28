@@ -24,6 +24,9 @@ use windows::core::ComObject;
 use windows::core::Interface;
 use windows::core::PCWSTR;
 use windows::core::PWSTR;
+use windows::Win32::Devices::DeviceAndDriverInstallation::{
+    CM_Get_Device_IDW, CM_Get_Parent, CM_Locate_DevNodeW, CM_LOCATE_DEVNODE_NORMAL, CR_SUCCESS,
+};
 use windows::Win32::Devices::PortableDevices::*;
 use windows::Win32::Foundation::{PROPERTYKEY, S_OK};
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
@@ -178,7 +181,10 @@ impl WpdDevice {
             .Advise(0, &callback, None::<&IPortableDeviceValues>)
         {
             Ok(cookie) => self.event_cookie = cookie,
-            Err(e) => eprintln!("mtp-rs: WPD event registration (Advise) failed: {}", map_hresult(e)),
+            Err(e) => eprintln!(
+                "mtp-rs: WPD event registration (Advise) failed: {}",
+                map_hresult(e)
+            ),
         }
         self.event_callback = Some(callback);
     }
@@ -845,6 +851,62 @@ fn is_cancelled(cancel: Option<&CancelToken>) -> bool {
     cancel.is_some_and(CancelToken::is_cancelled)
 }
 
+/// The USB-descriptor serial of the physical device behind a WPD device id, via the Windows device
+/// tree. Best-effort: `None` if any CfgMgr step fails.
+///
+/// nusb and WPD label the same device differently: nusb exposes the USB iSerial, but a WPD device
+/// object is the *interface* node (`…&MI_00`) whose own `WPD_DEVICE_SERIAL_NUMBER` is a *different*
+/// value. The USB serial lives on the interface's parent (the composite USB device), so we walk
+/// PnP-id → devnode → parent → instance id and take its trailing segment. Used to disambiguate two
+/// identical-model devices that share a VID/PID.
+///
+/// # Safety
+/// Calls CfgMgr32 with locally-owned buffers; kept `unsafe` for symmetry with the FFI here.
+pub(crate) unsafe fn wpd_device_usb_serial(wpd_pnp_id: &str) -> Option<String> {
+    let instance = pnp_id_to_instance_id(wpd_pnp_id)?;
+    let inst_w = wide(&instance);
+    let mut devinst: u32 = 0;
+    if CM_Locate_DevNodeW(
+        &mut devinst,
+        PCWSTR(inst_w.as_ptr()),
+        CM_LOCATE_DEVNODE_NORMAL,
+    ) != CR_SUCCESS
+    {
+        return None;
+    }
+    // A composite-device interface (`…&MI_xx`) hangs the serial on its parent; a single-function
+    // device carries it on its own node. Walk up only for the former.
+    let node = if instance.to_ascii_lowercase().contains("&mi_") {
+        let mut parent: u32 = 0;
+        if CM_Get_Parent(&mut parent, devinst, 0) != CR_SUCCESS {
+            return None;
+        }
+        parent
+    } else {
+        devinst
+    };
+    let mut buf = [0u16; 512];
+    if CM_Get_Device_IDW(node, &mut buf, 0) != CR_SUCCESS {
+        return None;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let id = String::from_utf16_lossy(&buf[..end]);
+    // e.g. `USB\VID_18D1&PID_4EE2\46061FDAS000A4` → the trailing segment is the serial.
+    id.rsplit('\\').next().map(str::to_string)
+}
+
+/// Convert a WPD device-interface path to a device instance id CfgMgr can locate.
+/// `\\?\usb#vid_18d1&pid_4ee2&mi_00#6&…#{guid}` → `usb\vid_18d1&pid_4ee2&mi_00\6&…`
+fn pnp_id_to_instance_id(pnp: &str) -> Option<String> {
+    let body = pnp.strip_prefix(r"\\?\").unwrap_or(pnp);
+    // Drop the trailing `#{interface-class-guid}`.
+    let body = match body.rfind('#') {
+        Some(i) => &body[..i],
+        None => body,
+    };
+    (!body.is_empty()).then(|| body.replace('#', "\\"))
+}
+
 /// Enumerate the direct child object-id strings of a WPD parent id.
 unsafe fn enum_children(
     content: &IPortableDeviceContent,
@@ -1020,5 +1082,35 @@ unsafe fn probe_capabilities(device: &IPortableDevice) -> Capabilities {
         supports_thumbnails: true,
         // The backend registers a WPD event callback (Advise) at open, so events are delivered.
         supports_events: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pnp_id_to_instance_id;
+
+    #[test]
+    fn instance_id_strips_interface_prefix_and_class_guid() {
+        // A composite-device interface path (the Pixel's MTP function).
+        assert_eq!(
+            pnp_id_to_instance_id(
+                r"\\?\usb#vid_18d1&pid_4ee2&mi_00#6&206d8091&0&0000#{6ac27878-a6fa-4155-ba85-f98f491d4f33}"
+            )
+            .as_deref(),
+            Some(r"usb\vid_18d1&pid_4ee2&mi_00\6&206d8091&0&0000")
+        );
+    }
+
+    #[test]
+    fn instance_id_handles_single_function_device() {
+        assert_eq!(
+            pnp_id_to_instance_id(r"\\?\usb#vid_0001&pid_0002#0123456789#{abcd}").as_deref(),
+            Some(r"usb\vid_0001&pid_0002\0123456789")
+        );
+    }
+
+    #[test]
+    fn instance_id_rejects_empty() {
+        assert_eq!(pnp_id_to_instance_id(r"\\?\#{guid}"), None);
     }
 }

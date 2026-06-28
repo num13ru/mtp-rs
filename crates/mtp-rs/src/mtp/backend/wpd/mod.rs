@@ -60,6 +60,16 @@ impl WpdBackend {
         Self::spawn(OpenSpec::Serial(serial.to_string())).await
     }
 
+    /// Open the WPD device for an nusb USB device (correlates a `location_id`): VID/PID, then the
+    /// USB serial to disambiguate identical models. See [`OpenSpec::UsbDevice`].
+    pub(crate) async fn open_for_usb(
+        serial: Option<String>,
+        vid: u16,
+        pid: u16,
+    ) -> Result<Self, Error> {
+        Self::spawn(OpenSpec::UsbDevice { serial, vid, pid }).await
+    }
+
     async fn spawn(spec: OpenSpec) -> Result<Self, Error> {
         let (handle, device_info, capabilities, events) = WpdHandle::spawn(spec).await?;
         Ok(Self {

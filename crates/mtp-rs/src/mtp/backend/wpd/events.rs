@@ -61,7 +61,12 @@ impl WpdEventSink {
     /// Intern the event's `WPD_OBJECT_ID` into the shared map and return its handle token.
     fn object_handle(&self, params: &IPortableDeviceValues) -> Option<ObjectHandle> {
         // SAFETY: `params` is live; `GetStringValue` hands us a COM-allocated PWSTR to free.
-        let id = unsafe { params.GetStringValue(&WPD_OBJECT_ID).map(|p| take_pwstr(p)).ok() }?;
+        let id = unsafe {
+            params
+                .GetStringValue(&WPD_OBJECT_ID)
+                .map(|p| take_pwstr(p))
+                .ok()
+        }?;
         if id.is_empty() {
             return None;
         }

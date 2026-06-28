@@ -25,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Device: {} {} (serial {:?})",
         info.manufacturer, info.model, info.serial_number
     );
-    println!("supports_events = {}", device.capabilities().supports_events);
+    println!(
+        "supports_events = {}",
+        device.capabilities().supports_events
+    );
     println!("\nWatching for events for 30s — change the device by hand now...\n");
 
     let deadline = Instant::now() + Duration::from_secs(30);

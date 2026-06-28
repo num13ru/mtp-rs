@@ -34,6 +34,19 @@ pub(crate) enum OpenSpec {
     First,
     /// The device whose serial number matches.
     Serial(String),
+    /// The physical USB device behind an nusb `location_id`. Matched by VID/PID (carried in the WPD
+    /// PnP id); when more than one device shares that VID/PID (e.g. two identical phones) it's
+    /// disambiguated by the USB descriptor `serial`, resolved from each candidate's parent in the
+    /// device tree — the nusb and WPD *device* serials differ, so VID/PID + tree-serial is the
+    /// reliable cross-reference.
+    UsbDevice {
+        /// The USB-descriptor serial nusb reported for the device at the location (if any).
+        serial: Option<String>,
+        /// USB vendor id.
+        vid: u16,
+        /// USB product id.
+        pid: u16,
+    },
 }
 
 /// The streaming-download reply: full object size plus the channel the chunks arrive on.
@@ -340,7 +353,50 @@ unsafe fn open_device(spec: OpenSpec) -> Result<WpdDevice, Error> {
             }
             Err(Error::NoDevice)
         }
+        OpenSpec::UsbDevice { serial, vid, pid } => {
+            // VID/PID lives in the PnP id, so candidates are found without opening anything.
+            let candidates: Vec<&com::DeviceEntry> = entries
+                .iter()
+                .filter(|e| pnp_vid_pid(&e.pnp_id) == Some((vid, pid)))
+                .collect();
+            match candidates.as_slice() {
+                [] => Err(Error::NoDevice),
+                // Exactly one device with this VID/PID — unambiguous, no serial check needed.
+                [only] => WpdDevice::open(&only.pnp_id),
+                // Two+ identical-model devices share the VID/PID. Disambiguate by the USB serial
+                // resolved from each candidate's parent in the device tree; refuse to guess if that
+                // can't pin exactly one.
+                many => {
+                    if let Some(target) = serial.as_deref() {
+                        for entry in many {
+                            if com::wpd_device_usb_serial(&entry.pnp_id)
+                                .is_some_and(|s| s.eq_ignore_ascii_case(target))
+                            {
+                                return WpdDevice::open(&entry.pnp_id);
+                            }
+                        }
+                    }
+                    Err(Error::Other {
+                        detail: format!(
+                            "{} WPD devices share VID/PID {vid:04x}:{pid:04x} and none matched the \
+                             USB serial {serial:?}; open by (WPD) serial instead",
+                            many.len()
+                        ),
+                    })
+                }
+            }
+        }
     }
+}
+
+/// Extract `(vid, pid)` from a WPD PnP id like `\\?\usb#vid_18d1&pid_4ee2&mi_00#…`.
+fn pnp_vid_pid(pnp_id: &str) -> Option<(u16, u16)> {
+    let lower = pnp_id.to_ascii_lowercase();
+    let hex4 = |marker: &str| -> Option<u16> {
+        let digits = lower.split(marker).nth(1)?.get(0..4)?;
+        u16::from_str_radix(digits, 16).ok()
+    };
+    Some((hex4("vid_")?, hex4("pid_")?))
 }
 
 /// Stream an object's bytes into a bounded channel, honoring the requested [`ByteRange`].

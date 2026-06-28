@@ -232,3 +232,30 @@ async fn wpd_object_added_event() {
         std::panic::resume_unwind(panic);
     }
 }
+
+/// `open_by_location` must route to WPD on Windows (issue #13): a phone is WPD-bound, so a raw-USB
+/// open would fail with "incompatible driver"; the builder correlates the location to a WPD device
+/// (by VID/PID, since the USB-descriptor serial and the WPD serial can differ).
+#[tokio::test]
+#[ignore = "requires a real WPD device connected in MTP mode"]
+async fn wpd_open_by_location() {
+    // nusb enumerates the phone (it just can't *claim* the WPD-bound interface), so we get its
+    // location_id from there, then open by it.
+    let target = MtpDevice::list_devices()
+        .expect("list devices")
+        .into_iter()
+        .find(|d| d.serial_number.is_some())
+        .expect("an enumerable USB device (the phone) to take a location_id from");
+
+    let device = MtpDevice::open_by_location(target.location_id)
+        .await
+        .expect(
+            "open_by_location should route to WPD on Windows, not fail on the WPD-bound driver",
+        );
+
+    let storages = device.storages().await.expect("storages over WPD");
+    assert!(
+        !storages.is_empty(),
+        "device should report at least one storage"
+    );
+}
