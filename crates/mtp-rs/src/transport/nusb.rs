@@ -11,6 +11,30 @@ use nusb::transfer::{
 use nusb::MaybeFuture;
 use std::time::Duration;
 
+/// Run a nusb operation that is backed by a blocking syscall to completion.
+///
+/// nusb returns `open`, `claim_interface`, `set_configuration`, `clear_halt`,
+/// and `list_devices` as `MaybeFuture`s wrapping a blocking syscall (the
+/// underlying ioctl), *not* the async URB event loop. They must be `.wait()`-ed,
+/// never `.await`-ed: awaiting one panics at runtime ("Awaiting blocking syscall
+/// without an async runtime") unless the consumer enables nusb's `tokio`/`smol`
+/// feature, which we deliberately don't (this crate is runtime-agnostic).
+///
+/// The trap is that the type-erased `impl MaybeFuture` also implements
+/// `IntoFuture`, so `.await` compiles fine and only blows up at runtime, on real
+/// hardware — a STALL never fires against the mock/virtual transport, so a stray
+/// `.await` sails through CI and only surfaces on a device (issue #12, and
+/// acknowledged upstream in kevinmehall/nusb#212). Routing every such call
+/// through this one helper removes the per-call-site `.wait()`-vs-`.await`
+/// choice: there's a single sanctioned spelling and a single place that holds
+/// the rationale.
+///
+/// **Not** for `control_in`/`control_out`: those are genuinely async (nusb's own
+/// URB event loop), need no runtime, and stay `.await`. Don't funnel them here.
+fn blocking<F: MaybeFuture>(op: F) -> F::Output {
+    op.wait()
+}
+
 /// MTP interface class code (Still Image).
 const MTP_CLASS_IMAGE: u8 = 0x06;
 /// MTP interface class code (Vendor-specific).
@@ -82,14 +106,10 @@ where
     D: nusb::transfer::EndpointDirection,
 {
     if matches!(err, TransferError::Stall) {
-        // `.wait()`, not `.await`: nusb implements `clear_halt` as a blocking
-        // syscall (the CLEAR_FEATURE ioctl), and awaiting it panics unless the
-        // consumer enables nusb's `tokio`/`smol` feature. We stay
-        // runtime-agnostic, so we run it synchronously, the same pattern
-        // `NusbTransport::open` uses for `claim_interface().wait()`. The
-        // transfer has already completed (with a stall), so the endpoint is
-        // idle, which is what `clear_halt` requires.
-        let _ = ep.clear_halt().wait();
+        // The transfer has already completed (with a stall), so the endpoint is
+        // idle, which is what `clear_halt` requires. `clear_halt` is a blocking
+        // syscall, hence `blocking()` (see its doc for why `.await` would panic).
+        let _ = blocking(ep.clear_halt());
     }
     NusbTransport::convert_transfer_error(err)
 }
@@ -187,7 +207,7 @@ pub struct UsbDeviceInfo {
 impl UsbDeviceInfo {
     /// Open the USB device.
     pub fn open(&self) -> Result<nusb::Device, nusb::Error> {
-        self.nusb_info.open().wait()
+        blocking(self.nusb_info.open())
     }
 }
 
@@ -222,8 +242,7 @@ impl NusbTransport {
     pub fn list_mtp_devices_with_known(
         known: &[(u16, u16)],
     ) -> Result<Vec<UsbDeviceInfo>, crate::PtpError> {
-        let devices = nusb::list_devices()
-            .wait()
+        let devices = blocking(nusb::list_devices())
             .map_err(crate::PtpError::Usb)?
             .filter_map(|dev| {
                 let match_reason = Self::mtp_match_reason(&dev, known)?;
@@ -286,7 +305,7 @@ impl NusbTransport {
         // Fall back to opening the device and inspecting full configuration descriptors.
         // This also catches vendor-specific interfaces (class 0xFF) that use non-standard
         // subclass/protocol but have the MTP endpoint layout (e.g. Amazon Kindle).
-        if let Ok(device) = dev.open().wait() {
+        if let Ok(device) = blocking(dev.open()) {
             if let Ok(config) = device.active_configuration() {
                 for interface in config.interfaces() {
                     if let Some(alt) = interface.alt_settings().next() {
@@ -452,18 +471,12 @@ impl NusbTransport {
         // macOS: IOKit doesn't publish interface services for vendor-class /
         // class-0 devices with no matching driver. Force-set configuration 1
         // so IOKit publishes them, then retry.
-        let interface = match device.claim_interface(interface_number).wait() {
+        let interface = match blocking(device.claim_interface(interface_number)) {
             Ok(iface) => iface,
             #[cfg(target_os = "macos")]
             Err(e) if Self::is_interface_unpublished(&e) => {
-                device
-                    .set_configuration(1)
-                    .wait()
-                    .map_err(crate::PtpError::Usb)?;
-                device
-                    .claim_interface(interface_number)
-                    .wait()
-                    .map_err(crate::PtpError::Usb)?
+                blocking(device.set_configuration(1)).map_err(crate::PtpError::Usb)?;
+                blocking(device.claim_interface(interface_number)).map_err(crate::PtpError::Usb)?
             }
             Err(e) => return Err(crate::PtpError::Usb(e)),
         };
@@ -580,7 +593,7 @@ impl NusbTransport {
                         let _ = ep.next_complete().await;
                     }
                 }
-                let _ = ep.clear_halt().wait();
+                let _ = blocking(ep.clear_halt());
                 return;
             }
         }
@@ -592,7 +605,7 @@ impl NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
-            let _ = ep.clear_halt().wait();
+            let _ = blocking(ep.clear_halt());
         }
     }
 }
@@ -969,7 +982,7 @@ impl Transport for NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
-            let _ = ep.clear_halt().wait();
+            let _ = blocking(ep.clear_halt());
         }
         {
             let mut ep = self.bulk_in.lock().await;
@@ -979,7 +992,7 @@ impl Transport for NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
-            let _ = ep.clear_halt().wait();
+            let _ = blocking(ep.clear_halt());
 
             // Step 3: Drain stale bulk IN data until the pipe is idle.
             let max_packet_size = ep.max_packet_size();

@@ -247,15 +247,20 @@ demonstrates it with no hardware. Real-device coverage:
   unsupported operations); the halt persists until cleared, even across
   process restarts. Every bulk completion site clears the halt via
   `clear_halt` on STALL.
-- **`clear_halt` (and `claim_interface`) must be `.wait()`-ed, never
-  `.await`-ed.** nusb implements them as blocking syscalls wrapped in
-  `MaybeFuture`; awaiting one panics at runtime ("Awaiting blocking syscall
-  without an async runtime") unless the consumer enables nusb's `tokio`/`smol`
-  feature, which we don't (runtime-agnostic). `control_in`/`control_out` are
-  the exception: genuinely async via nusb's URB event loop, so those stay
-  `.await`. This only bites on real hardware (a STALL never fires against the
-  mock/virtual transport), so it slips through CI; #12 hit it on the first
-  camera stall.
+- **Blocking nusb ops (`clear_halt`, `claim_interface`, `set_configuration`,
+  `open`, `list_devices`) go through the `blocking()` helper in
+  `transport/nusb.rs`, never `.await`.** nusb wraps them in `MaybeFuture`s
+  backed by a blocking syscall; awaiting one panics at runtime ("Awaiting
+  blocking syscall without an async runtime") unless the consumer enables
+  nusb's `tokio`/`smol` feature, which we don't (runtime-agnostic). The trap is
+  that `impl MaybeFuture` also implements `IntoFuture`, so `.await` compiles and
+  only blows up on real hardware — a STALL never fires against the mock/virtual
+  transport, so a stray `.await` slips through CI (#12 hit it on the first
+  camera stall, and it's acknowledged upstream in kevinmehall/nusb#212). The
+  `blocking()` choke point removes the per-call-site `.wait()`-vs-`.await`
+  choice and holds the rationale in one place; new blocking calls should use it.
+  `control_in`/`control_out` are the exception: genuinely async via nusb's URB
+  event loop, so those stay `.await` and must NOT go through `blocking()`.
 - `Transport::reset_device()` / `PtpDevice::reset_device()` / the CLI's
   `mtp-rs reset` send the SIC DEVICE_RESET request (0x66), clear halts, and
   drain stale bulk data (without a PTP session), so they work on a device too
