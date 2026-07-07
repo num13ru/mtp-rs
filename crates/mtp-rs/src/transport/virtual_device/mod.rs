@@ -28,6 +28,7 @@
 //!             read_only: false,
 //!         }],
 //!         supports_rename: true,
+//!         supports_partial_object_64: true,
 //!         event_poll_interval: Duration::from_millis(50),
 //!         watch_backing_dirs: true,
 //!     })
@@ -247,6 +248,7 @@ mod tests {
                 read_only: false,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
         }
@@ -264,6 +266,7 @@ mod tests {
                 read_only: true,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
         }
@@ -285,6 +288,7 @@ mod tests {
                 })
                 .collect(),
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
         }
@@ -676,6 +680,52 @@ mod tests {
             manual.extend_from_slice(&chunk);
         }
         assert_eq!(windowed, manual);
+    }
+
+    #[tokio::test]
+    async fn windowed_download_works_on_32bit_only_device() {
+        // A camera-like device that advertises GetPartialObject (32-bit) but NOT
+        // GetPartialObject64 (the Lumix DMC-TZ61 case, #12). Windowed/ranged reads
+        // must fall back to the 32-bit op and still return byte-exact data, rather
+        // than failing Unsupported.
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let config = VirtualDeviceConfig {
+            serial: "test-32bit-partial".into(),
+            supports_partial_object_64: false,
+            ..test_config(dir.path())
+        };
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        // The capability probe conflates 32/64 into one flag, so it stays true here.
+        assert!(device.capabilities().supports_partial_download);
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // Windowed read (goes through read_range -> 32-bit GetPartialObject).
+        let dl = storages[0]
+            .download_windowed(obj.handle, ByteRange::Full, 1024)
+            .await
+            .unwrap();
+        assert_eq!(dl.size(), content.len() as u64);
+        assert_eq!(collect_windowed(dl).await, content);
+
+        // Ranged streaming download from an offset (goes through download() ->
+        // 32-bit GetPartialObject) returns the correct tail. collect_download
+        // consumes the FileDownload by value, releasing the one-per-device
+        // session lock before the next operation.
+        let offset = 1234u64;
+        let ranged = storages[0]
+            .download(obj.handle, ByteRange::From(offset))
+            .await
+            .unwrap();
+        assert_eq!(ranged.size(), content.len() as u64);
+        assert_eq!(collect_download(ranged).await, content[offset as usize..]);
+
+        // And a plain read_range with an explicit length.
+        let mid = storages[0].read_range(obj.handle, 100, 50).await.unwrap();
+        assert_eq!(mid, content[100..150]);
     }
 
     #[tokio::test]
@@ -1605,6 +1655,7 @@ mod tests {
                 read_only: false,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::from_millis(50),
             watch_backing_dirs: true,
         };
@@ -1648,6 +1699,7 @@ mod tests {
                 read_only: false,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::from_millis(50),
             watch_backing_dirs: true,
         };
@@ -1780,6 +1832,7 @@ mod tests {
                 read_only: false,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::from_millis(50),
             watch_backing_dirs: true,
         };
@@ -1838,6 +1891,7 @@ mod tests {
                 read_only: false,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::from_millis(50),
             watch_backing_dirs: true,
         };
@@ -1892,6 +1946,7 @@ mod tests {
                 read_only: false,
             }],
             supports_rename: true,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
         }

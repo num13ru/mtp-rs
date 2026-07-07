@@ -649,6 +649,7 @@ impl MtpDeviceBuilder {
     ///             read_only: false,
     ///         }],
     ///         supports_rename: true,
+    ///         supports_partial_object_64: true,
     ///         event_poll_interval: Duration::from_millis(50),
     ///         watch_backing_dirs: true,
     ///     })
@@ -752,6 +753,7 @@ mod tests {
             serial: "empty-001".into(),
             storages: vec![],
             supports_rename: false,
+            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
         };

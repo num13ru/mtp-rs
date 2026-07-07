@@ -29,6 +29,46 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Which operation to use for a ranged/offset read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartialReadOp {
+    /// `GetPartialObject64` (0x95C1): 64-bit offset, preferred when advertised.
+    Wide,
+    /// `GetPartialObject` (0x101B): 32-bit offset, the fallback for devices that
+    /// don't advertise the 64-bit op (many PTP cameras, e.g. the Panasonic Lumix
+    /// DMC-TZ61, issue #12). Only valid for offsets that fit in `u32`.
+    Narrow,
+}
+
+/// Choose the partial-read op given what the device advertises and the target offset.
+///
+/// Prefers the 64-bit `GetPartialObject64`. Falls back to the 32-bit
+/// `GetPartialObject` when the device lacks the 64-bit op but has the 32-bit one
+/// and the offset fits in `u32` (so ranged/windowed/resumable downloads work on
+/// cameras that only implement the 32-bit op, for any file up to 4 GiB). Errors
+/// when the device advertises neither op, or when only the 32-bit op is available
+/// but the offset is past 4 GiB (unreachable with a 32-bit offset).
+fn plan_partial_read(
+    has_partial_64: bool,
+    has_partial_32: bool,
+    offset: u64,
+) -> Result<PartialReadOp, Error> {
+    if has_partial_64 {
+        Ok(PartialReadOp::Wide)
+    } else if has_partial_32 {
+        if offset > u64::from(u32::MAX) {
+            Err(Error::invalid_data(format!(
+                "offset {offset} needs GetPartialObject64 (64-bit), which this device doesn't \
+                 advertise; its 32-bit GetPartialObject can't reach past 4 GiB"
+            )))
+        } else {
+            Ok(PartialReadOp::Narrow)
+        }
+    } else {
+        Err(Error::Unsupported)
+    }
+}
+
 /// The PTP-over-USB implementation of [`MtpBackend`].
 pub(crate) struct UsbBackend {
     session: Arc<PtpSession>,
@@ -36,6 +76,10 @@ pub(crate) struct UsbBackend {
     device_info: DeviceInfo,
     /// Neutral capabilities, derived once at open.
     capabilities: Capabilities,
+    /// Which partial-object ops the device advertises, cached at open. Drives the
+    /// ranged/windowed read path (see [`plan_partial_read`]).
+    has_partial_object_64: bool,
+    has_partial_object: bool,
 }
 
 impl UsbBackend {
@@ -43,11 +87,20 @@ impl UsbBackend {
     pub(crate) fn new(session: Arc<PtpSession>, ptp_info: PtpDeviceInfo) -> Self {
         let device_info = DeviceInfo::from_ptp(&ptp_info);
         let capabilities = Capabilities::from_ptp_device_info(&ptp_info);
+        let has_partial_object_64 = ptp_info.supports_operation(OperationCode::GetPartialObject64);
+        let has_partial_object = ptp_info.supports_operation(OperationCode::GetPartialObject);
         Self {
             session,
             device_info,
             capabilities,
+            has_partial_object_64,
+            has_partial_object,
         }
+    }
+
+    /// Decide how to issue a ranged/offset read for this device and offset.
+    fn partial_read(&self, offset: u64) -> Result<PartialReadOp, Error> {
+        plan_partial_read(self.has_partial_object_64, self.has_partial_object, offset)
     }
 
     /// Resolve the object-handle list for a listing, applying the root-listing quirks.
@@ -260,23 +313,37 @@ impl MtpBackend for UsbBackend {
                     .await?
             }
             ByteRange::From(_) | ByteRange::Range { .. } => {
-                // Offset/range read via GetPartialObject64. `max_bytes` is a u32, so a single call
-                // requests at most u32::MAX bytes from the offset; a larger tail is fetched across
-                // multiple resumes. The 64-bit offset is what lets a resume start past 4 GB.
+                // Offset/range read. `max_bytes` is a u32, so a single call requests at most
+                // u32::MAX bytes from the offset; a larger tail is fetched across multiple resumes.
+                // Prefer GetPartialObject64 (its 64-bit offset lets a resume start past 4 GB); fall
+                // back to the 32-bit GetPartialObject when that's all the device has (cameras).
                 let remaining = size - offset;
                 let want = match range {
                     ByteRange::Range { len, .. } => remaining.min(len),
                     _ => remaining,
                 };
                 let max_bytes = u32::try_from(want).unwrap_or(u32::MAX);
-                let offset_lo = offset as u32;
-                let offset_hi = (offset >> 32) as u32;
-                self.session
-                    .execute_with_receive_stream(
-                        OperationCode::GetPartialObject64,
-                        &[obj.to_ptp().0, offset_lo, offset_hi, max_bytes],
-                    )
-                    .await?
+                match self.partial_read(offset)? {
+                    PartialReadOp::Wide => {
+                        let offset_lo = offset as u32;
+                        let offset_hi = (offset >> 32) as u32;
+                        self.session
+                            .execute_with_receive_stream(
+                                OperationCode::GetPartialObject64,
+                                &[obj.to_ptp().0, offset_lo, offset_hi, max_bytes],
+                            )
+                            .await?
+                    }
+                    PartialReadOp::Narrow => {
+                        // partial_read() guarantees offset <= u32::MAX here.
+                        self.session
+                            .execute_with_receive_stream(
+                                OperationCode::GetPartialObject,
+                                &[obj.to_ptp().0, offset as u32, max_bytes],
+                            )
+                            .await?
+                    }
+                }
             }
         };
 
@@ -294,17 +361,22 @@ impl MtpBackend for UsbBackend {
         offset: u64,
         len: Option<u32>,
     ) -> Result<Vec<u8>, Error> {
-        match len {
+        let max_bytes = match len {
             // Whole object: GetObject buffers the lot.
-            None if offset == 0 => Ok(self.session.get_object(obj.to_ptp()).await?),
+            None if offset == 0 => return Ok(self.session.get_object(obj.to_ptp()).await?),
             // Tail from an offset with no explicit length: ask for as much as one call allows.
-            None => Ok(self
+            None => u32::MAX,
+            Some(len) => len,
+        };
+        // Prefer the 64-bit op; fall back to 32-bit GetPartialObject on cameras that only have it.
+        match self.partial_read(offset)? {
+            PartialReadOp::Wide => Ok(self
                 .session
-                .get_partial_object_64(obj.to_ptp(), offset, u32::MAX)
+                .get_partial_object_64(obj.to_ptp(), offset, max_bytes)
                 .await?),
-            Some(len) => Ok(self
+            PartialReadOp::Narrow => Ok(self
                 .session
-                .get_partial_object_64(obj.to_ptp(), offset, len)
+                .get_partial_object(obj.to_ptp(), offset, max_bytes)
                 .await?),
         }
     }
@@ -450,6 +522,55 @@ mod tests {
         DeviceInfo as PtpDeviceInfo, ObjectFormatCode, ObjectInfo as PtpObjectInfo,
     };
     use crate::transport::mock::MockTransport;
+
+    const OVER_4GIB: u64 = u32::MAX as u64 + 1;
+
+    #[test]
+    fn plan_partial_read_prefers_64bit_when_available() {
+        // Both ops, or 64-bit only: always Wide, at any offset.
+        for offset in [0, 1024, OVER_4GIB, u64::MAX] {
+            assert_eq!(
+                plan_partial_read(true, true, offset).unwrap(),
+                PartialReadOp::Wide
+            );
+            assert_eq!(
+                plan_partial_read(true, false, offset).unwrap(),
+                PartialReadOp::Wide
+            );
+        }
+    }
+
+    #[test]
+    fn plan_partial_read_falls_back_to_32bit_under_4gib() {
+        // 32-bit only, offset fits in u32: Narrow (the camera fallback, #12).
+        for offset in [0, 1, 1024, u64::from(u32::MAX)] {
+            assert_eq!(
+                plan_partial_read(false, true, offset).unwrap(),
+                PartialReadOp::Narrow
+            );
+        }
+    }
+
+    #[test]
+    fn plan_partial_read_32bit_only_past_4gib_errors() {
+        // 32-bit offset can't reach past 4 GiB, and there's no 64-bit op.
+        for offset in [OVER_4GIB, u64::MAX] {
+            assert!(matches!(
+                plan_partial_read(false, true, offset),
+                Err(Error::InvalidData { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn plan_partial_read_neither_op_is_unsupported() {
+        for offset in [0, 1024, OVER_4GIB] {
+            assert!(matches!(
+                plan_partial_read(false, false, offset),
+                Err(Error::Unsupported)
+            ));
+        }
+    }
 
     // -- Protocol-level mock helpers (mirror the session/storage test helpers) ----
 

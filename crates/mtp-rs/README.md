@@ -328,6 +328,7 @@ let device = MtpDevice::builder()
             read_only: false,
         }],
         supports_rename: true,
+        supports_partial_object_64: true,
         event_poll_interval: Duration::from_millis(50),
         watch_backing_dirs: true,
     })

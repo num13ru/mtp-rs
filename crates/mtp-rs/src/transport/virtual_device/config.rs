@@ -26,6 +26,7 @@ use std::time::Duration;
 ///         read_only: false,
 ///     }],
 ///     supports_rename: true,
+///     supports_partial_object_64: true,
 ///     event_poll_interval: Duration::from_millis(50),
 ///     watch_backing_dirs: true,
 /// };
@@ -42,6 +43,12 @@ pub struct VirtualDeviceConfig {
     pub storages: Vec<VirtualStorageConfig>,
     /// Whether the device advertises SetObjectPropValue support (rename).
     pub supports_rename: bool,
+    /// Whether the device advertises `GetPartialObject64` (0x95C1), the 64-bit
+    /// offset partial read. Real Android devices do; many PTP cameras (e.g. the
+    /// Panasonic Lumix DMC-TZ61) only advertise the 32-bit `GetPartialObject`.
+    /// Set `false` to model such a camera and exercise the 32-bit fallback path.
+    /// The 32-bit `GetPartialObject` is always advertised regardless.
+    pub supports_partial_object_64: bool,
     /// How long `receive_interrupt` waits when no events are pending.
     /// Simulates the USB interrupt endpoint blocking behavior.
     /// Default: 50ms for production use. Use `Duration::ZERO` in tests

@@ -14,6 +14,15 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+### Fixed
+
+- **[lib] Ranged, windowed, and resumable downloads now work on devices that only advertise the 32-bit `GetPartialObject`.** Previously `download` with a `ByteRange::From`/`Range`, `download_windowed`, and `read_range` all hard-required `GetPartialObject64` (0x95C1), the 64-bit-offset op. Many PTP cameras (e.g. the Panasonic Lumix DMC-TZ61, [#12](https://github.com/vdavid/mtp-rs/issues/12)) only advertise the 32-bit `GetPartialObject` (0x101B), so these calls failed with `Unsupported`. The backend now falls back to the 32-bit op for any offset that fits in `u32` (files up to 4 GiB); a resume past 4 GiB still needs the 64-bit op (returns `Error::InvalidData`), and a device with neither op returns `Error::Unsupported`. The op selection (`plan_partial_read`) is unit-tested, and the 32-bit path is covered end-to-end against a virtual device configured without the 64-bit op.
+
+### Changed
+
+- **[lib] Breaking (test support): `VirtualDeviceConfig` gains a `supports_partial_object_64: bool` field** (feature `virtual-device`). Set it `true` to keep the previous behavior; set it `false` to model a camera that only implements the 32-bit `GetPartialObject` and exercise the fallback above. Only affects code that constructs `VirtualDeviceConfig` directly (test setups).
+- **[workspace] Opt-in integration-test env flags now test the value, not mere presence.** `MTP_RUN_SLOW_TESTS=0` and `MTP_RUN_DROP_RECOVERY=0` used to *enable* the gated test (a bare "is the var defined" check); they now correctly mean "off". Only `1`/`true`/`yes`/`on` enable. Reported by [@juleskers](https://github.com/juleskers) in [#12](https://github.com/vdavid/mtp-rs/issues/12).
+
 ## [0.23.0] - 2026-06-28
 
 Library `0.23.0`, CLI `0.5.0`. The headline is **native Windows support** plus a **backend-neutral

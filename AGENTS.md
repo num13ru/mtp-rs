@@ -184,8 +184,15 @@ Contract:
 - Cancellation mid-partial-stream drains/recovers exactly like the full streaming
   download (see "Transfer cancellation" and "In-session desync self-healing"
   above): a follow-up operation on the same session works.
-- Requires the device to advertise `GetPartialObject64` (`0x95C1`); most modern
-  Android devices do.
+- Prefers `GetPartialObject64` (`0x95C1`, 64-bit offset), but falls back to the
+  32-bit `GetPartialObject` (`0x101B`) when the device advertises only that (many
+  PTP cameras, e.g. the Panasonic Lumix DMC-TZ61, issue #12). The fallback covers
+  any offset that fits in `u32` (files up to 4 GiB); a resume past 4 GiB still
+  needs the 64-bit op, else `Error::InvalidData`. A device with neither op returns
+  `Error::Unsupported`. The op choice lives in `plan_partial_read` in
+  `mtp::backend::usb` (unit-tested); `Capabilities::supports_partial_download`
+  conflates the two ops into one flag, so it can't tell them apart, use it only as
+  a coarse "some partial read exists" hint.
 
 Tested against the virtual device in `transport/virtual_device/mod.rs`
 (`download_stream_from_offset_*`, `cancel_mid_partial_stream_leaves_session_usable`).

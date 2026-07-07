@@ -47,6 +47,20 @@
 
 use mtp_rs::mtp::Storage;
 use mtp_rs::{ByteRange, ObjectHandle};
+
+/// Whether an opt-in env flag is enabled. True only for truthy values
+/// (`1`/`true`/`yes`/`on`, case-insensitive), so `VAR=0` means off, not "defined
+/// so on" (which is what a bare presence check would wrongly do).
+fn env_enabled(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
 use serial_test::serial;
 use std::time::Instant;
 
@@ -472,7 +486,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn slow_test_list_recursive() {
-        if std::env::var("MTP_RUN_SLOW_TESTS").is_err() {
+        if !env_enabled("MTP_RUN_SLOW_TESTS") {
             tlog!("SKIPPING slow_test_list_recursive (set MTP_RUN_SLOW_TESTS=1 to run)");
             return;
         }
@@ -661,7 +675,7 @@ mod readonly {
     async fn test_drop_mid_stream_then_software_reconnect() {
         // Opt-in: this test can wedge the device past software recovery on some
         // firmware (see the doc comment), so it stays out of default runs.
-        if std::env::var("MTP_RUN_DROP_RECOVERY").is_err() {
+        if !env_enabled("MTP_RUN_DROP_RECOVERY") {
             tlog!("SKIPPING: set MTP_RUN_DROP_RECOVERY=1 to run (can wedge the device until a USB replug)");
             return;
         }
@@ -894,7 +908,18 @@ mod readonly {
         let mut window_count = 0u64;
         let mut listings_between = 0u64;
         while let Some(window) = windowed.next_window().await {
-            let bytes = window.expect("window error");
+            let bytes = match window {
+                Ok(bytes) => bytes,
+                // Device advertises neither GetPartialObject64 nor the 32-bit
+                // GetPartialObject: windowed reads can't work here. Skip cleanly
+                // rather than fail. (A 32-bit-only camera like the Lumix DMC-TZ61
+                // uses the fallback and does NOT hit this.)
+                Err(mtp_rs::Error::Unsupported) => {
+                    tlog!("SKIPPING: device supports no partial-object read op");
+                    return;
+                }
+                Err(e) => panic!("window error: {e:?}"),
+            };
             win_len += bytes.len() as u64;
             win_hash = fnv1a_update(win_hash, &bytes);
             window_count += 1;

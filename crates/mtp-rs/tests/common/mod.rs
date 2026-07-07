@@ -49,6 +49,7 @@ pub async fn open_device(serial: &str) -> (mtp_rs::MtpDevice, tempfile::TempDir)
             read_only: false,
         }],
         supports_rename: true,
+        supports_partial_object_64: true,
         event_poll_interval: Duration::ZERO,
         watch_backing_dirs: false,
     };

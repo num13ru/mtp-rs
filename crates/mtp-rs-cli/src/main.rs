@@ -34,6 +34,7 @@ fn register_test_virtual_device() {
             read_only: false,
         }],
         supports_rename: true,
+        supports_partial_object_64: true,
         event_poll_interval: std::time::Duration::ZERO,
         watch_backing_dirs: false,
     };
