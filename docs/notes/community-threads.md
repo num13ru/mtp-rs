@@ -208,9 +208,23 @@ separate interface). The reporter closed it "not planned," but it motivated a re
 **Windows WPD-over-COM backend** behind the new backend-neutral `mtp::` API (pure Rust via the
 `windows` crate, `cfg(windows)`). On Windows the high-level `mtp::` API now auto-selects WPD and works
 out of the box — no Zadig, no extra deps — hardware-verified on a Pixel 9 Pro XL (read, write,
-streaming up/download, thumbnails, capabilities; events deferred). Landed on `feat/windows-wpd-backend`;
-ships in the next release. The low-level `ptp::` USB API stays WinUSB-only on Windows. When released,
-reply to #13 so @klwaaa knows it's fixed.
+streaming up/download, thumbnails, capabilities; events deferred). Shipped in v0.23.0 (2026-06-28);
+@klwaaa was notified on the thread the same day. The low-level `ptp::` USB API stays WinUSB-only on
+Windows.
+
+### #14: RUSTSEC-2026-0190: anyhow unsoundness (closed 2026-07-02)
+
+Source: github-actions advisory. `Error::downcast_mut()` unsoundness in `anyhow` < 1.0.103. `anyhow`
+is a direct dependency of the CLI crate, so we cleared it by bumping to 1.0.103 (b997daf) rather than
+arguing non-affectedness.
+
+### #15: RUSTSEC-2026-0205: scc double-free (closed 2026-07-08)
+
+Source: github-actions advisory. Not affected: `scc` 2.4.0 was pulled in only transitively via
+`serial_test` (dev-dependency), so it never reached downstream consumers, and the unsound path (a
+user-supplied compare function that panics) is unreachable from `serial_test`'s usage. Cleared by
+bumping `serial_test` to 3.5.0, which dropped `scc` entirely in favor of `parking_lot` — a
+lockfile-only change (7184d25).
 
 ## Device quirks reference
 
