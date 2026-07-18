@@ -152,7 +152,22 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   reports. SIC-compliant cameras wait for this before accepting new
   operations; skipping it left the Lumix DMC-TZ61 (#12) dead after every
   cancel. The order is the whole trick: drain first (for Android), poll after
-  (for cameras). Android fails the request harmlessly.
+  (for cameras). A healthy Android device answers this poll `OK` or fails it
+  harmlessly; the poll is not what wedges the Samsung below (that was ruled out
+  on hardware).
+- **Large-backlog cancel wedges some Samsung devices** (Galaxy S23 Ultra, and
+  qarmin's A15, #18). Cancelling a held-open streaming download while the device
+  still has a large bulk backlog queued (classically the *first* download right
+  after a fresh USB connect) leaves the `GetObject` transaction unclosed: the
+  drain reads the whole backlog and idles out without ever seeing the closing
+  Response container, the device then stops answering (GET_DEVICE_STATUS times
+  out as `TransferError::Cancelled`, versus the fast `Stall` an unsupported
+  device returns), and the session is dead. It's **software-recoverable**:
+  `reset_device()` (SIC DEVICE_RESET) revives it with no physical replug
+  (verified on the S23), though the reset drops the PTP session so the consumer
+  must reopen. The wedge is intermittent (warm sessions with a smaller backlog
+  recover). Prefer `download_windowed` over held-open cancel on Android: it
+  never builds a multi-MB backlog to cancel. See `docs/debugging.md`.
 - See `NusbTransport::cancel_transfer()` for the full implementation with
   detailed comments.
 
