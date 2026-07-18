@@ -223,6 +223,12 @@ impl PtpSession {
         }
 
         if response.code == ResponseCode::SessionAlreadyOpen {
+            diag_debug!(
+                "open: device reports SessionAlreadyOpen (id={}); closing and reopening. \
+                 If this persists right after a cancel-wedge reset (#18), the caller reopened \
+                 too soon: wait a few seconds quiet, then retry",
+                session_id
+            );
             // Session already exists with potentially mismatched transaction ID.
             // Close the existing session (ignore errors) and open a fresh one.
             let _ = session.execute(OperationCode::CloseSession, &[]).await;
@@ -305,6 +311,10 @@ impl PtpSession {
         let Some(tx_id) = self.recovery.take() else {
             return Ok(());
         };
+        diag_debug!(
+            "recover_if_needed: draining pipe for abandoned txn={} before next op",
+            tx_id
+        );
         // Drain via the validated SIC cancel path (CLASS_CANCEL, then read the
         // bulk IN and interrupt pipes until idle). After this the session is
         // clean and the transaction-ID stream realigns on the next command.
@@ -365,6 +375,12 @@ impl PtpSession {
             )));
         }
 
+        diag_trace!(
+            "execute: op={:?} txn={} -> {:?}",
+            operation,
+            tx_id,
+            response.code
+        );
         scope.disarm();
         Ok(response)
     }
@@ -454,6 +470,13 @@ impl PtpSession {
                             tx_id, response.transaction_id
                         )));
                     }
+                    diag_trace!(
+                        "execute_with_receive: op={:?} txn={} -> {:?} ({} data bytes)",
+                        operation,
+                        tx_id,
+                        response.code,
+                        data.len()
+                    );
                     scope.disarm();
                     return Ok((response, data));
                 }
@@ -529,6 +552,13 @@ impl PtpSession {
             )));
         }
 
+        diag_trace!(
+            "execute_with_send: op={:?} txn={} ({} data bytes) -> {:?}",
+            operation,
+            tx_id,
+            data.len(),
+            response.code
+        );
         scope.disarm();
         Ok(response)
     }

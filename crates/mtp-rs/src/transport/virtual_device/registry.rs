@@ -370,6 +370,26 @@ pub fn force_partial_read_caps(serial: &str, caps: Vec<usize>) -> bool {
     true
 }
 
+/// Arm a one-shot cancel wedge on a registered virtual device (test hook).
+///
+/// The next `cancel_transfer` on that device returns
+/// [`PtpError::DeviceReset`](crate::PtpError::DeviceReset), modeling the Samsung
+/// large-backlog cancel wedge that the real USB transport detects and recovers
+/// from with a device reset (issue #18). This lets the high-level `DeviceReset`
+/// contract — a mid-stream `cancel()` surfacing `Error::DeviceReset` so the
+/// consumer reopens — be regression-tested with no hardware. Returns `false` if
+/// no active device has the given serial.
+pub fn force_cancel_wedge(serial: &str) -> bool {
+    let active = active_states().lock().unwrap();
+    let state_arc = match active.iter().find(|(s, _)| s == serial) {
+        Some((_, state)) => Arc::clone(state),
+        None => return false,
+    };
+    drop(active); // Release the registry lock before acquiring the state lock.
+    state_arc.lock().unwrap().pending_cancel_wedge = true;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

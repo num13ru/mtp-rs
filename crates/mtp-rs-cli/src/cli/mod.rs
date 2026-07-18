@@ -25,6 +25,7 @@ pub use error::CliError;
 
 pub async fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
+    init_diagnostics(cli.trace);
 
     match &cli.command {
         Command::Devices => commands::devices::run(&cli),
@@ -37,9 +38,32 @@ pub async fn run() -> Result<(), CliError> {
         Command::Rename(args) => commands::rename::run(&cli, args).await,
         Command::Mv(args) => commands::mv::run(&cli, args).await,
         Command::Cp(args) => commands::cp::run(&cli, args).await,
-        Command::Doctor => commands::doctor::run(&cli).await,
+        Command::Doctor(args) => commands::doctor::run(&cli, args).await,
         Command::Reset => commands::reset::run(&cli).await,
     }
+}
+
+/// Install a `tracing` subscriber that renders the library's device-protocol
+/// diagnostics to stderr, for bug reports (issue #18).
+///
+/// Filter precedence: a set `RUST_LOG` wins (full control); otherwise `--trace`
+/// selects `mtp_rs=debug`; otherwise nothing is emitted. Writing to stderr keeps
+/// stdout clean for `--json` and piped output. Called once at startup; a second
+/// call is a harmless no-op (the global subscriber is already set).
+fn init_diagnostics(trace_flag: bool) {
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    let filter = match EnvFilter::try_from_default_env() {
+        Ok(from_env) => from_env,
+        Err(_) if trace_flag => EnvFilter::new("mtp_rs=debug"),
+        Err(_) => return, // no RUST_LOG and no --trace: stay quiet
+    };
+
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .try_init();
 }
 
 #[cfg(test)]
@@ -125,7 +149,10 @@ mod tests {
             timeout: 30,
             json,
             verbose: false,
-            command: Command::Doctor,
+            trace: false,
+            command: Command::Doctor(super::args::DoctorArgs {
+                probe_cancel: false,
+            }),
         }
     }
 

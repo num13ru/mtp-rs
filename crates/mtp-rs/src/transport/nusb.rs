@@ -578,12 +578,32 @@ impl NusbTransport {
                 // Any other error is the device refusing the request (a Stall
                 // for "unsupported", as most Android devices do), which is
                 // normal and not a wedge.
-                Err(TransferError::Cancelled) => return true,
-                Err(_) => return false,
+                Err(TransferError::Cancelled) => {
+                    diag_debug!(
+                        "settle_after_cancel: GET_DEVICE_STATUS timed out (Cancelled) -> WEDGED"
+                    );
+                    return true;
+                }
+                Err(e) => {
+                    diag_trace!(
+                        "settle_after_cancel: GET_DEVICE_STATUS refused ({:?}) -> not wedged",
+                        e
+                    );
+                    return false;
+                }
             };
             let Some((code, stalled_endpoints)) = parse_device_status(&data) else {
+                diag_trace!(
+                    "settle_after_cancel: unparseable status ({} bytes)",
+                    data.len()
+                );
                 return false; // Unparseable response: don't insist.
             };
+            diag_trace!(
+                "settle_after_cancel: status code={:#06x}, stalled_endpoints={:?}",
+                code,
+                stalled_endpoints
+            );
             for address in stalled_endpoints {
                 self.clear_bulk_halt_by_address(address).await;
             }
@@ -592,6 +612,10 @@ impl NusbTransport {
             }
             Delay::new(POLL_INTERVAL).await;
         }
+        diag_debug!(
+            "settle_after_cancel: still Device_Busy after {} polls",
+            MAX_POLLS
+        );
         false
     }
 
@@ -825,6 +849,12 @@ impl Transport for NusbTransport {
         // class-specific control transfer on endpoint 0, independent of
         // the bulk pipes. The 6-byte payload contains the CancelTransaction
         // event code (0x4001) and the transaction ID to cancel.
+        diag_debug!(
+            "cancel_transfer: begin (txn={}, idle_timeout={:?})",
+            transaction_id,
+            idle_timeout
+        );
+
         let mut payload = [0u8; 6];
         payload[0..2].copy_from_slice(&SIC_CANCEL_EVENT_CODE.to_le_bytes());
         payload[2..6].copy_from_slice(&transaction_id.to_le_bytes());
@@ -843,6 +873,7 @@ impl Transport for NusbTransport {
             )
             .await
             .map_err(Self::convert_transfer_error)?;
+        diag_debug!("cancel_transfer: step 1 CLASS_CANCEL sent");
 
         // Step 2: Drain bulk IN pipe.
         //
@@ -858,6 +889,12 @@ impl Transport for NusbTransport {
         {
             let mut ep = self.bulk_in.lock().await;
             let max_packet_size = ep.max_packet_size();
+            // Diagnostic counters (surfaced via the `tracing` feature). A #18
+            // wedge shows up here as a large backlog drained with no closing
+            // Response container. Kept unconditionally; the cost is negligible.
+            let mut drained_packets = 0u32;
+            let mut drained_bytes = 0usize;
+            let mut saw_response = false;
             loop {
                 if ep.pending() == 0 {
                     let aligned_size = align_to_packet_size(max_packet_size, max_packet_size);
@@ -873,6 +910,8 @@ impl Transport for NusbTransport {
                         futures::future::Either::Left((completion, _)) => {
                             match completion.status {
                                 Ok(()) => {
+                                    drained_packets += 1;
+                                    drained_bytes += completion.actual_len;
                                     // Check for Response container (type code 3 at bytes [4..6]).
                                     if completion.actual_len >= 6 {
                                         let type_code = u16::from_le_bytes([
@@ -880,6 +919,7 @@ impl Transport for NusbTransport {
                                             completion.buffer[5],
                                         ]);
                                         if type_code == 3 {
+                                            saw_response = true;
                                             Ok(true) // Response received, done
                                         } else {
                                             Ok(false) // Data, keep draining
@@ -914,6 +954,12 @@ impl Transport for NusbTransport {
                     Err(e) => return Err(e),
                 }
             }
+            diag_debug!(
+                "cancel_transfer: step 2 bulk drain done ({} data packets, {} bytes, saw_response={})",
+                drained_packets,
+                drained_bytes,
+                saw_response
+            );
         }
 
         // Step 3: Drain interrupt pipe.
@@ -947,12 +993,17 @@ impl Transport for NusbTransport {
                     let _ = ep.next_complete().await;
                 }
             }
+            diag_debug!(
+                "cancel_transfer: step 3 interrupt drain done (event_received={})",
+                !timed_out
+            );
         }
 
         // Step 4: Poll GET_DEVICE_STATUS until the device reports it's done
         // cancelling, clearing any endpoint halts it reports. Cameras need
         // this to accept new operations after a cancel; Android ignores it.
         let wedged = self.settle_after_cancel().await;
+        diag_debug!("cancel_transfer: step 4 settle done (wedged={})", wedged);
 
         // Step 5: If the device went silent (Samsung large-backlog cancel, #18),
         // the drains couldn't realign the session and it's dead. A CLASS_CANCEL
@@ -968,13 +1019,19 @@ impl Transport for NusbTransport {
         // reopen timing is the caller's job: on `DeviceReset`, drop the device,
         // wait a beat, and open again (see the AGENTS.md cancellation notes).
         if wedged {
+            diag_debug!(
+                "cancel_transfer: step 5 device wedged after cancel (#18), issuing DEVICE_RESET; \
+                 returning DeviceReset (caller must reopen quietly)"
+            );
             // Best effort: a device too stuck even for the session-less reset
             // (some cameras, #12) still needs a physical replug, but we surface
             // DeviceReset either way so the caller knows the session is gone.
-            let _ = self.reset_device().await;
+            let reset = self.reset_device().await;
+            diag_debug!("cancel_transfer: DEVICE_RESET result ok={}", reset.is_ok());
             return Err(crate::PtpError::DeviceReset);
         }
 
+        diag_debug!("cancel_transfer: complete, session healthy");
         Ok(())
     }
 
@@ -993,6 +1050,7 @@ impl Transport for NusbTransport {
     ///    (observed on the Panasonic Lumix DMC-TZ61, issue #12, after a
     ///    Ctrl-C'd listing).
     async fn reset_device(&self) -> Result<(), crate::PtpError> {
+        diag_debug!("reset_device: sending SIC DEVICE_RESET (0x66)");
         // Step 1: DEVICE_RESET control request.
         self.interface
             .control_out(

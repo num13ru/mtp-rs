@@ -226,6 +226,12 @@ impl Transport for VirtualTransport {
         let mut state = self.state.lock().unwrap();
         state.pending_command = None;
         state.response_queue.clear();
+        // Model the Samsung large-backlog cancel wedge (#18): when armed via
+        // `force_cancel_wedge`, report `DeviceReset` (one-shot), as the real USB
+        // transport does after detecting the wedge and resetting the device.
+        if std::mem::take(&mut state.pending_cancel_wedge) {
+            return Err(crate::PtpError::DeviceReset);
+        }
         Ok(())
     }
 }
@@ -629,6 +635,51 @@ mod tests {
         )
         .await;
         assert_eq!(full, content);
+    }
+
+    #[tokio::test]
+    async fn cancel_wedge_surfaces_device_reset() {
+        use crate::mtp::DEFAULT_CANCEL_TIMEOUT;
+
+        let dir = tempfile::tempdir().unwrap();
+        let content: Vec<u8> = (0..8000).map(|i| (i % 256) as u8).collect();
+        std::fs::write(dir.path().join("data.bin"), &content).unwrap();
+
+        let serial = "cancel-wedge-18";
+        let config = test_config_with_serial(dir.path(), serial);
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // Arm the one-shot large-backlog cancel wedge (#18).
+        assert!(crate::force_cancel_wedge(serial));
+
+        let mut dl = storages[0]
+            .download(obj.handle, ByteRange::Full)
+            .await
+            .unwrap();
+        let _ = dl.next_chunk().await; // put a transfer in flight
+        let err = dl
+            .cancel(DEFAULT_CANCEL_TIMEOUT)
+            .await
+            .expect_err("a wedged cancel must report the reset, not a false success");
+        assert!(
+            matches!(err, crate::mtp::Error::DeviceReset),
+            "expected Error::DeviceReset, got {err:?}"
+        );
+        drop(dl);
+
+        // The wedge is one-shot: a subsequent cancel is healthy again, proving the
+        // flag doesn't stick and the DeviceReset was the modeled wedge, not a
+        // permanent state.
+        let mut dl2 = storages[0]
+            .download(obj.handle, ByteRange::Full)
+            .await
+            .unwrap();
+        let _ = dl2.next_chunk().await;
+        dl2.cancel(DEFAULT_CANCEL_TIMEOUT)
+            .await
+            .expect("second cancel should be healthy");
     }
 
     // ---- Windowed downloads (session-freeing window-by-window reads) ----

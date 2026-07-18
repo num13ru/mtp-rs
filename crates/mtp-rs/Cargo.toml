@@ -39,6 +39,10 @@ thiserror = "2"
 # Enum conversion derives
 num_enum = "0.7"
 
+# Optional structured diagnostics (facade only, runtime-agnostic). Enabled by
+# the `tracing` feature; the subscriber is the consumer's choice.
+tracing = { version = "0.1", optional = true }
+
 # Windows WPD (Windows Portable Devices) COM backend. Pure-Rust projection, no C deps / no SDK
 # import libs needed (links system COM DLLs via raw-dylib). See docs/windows-wpd-backend-plan.md.
 [target.'cfg(windows)'.dependencies]
@@ -66,3 +70,7 @@ tempfile = "3"
 [features]
 default = []
 virtual-device = ["notify"]
+# Opt-in structured diagnostics. Emits `tracing` events on the transaction and
+# cancel/reset paths so a bug reporter can capture what their device does with
+# `RUST_LOG=mtp_rs=debug` (issue #18). Off by default: no dependency, no cost.
+tracing = ["dep:tracing"]

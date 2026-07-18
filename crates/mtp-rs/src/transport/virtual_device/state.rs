@@ -83,6 +83,15 @@ pub(super) struct VirtualDeviceState {
     /// Exercises the windowed-download stall path (0 bytes while bytes remain ⇒
     /// error, not EOF) and short-read bookkeeping (advance by bytes returned).
     pub(super) forced_partial_read_caps: VecDeque<usize>,
+
+    /// One-shot: when set, the next `cancel_transfer` returns
+    /// [`PtpError::DeviceReset`](crate::PtpError::DeviceReset), modeling the
+    /// Samsung large-backlog cancel wedge that the real USB transport detects
+    /// and recovers from via a device reset (issue #18). Lets the high-level
+    /// `DeviceReset` contract (cancel → error → consumer reopens) be tested with
+    /// no hardware. Set via
+    /// [`force_cancel_wedge`](super::registry::force_cancel_wedge).
+    pub(super) pending_cancel_wedge: bool,
 }
 
 /// Maximum number of entries in [`VirtualDeviceState::dropped_paths`]; oldest
@@ -132,6 +141,7 @@ impl VirtualDeviceState {
             pause_count: 0,
             dropped_paths: VecDeque::new(),
             forced_partial_read_caps: VecDeque::new(),
+            pending_cancel_wedge: false,
         }
     }
 

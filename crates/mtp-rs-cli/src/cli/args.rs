@@ -36,6 +36,13 @@ pub struct Cli {
     #[arg(long, short, global = true)]
     pub verbose: bool,
 
+    /// Print device-protocol diagnostics to stderr, for bug reports (issue #18):
+    /// the cancel/reset path, transaction codes, session recovery. Equivalent to
+    /// `RUST_LOG=mtp_rs=debug`; a set `RUST_LOG` takes precedence. Use `-vv`-style
+    /// depth via `RUST_LOG=mtp_rs=trace` for per-operation detail.
+    #[arg(long, global = true)]
+    pub trace: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -73,10 +80,21 @@ pub enum Command {
     Cp(CopyArgs),
 
     /// Diagnose device visibility and basic MTP access.
-    Doctor,
+    Doctor(DoctorArgs),
 
     /// Reset a stuck device's USB transport state (no PTP session needed).
     Reset,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Also run the cancel-health probe: download a file, cancel mid-stream, and
+    /// report whether the session survived or wedged (the #18 reproducer). It's
+    /// read-only but transfers data and can briefly wedge a device (the library
+    /// recovers it via a USB reset). Off by default so plain `doctor` stays
+    /// passive; add it when investigating a mid-transfer freeze.
+    #[arg(long)]
+    pub probe_cancel: bool,
 }
 
 #[derive(Debug, Args)]
