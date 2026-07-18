@@ -4,7 +4,7 @@ Catch-up reading for any agent that picks up issue or PR work, so you don't have
 start. Read this first when triaging a new issue or PR, and update it after work that affects community-facing context
 (see [Updating this doc](#updating-this-doc) at the bottom).
 
-Last updated: 2026-06-22.
+Last updated: 2026-07-18.
 
 ## Intentionally / continuously open threads
 
@@ -226,6 +226,40 @@ user-supplied compare function that panics) is unreachable from `serial_test`'s 
 bumping `serial_test` to 3.5.0, which dropped `scc` entirely in favor of `parking_lot` — a
 lockfile-only change (7184d25).
 
+### #18: "A lot of problems with Samsung A15" (opened 2026-07-18; fixed and released same day in v0.24.0)
+
+Reporter: [@qarmin](https://github.com/qarmin) (Rafał Mikrut, author of Czkawka/Krokiet), building
+phone-backup software. His Motorola worked; a Samsung A15 "consistently freezes in the middle of file
+transfer operations." He attached an integration-suite run showing the cancel test wedging the device
+(`Cancel succeeded` then `list root after cancel - Timeout`), followed by "expected Response container
+type (3)" desync on every later op.
+
+Reproduced on a **Galaxy S23 Ultra** (David's hardware), which let us root-cause it locally instead of
+round-tripping with the reporter. **Root cause**: cancelling a held-open streaming download while the
+device still has a large bulk backlog queued (classically the *first* download right after a fresh USB
+connect) leaves the `GetObject` transaction unclosed. The drain reads the whole backlog and idles out
+without ever seeing the closing Response container, the device then stops answering, and `cancel()`
+returned a false success so the consumer's next call hung — the "mid-transfer freeze". Intermittent:
+warm sessions with a smaller backlog recover cleanly.
+
+Two wrong turns worth remembering (both ruled out on hardware): (1) the post-cancel `GET_DEVICE_STATUS`
+poll (step 4, added for the #12 camera) is **not** the culprit — an early A/B looked decisive but was
+warm-state luck. (2) An auto-reopen that hammered close/open post-reset **re-wedged** the device into a
+hard `Timeout`: these devices need *quiet* idle time to tear the old session down.
+
+**Fix (design C), shipped in v0.24.0**: `cancel_transfer` detects the wedge (`GET_DEVICE_STATUS` timing
+out as `TransferError::Cancelled`, distinct from the fast `Stall` an unsupported device returns),
+issues a session-less USB `DEVICE_RESET` to un-stick the transport, and returns the new
+`Error::DeviceReset` (both `mtp::Error` and `ptp::PtpError`) instead of a false success. It does **not**
+reopen — that's the caller's job, and must be quiet (drop the device, wait a few seconds, reopen with
+idle-spaced backoff). `download_windowed` avoids the whole path (no multi-MB backlog to cancel) and is
+the recommended pattern for interruptible reads on Android. Verified end-to-end on the S23 (wedge →
+reset → quiet reopen recovered on the 2nd attempt, no replug).
+
+**Open question for the reporter**: does `mtp-rs reset` recover his A15 the way it does the S23? That's
+the only device-specific unknown left. Also spun off `docs/debugging.md` into a real-device debugging
+hub (ptpcamerad blocker, software-reset recovery, `MTP_TEST_TIMEOUT_SECS` fast-fail, Samsung gotchas).
+
 ## Device quirks reference
 
 Cross-cutting summary of every quirk currently handled or known. Sorted by device family.
@@ -250,6 +284,7 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 | Panasonic Lumix DMC-TZ61     | Freezes hard (battery-pull-level) if the host aborts mid-listing                                                                               | `mtp-rs reset` / `PtpDevice::reset_device()` (SIC 0x66, untested on the full freeze) | #12                                  |
 | PTP cameras (SIC-compliant)  | Unusable after a cancel unless the host polls GET_DEVICE_STATUS until not Device_Busy                                                          | Step 4 in `cancel_transfer` (post-drain polling + halt clearing)                     | #12 (2026-06-07)                     |
 | PTP cameras (SIC-compliant)  | STALL bulk endpoint for unsupported operations/properties; halt persists across processes                                                      | `clear_halt` at every bulk completion site on STALL                                  | #12 (2026-06-07)                     |
+| Samsung Galaxy (S23 Ultra, A15) | Cancelling a held-open download with a large in-flight backlog wedges the session (false-success cancel, then every op hangs)                | Detect (GET_DEVICE_STATUS timeout) → `DEVICE_RESET` → `Error::DeviceReset`; caller reopens quietly; prefer `download_windowed` | #18 (2026-07-18, v0.24.0)            |
 | Panasonic Lumix DMC-TZ61     | Pads serial number to fixed width with multiple NULs                                                                                           | `unpack_string` truncates at first NUL                                               | #12 (2026-06-06)                     |
 
 ## Recurring contributors
@@ -264,6 +299,9 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 - [@dasJ](https://github.com/dasJ): Garmin Forerunner 955 confirmed working in production (#6 comment, 2026-04-26).
 - [@dragon-Elec](https://github.com/dragon-Elec): Python bindings request
   (#7).
+- [@qarmin](https://github.com/qarmin): Rafał Mikrut, author of Czkawka/Krokiet. Reported the Samsung
+  A15 mid-transfer freeze (#18) with an integration-suite run that pinpointed the cancel path. Reads
+  Rust; happy to run patched builds.
 
 ## Updating this doc
 
