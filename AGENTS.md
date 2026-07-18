@@ -162,12 +162,20 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   drain reads the whole backlog and idles out without ever seeing the closing
   Response container, the device then stops answering (GET_DEVICE_STATUS times
   out as `TransferError::Cancelled`, versus the fast `Stall` an unsupported
-  device returns), and the session is dead. It's **software-recoverable**:
-  `reset_device()` (SIC DEVICE_RESET) revives it with no physical replug
-  (verified on the S23), though the reset drops the PTP session so the consumer
-  must reopen. The wedge is intermittent (warm sessions with a smaller backlog
-  recover). Prefer `download_windowed` over held-open cancel on Android: it
-  never builds a multi-MB backlog to cancel. See `docs/debugging.md`.
+  device returns), and the session is dead. The wedge is intermittent (warm
+  sessions with a smaller backlog recover).
+- **How `cancel_transfer` handles it (design C):** when it detects the wedge
+  (the `Cancelled` timeout above), it issues a session-less USB `DEVICE_RESET` to
+  un-stick the transport and returns `Error::DeviceReset` instead of a false
+  success. It does **not** reopen. Reopen is the caller's job and must be
+  **quiet**: post-reset the device needs a beat with no USB traffic to finish
+  tearing the old session down. Reopen immediately and you get
+  `SessionAlreadyOpen`; *hammer* close/open at it (a tight retry loop) and it
+  stays busy and re-wedges into a hard `Timeout`. So on `DeviceReset`: drop the
+  device, wait a few seconds quiet, then open again (retry with idle-spaced
+  backoff, not a tight loop). **Better still, avoid the whole path**: prefer
+  `download_windowed` over held-open cancel on Android; it never builds a
+  multi-MB backlog to cancel. See `docs/debugging.md`.
 - See `NusbTransport::cancel_transfer()` for the full implementation with
   detailed comments.
 

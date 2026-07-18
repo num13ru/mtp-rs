@@ -135,6 +135,31 @@ macro_rules! try_device {
     };
 }
 
+/// Borrow the first storage, or skip the test cleanly when the device reports
+/// none. An opened device with zero storages is a half-authorized or still-
+/// settling phone (unlock it and grant "Allow access to phone data"), not a test
+/// failure, so skip like a hardware error instead of panicking on `storages[0]`.
+macro_rules! first_storage {
+    (mut $storages:expr) => {
+        match $storages.first_mut() {
+            Some(s) => s,
+            None => {
+                tlog!("SKIPPING: device reports no storages (unlock the phone and grant 'Allow access to phone data')");
+                return;
+            }
+        }
+    };
+    ($storages:expr) => {
+        match $storages.first() {
+            Some(s) => s,
+            None => {
+                tlog!("SKIPPING: device reports no storages (unlock the phone and grant 'Allow access to phone data')");
+                return;
+            }
+        }
+    };
+}
+
 fn is_hardware_error(e: &mtp_rs::Error) -> bool {
     use mtp_rs::Error;
     matches!(e, Error::Timeout | Error::NoDevice | Error::Disconnected) || e.is_exclusive_access()
@@ -466,7 +491,8 @@ mod readonly {
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         tlog!("Found {} storage(s)", storages.len());
-        assert!(!storages.is_empty());
+        // Skip cleanly rather than fail on a half-authorized/settling phone.
+        let _ = first_storage!(storages);
 
         for storage in &storages {
             let info = storage.info();
@@ -485,7 +511,7 @@ mod readonly {
     async fn test_list_root_folder() {
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        let storage = first_storage!(storages);
 
         let objects = try_device!(storage.list_objects(None).await, "list root");
         tlog!("Root contains {} objects", objects.len());
@@ -518,7 +544,7 @@ mod readonly {
 
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        let storage = first_storage!(storages);
 
         tlog!("Starting recursive listing (may take several minutes)...");
         let objects = try_device!(storage.list_objects_recursive(None).await, "recursive list");
@@ -539,7 +565,7 @@ mod readonly {
     async fn test_download_with_progress() {
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        let storage = first_storage!(storages);
 
         tlog!("Searching for file (100KB-10MB)...");
         let Some((handle, file_size, file_name)) =
@@ -603,7 +629,7 @@ mod readonly {
     async fn test_refresh_storage() {
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let mut storages = try_device!(device.storages().await, "get storages");
-        let storage = &mut storages[0];
+        let storage = first_storage!(mut storages);
 
         let before = storage.info().free_space;
         try_device!(storage.refresh().await, "refresh storage");
@@ -615,64 +641,123 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_cancel_download_then_reuse_session() {
-        let device = try_device!(crate::open_test_mtp().await, "open device");
-        let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        // A cancel has two valid outcomes on real hardware:
+        //  - the session stays healthy (most devices, and warm Samsung sessions):
+        //    listing and a second download work immediately, or
+        //  - a large in-flight backlog wedges the device (Samsung, #18): the
+        //    library issues a USB DEVICE_RESET and returns `Error::DeviceReset`,
+        //    and the caller must reopen (no physical replug).
+        // Phase 1 runs the cancel and reports whether the device wedged.
+        let wedged = {
+            let device = try_device!(crate::open_test_mtp().await, "open device");
+            let storages = try_device!(device.storages().await, "get storages");
+            let storage = first_storage!(storages);
 
-        tlog!("Searching for file (100KB-10MB) to cancel...");
-        let Some((handle, file_size, file_name)) =
-            find_suitable_file(storage, 100_000, 10_000_000).await
-        else {
-            tlog!("No suitable file found, skipping");
-            return;
+            tlog!("Searching for file (100KB-10MB) to cancel...");
+            let Some((handle, file_size, file_name)) =
+                find_suitable_file(storage, 100_000, 10_000_000).await
+            else {
+                tlog!("No suitable file found, skipping");
+                return;
+            };
+            tlog!("Starting download of {} ({} bytes)", file_name, file_size);
+
+            let mut download = try_device!(
+                storage.download(handle, ByteRange::Full).await,
+                "start download"
+            );
+
+            // Read just one chunk, then cancel
+            let chunk = download.next_chunk().await.expect("expected a chunk");
+            let bytes = chunk.expect("chunk error");
+            tlog!(
+                "Read {} bytes ({:.1}%), now cancelling...",
+                bytes.len(),
+                download.progress() * 100.0
+            );
+
+            let cancel_result = download.cancel(std::time::Duration::from_millis(300)).await;
+            // Drop the download to release the session operation lock
+            drop(download);
+
+            match cancel_result {
+                Ok(()) => {
+                    tlog!("Cancel succeeded");
+
+                    // Prove the session is still healthy by doing another operation
+                    let objects =
+                        try_device!(storage.list_objects(None).await, "list root after cancel");
+                    tlog!(
+                        "Session healthy: listed {} root objects after cancel",
+                        objects.len()
+                    );
+                    assert!(!objects.is_empty());
+
+                    // Do a second download to prove streaming still works
+                    let mut download2 = try_device!(
+                        storage.download(handle, ByteRange::Full).await,
+                        "second download"
+                    );
+                    let mut total = 0u64;
+                    while let Some(result) = download2.next_chunk().await {
+                        total += result.expect("download2 error").len() as u64;
+                    }
+                    assert_eq!(total, file_size);
+                    tlog!(
+                        "Second full download succeeded ({} bytes). Cancel test PASSED",
+                        total
+                    );
+                    false
+                }
+                Err(mtp_rs::Error::DeviceReset) => {
+                    // The cancel wedged the device and the library auto-reset it
+                    // (#18). The session is gone; Phase 2 verifies reopen works.
+                    tlog!("Cancel wedged the device; library auto-reset it (#18). Verifying reopen...");
+                    true
+                }
+                Err(e) => panic!("cancel returned an unexpected error: {e:?}"),
+            }
         };
-        tlog!("Starting download of {} ({} bytes)", file_name, file_size);
 
-        let mut download = try_device!(
-            storage.download(handle, ByteRange::Full).await,
-            "start download"
-        );
+        if wedged {
+            // Contract (design C): the library detected the wedge, reset the
+            // transport to un-stick it, and returned DeviceReset. Reopening is
+            // the caller's job and must be QUIET: post-reset the device needs a
+            // beat with no traffic to finish tearing the old session down, so
+            // wait, then reopen with idle-spaced retries (no hammering). This is
+            // the documented consumer recovery, exercised here end-to-end.
+            const QUIET: std::time::Duration = std::time::Duration::from_secs(3);
+            const ATTEMPTS: u32 = 10;
 
-        // Read just one chunk, then cancel
-        let chunk = download.next_chunk().await.expect("expected a chunk");
-        let bytes = chunk.expect("chunk error");
-        tlog!(
-            "Read {} bytes ({:.1}%), now cancelling...",
-            bytes.len(),
-            download.progress() * 100.0
-        );
-
-        download
-            .cancel(std::time::Duration::from_millis(300))
-            .await
-            .expect("cancel failed");
-        tlog!("Cancel succeeded");
-
-        // Drop the download to release the session operation lock
-        drop(download);
-
-        // Prove the session is still healthy by doing another operation
-        let objects = try_device!(storage.list_objects(None).await, "list root after cancel");
-        tlog!(
-            "Session healthy: listed {} root objects after cancel",
-            objects.len()
-        );
-        assert!(!objects.is_empty());
-
-        // Do a second download to prove streaming still works
-        let mut download2 = try_device!(
-            storage.download(handle, ByteRange::Full).await,
-            "second download"
-        );
-        let mut total = 0u64;
-        while let Some(result) = download2.next_chunk().await {
-            total += result.expect("download2 error").len() as u64;
+            let mut recovered = false;
+            for attempt in 1..=ATTEMPTS {
+                tokio::time::sleep(QUIET).await;
+                let objects = async {
+                    let device = crate::open_test_mtp().await.ok()?;
+                    let storages = device.storages().await.ok()?;
+                    storages.first()?.list_objects(None).await.ok()
+                }
+                .await;
+                match objects {
+                    Some(objects) => {
+                        tlog!(
+                            "Recovered via reset + quiet reopen (attempt {attempt}): listed {} root objects, no replug. Cancel test PASSED",
+                            objects.len()
+                        );
+                        assert!(!objects.is_empty());
+                        recovered = true;
+                        break;
+                    }
+                    None => tlog!(
+                        "Reopen attempt {attempt}/{ATTEMPTS} not ready yet, waiting quietly..."
+                    ),
+                }
+            }
+            assert!(
+                recovered,
+                "device did not recover after reset within {ATTEMPTS} quiet reopen attempts; it may need a physical replug"
+            );
         }
-        assert_eq!(total, file_size);
-        tlog!(
-            "Second full download succeeded ({} bytes). Cancel test PASSED",
-            total
-        );
     }
 
     /// Test whether a session poisoned by a mid-stream drop can be recovered.
@@ -716,7 +801,7 @@ mod readonly {
         {
             let device = try_device!(crate::open_test_mtp().await, "open device");
             let storages = try_device!(device.storages().await, "get storages");
-            let storage = &storages[0];
+            let storage = first_storage!(storages);
 
             tlog!("Searching for file (100KB-10MB)...");
             let Some((handle, _file_size, file_name)) =
@@ -759,7 +844,7 @@ mod readonly {
                 tlog!("Reconnected: {}", device2.device_info().model);
                 match device2.storages().await {
                     Ok(storages2) => {
-                        let storage2 = &storages2[0];
+                        let storage2 = first_storage!(storages2);
                         match storage2.list_objects(None).await {
                             Ok(objects) => {
                                 tlog!("Plain reopen WORKS: listed {} root objects", objects.len());
@@ -828,7 +913,7 @@ mod readonly {
     async fn test_streaming_download() {
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        let storage = first_storage!(storages);
 
         tlog!("Searching for file (100KB-5MB)...");
         let Some((handle, file_size, file_name)) =
@@ -887,7 +972,7 @@ mod readonly {
     async fn test_windowed_download_matches_stream_and_frees_session() {
         let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        let storage = first_storage!(storages);
 
         // A larger file than the streaming test, so the multi-window path and the
         // ~80ms/window cadence are meaningfully exercised on real hardware.
@@ -1134,7 +1219,7 @@ mod destructive {
         }
 
         let storages = try_device!(device.storages().await, "get storages");
-        let storage = &storages[0];
+        let storage = first_storage!(storages);
         let Some((folder_handle, folder_name)) = find_writable_folder(storage).await else {
             tlog!("No writable folder found, skipping (set MTP_TEST_FOLDER to override)");
             return;

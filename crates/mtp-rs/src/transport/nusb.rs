@@ -541,9 +541,16 @@ impl NusbTransport {
     ///
     /// This must run AFTER the bulk/interrupt drains (see `cancel_transfer`):
     /// inserting it between CLASS_CANCEL and the drain breaks Android.
-    /// Android doesn't implement this control request at all, so any error is
-    /// treated as "nothing to wait for" and ignored.
-    async fn settle_after_cancel(&self) {
+    /// Android doesn't implement this control request at all, so a `Stall`
+    /// (unsupported) is treated as "nothing to wait for" and ignored.
+    ///
+    /// Returns `true` if the device appears **wedged**: it stopped answering the
+    /// status request mid-poll, surfaced as a control-transfer timeout
+    /// (`TransferError::Cancelled`). That is distinct from the device *declining*
+    /// the request (`Stall`, i.e. unsupported) or answering `OK`. A wedged result
+    /// tells [`cancel_transfer`](Self::cancel_transfer) to escalate to a device
+    /// reset (Samsung large-backlog cancel, issue #18).
+    async fn settle_after_cancel(&self) -> bool {
         const POLL_INTERVAL: Duration = Duration::from_millis(50);
         // 100 polls x 50ms = 5s cap, far beyond any sane cancel processing.
         const MAX_POLLS: u32 = 100;
@@ -564,20 +571,28 @@ impl NusbTransport {
                 )
                 .await;
 
-            let Ok(data) = result else {
-                return; // Request unsupported (Android) or failed: done.
+            let data = match result {
+                Ok(data) => data,
+                // A control timeout (Cancelled) means the device has gone
+                // silent on endpoint 0 too: the cancel wedged it (Samsung, #18).
+                // Any other error is the device refusing the request (a Stall
+                // for "unsupported", as most Android devices do), which is
+                // normal and not a wedge.
+                Err(TransferError::Cancelled) => return true,
+                Err(_) => return false,
             };
             let Some((code, stalled_endpoints)) = parse_device_status(&data) else {
-                return; // Unparseable response: don't insist.
+                return false; // Unparseable response: don't insist.
             };
             for address in stalled_endpoints {
                 self.clear_bulk_halt_by_address(address).await;
             }
             if code != SIC_STATUS_DEVICE_BUSY {
-                return;
+                return false;
             }
             Delay::new(POLL_INTERVAL).await;
         }
+        false
     }
 
     /// Clear the halt condition on the bulk endpoint with the given address,
@@ -937,7 +952,28 @@ impl Transport for NusbTransport {
         // Step 4: Poll GET_DEVICE_STATUS until the device reports it's done
         // cancelling, clearing any endpoint halts it reports. Cameras need
         // this to accept new operations after a cancel; Android ignores it.
-        self.settle_after_cancel().await;
+        let wedged = self.settle_after_cancel().await;
+
+        // Step 5: If the device went silent (Samsung large-backlog cancel, #18),
+        // the drains couldn't realign the session and it's dead. A CLASS_CANCEL
+        // can't revive it, but a session-less USB DEVICE_RESET un-sticks the
+        // transport so the device answers again (verified on a Galaxy S23 Ultra),
+        // no physical replug. We reset and report `DeviceReset` instead of a false
+        // success, so the caller knows the session is gone and must reopen.
+        //
+        // We deliberately do NOT reopen here. Post-reset, these devices need a
+        // brief span of *quiet* (no USB traffic) to finish tearing the old
+        // session down; a reopen issued immediately gets `SessionAlreadyOpen`,
+        // and hammering close/open at it keeps it busy and re-wedges it. So
+        // reopen timing is the caller's job: on `DeviceReset`, drop the device,
+        // wait a beat, and open again (see the AGENTS.md cancellation notes).
+        if wedged {
+            // Best effort: a device too stuck even for the session-less reset
+            // (some cameras, #12) still needs a physical replug, but we surface
+            // DeviceReset either way so the caller knows the session is gone.
+            let _ = self.reset_device().await;
+            return Err(crate::PtpError::DeviceReset);
+        }
 
         Ok(())
     }

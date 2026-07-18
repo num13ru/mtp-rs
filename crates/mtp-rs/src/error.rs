@@ -49,6 +49,16 @@ pub enum PtpError {
     /// Operation cancelled
     #[error("Operation cancelled")]
     Cancelled,
+
+    /// A transfer cancel wedged the device, and the transport was reset to
+    /// recover it. The PTP session is gone; reopen the device to continue.
+    ///
+    /// Seen when cancelling a held-open streaming download while the device
+    /// still has a large bulk backlog queued (Samsung, issue #18): the device
+    /// stops responding, so `cancel_transfer` issues a USB `DEVICE_RESET` (no
+    /// physical replug needed) and reports this instead of a false success.
+    #[error("device was reset to recover from a wedged cancel; reopen to continue")]
+    DeviceReset,
 }
 
 /// Error from an upload, carrying the handle of the object the device created

@@ -67,9 +67,13 @@ device). Healthy operations here finish well under a second, so 2s is safe.
 - **Cancel of a large in-flight backlog can wedge the session** (#18). Cancelling
   a held-open streaming download while a big backlog is queued (classically the
   first download after a fresh connect) leaves the transaction unclosed and the
-  session desynced. Prefer `download_windowed` (drop between windows, no
-  `CLASS_CANCEL` of a multi-MB backlog); if it does wedge, recover with the
-  software reset in step 2.
+  session desynced. The library detects this and returns `Error::DeviceReset`
+  after resetting the transport to un-stick it (it does not reopen). To recover:
+  drop the device, **wait a few seconds quiet, then reopen** with idle-spaced
+  retries. Do **not** hammer close/open in a tight loop; that keeps the device
+  busy and re-wedges it into a hard `Timeout` (learned the hard way on the S23).
+  Prefer `download_windowed` to avoid the whole path: no multi-MB backlog to
+  cancel.
 
 ### Other integration-test env knobs
 

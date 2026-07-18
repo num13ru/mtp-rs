@@ -64,6 +64,16 @@ pub enum Error {
     #[error("device disconnected")]
     Disconnected,
 
+    /// A transfer cancel wedged the device, so the library reset it in software
+    /// to recover. The current session is gone; reopen the device and continue.
+    ///
+    /// Distinct from [`Disconnected`](Self::Disconnected): the device is still
+    /// present and reopenable with no physical replug. Cancelling a held-open
+    /// streaming download while a large bulk backlog is queued can trigger this
+    /// on Samsung devices (issue #18); prefer `download_windowed` to avoid it.
+    #[error("device was reset to recover from a wedged cancel; reopen to continue")]
+    DeviceReset,
+
     /// The operation timed out.
     #[error("operation timed out")]
     Timeout,
@@ -168,6 +178,7 @@ impl From<crate::error::PtpError> for Error {
             Low::SessionNotOpen => Error::Disconnected,
             Low::NoDevice => Error::NoDevice,
             Low::Cancelled => Error::Cancelled,
+            Low::DeviceReset => Error::DeviceReset,
         }
     }
 }
