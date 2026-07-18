@@ -14,12 +14,19 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-18
+
+Library `0.24.0`, CLI `0.6.0`.
+
 ### Fixed
 
+- **[lib] Recover from the Samsung "large-backlog cancel" wedge instead of hanging ([#18](https://github.com/vdavid/mtp-rs/issues/18)).** Cancelling a held-open streaming download while the device still had a large bulk backlog queued (classically the first download right after a fresh USB connect) wedged the PTP session on Samsung phones (reproduced on a Galaxy S23 Ultra): the drain read the whole backlog and idled out without ever seeing the closing Response container, the device stopped answering, and `cancel()` returned a false success so the consumer's next call hung, looking like a mid-transfer freeze. `cancel_transfer` now detects the wedge (`GET_DEVICE_STATUS` timing out, distinct from an unsupported-op stall), issues a session-less USB `DEVICE_RESET` to un-stick the transport, and returns the new `Error::DeviceReset` instead of a false success. It deliberately does not reopen: post-reset these devices need a span of quiet to tear the old session down, so reopen is the caller's job (drop the device, wait a few seconds, reopen with idle-spaced backoff; hammering re-wedges it). `download_windowed` avoids the path entirely (no multi-MB backlog to cancel). Reported by [@qarmin](https://github.com/qarmin).
 - **[lib] Ranged, windowed, and resumable downloads now work on devices that only advertise the 32-bit `GetPartialObject`.** Previously `download` with a `ByteRange::From`/`Range`, `download_windowed`, and `read_range` all hard-required `GetPartialObject64` (0x95C1), the 64-bit-offset op. Many PTP cameras (e.g. the Panasonic Lumix DMC-TZ61, [#12](https://github.com/vdavid/mtp-rs/issues/12)) only advertise the 32-bit `GetPartialObject` (0x101B), so these calls failed with `Unsupported`. The backend now falls back to the 32-bit op for any offset that fits in `u32` (files up to 4 GiB); a resume past 4 GiB still needs the 64-bit op (returns `Error::InvalidData`), and a device with neither op returns `Error::Unsupported`. The op selection (`plan_partial_read`) is unit-tested, and the 32-bit path is covered end-to-end against a virtual device configured without the 64-bit op.
 
 ### Changed
 
+- **[lib] Breaking: new `PtpError::DeviceReset` variant.** The low-level `ptp::PtpError` enum is not `#[non_exhaustive]`, so code that exhaustively matches it must add an arm. The neutral `mtp::Error` gains the same `DeviceReset` variant but is `#[non_exhaustive]`, so matching it with a wildcard arm is unaffected. See the #18 fix above for what the variant means.
+- **[workspace] Real-device debugging hub and test-harness hardening.** `docs/debugging.md` is now a debugging hub (macOS `ptpcamerad` blocker, software-reset recovery, fast-fail timeouts, Samsung/Android gotchas), linked from AGENTS.md. Integration tests read an `MTP_TEST_TIMEOUT_SECS` override (default 30) so a wedged or absent device skips fast instead of stalling, and an opened device reporting zero storages (a half-authorized phone) now skips cleanly instead of panicking.
 - **[lib] Breaking (test support): `VirtualDeviceConfig` gains a `supports_partial_object_64: bool` field** (feature `virtual-device`). Set it `true` to keep the previous behavior; set it `false` to model a camera that only implements the 32-bit `GetPartialObject` and exercise the fallback above. Only affects code that constructs `VirtualDeviceConfig` directly (test setups).
 - **[workspace] Opt-in integration-test env flags now test the value, not mere presence.** `MTP_RUN_SLOW_TESTS=0` and `MTP_RUN_DROP_RECOVERY=0` used to *enable* the gated test (a bare "is the var defined" check); they now correctly mean "off". Only `1`/`true`/`yes`/`on` enable. Reported by [@juleskers](https://github.com/juleskers) in [#12](https://github.com/vdavid/mtp-rs/issues/12).
 
