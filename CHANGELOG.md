@@ -14,6 +14,10 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-18
+
+Library `0.25.0`, CLI `0.7.0`. Diagnostics so device-specific bugs can be captured by the reporter instead of reproduced on identical hardware (follow-up to the #18 Samsung cancel-wedge work in 0.24.0).
+
 ### Added
 
 - **[lib] Opt-in `tracing` feature for device-protocol diagnostics.** Off by default (no dependency, no cost); enable it and install any `tracing` subscriber to emit events on the transaction and cancel/reset paths. Purpose-built so a bug reporter can capture what their device actually does (issue #18) instead of us reproducing on identical hardware. The cancel/reset path logs at `debug`, per-operation execution at `trace`.
