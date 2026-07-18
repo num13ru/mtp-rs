@@ -14,6 +14,12 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+### Added
+
+- **[lib] Opt-in `tracing` feature for device-protocol diagnostics.** Off by default (no dependency, no cost); enable it and install any `tracing` subscriber to emit events on the transaction and cancel/reset paths. Purpose-built so a bug reporter can capture what their device actually does (issue #18) instead of us reproducing on identical hardware. The cancel/reset path logs at `debug`, per-operation execution at `trace`.
+- **[cli] `--trace` flag and richer `doctor`.** `mtp-rs --trace <cmd>` prints the cancel/reset diagnostics to stderr (`RUST_LOG` overrides for finer control, e.g. `mtp_rs=trace` for per-operation detail). `doctor` now prints device capabilities, and `doctor --probe-cancel` runs a cancel-health check (download a file, cancel mid-stream) that classifies the device as `healthy`, `wedged_recovered` (#18), or `errored` — the one-command artifact to attach to a freeze report.
+- **[lib] `force_cancel_wedge(serial)` virtual-device test hook** (feature `virtual-device`). Arms a one-shot so the next `cancel_transfer` returns `Error::DeviceReset`, letting the #18 cancel-wedge contract be regression-tested with no hardware.
+
 ## [0.24.0] - 2026-07-18
 
 Library `0.24.0`, CLI `0.6.0`.

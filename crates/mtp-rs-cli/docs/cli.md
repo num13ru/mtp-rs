@@ -61,6 +61,7 @@ mtp-rs doctor
 | `--timeout SECONDS` | Set the USB transfer timeout. Defaults to 30 seconds. |
 | `--json` | Emit machine-readable JSON for every command. Transfer progress still goes to stderr. |
 | `--verbose` | Include lower-level protocol or transport error detail. |
+| `--trace` | Print device-protocol diagnostics to stderr (the cancel/reset path, session recovery), for bug reports. Equivalent to `RUST_LOG=mtp_rs=debug`; a set `RUST_LOG` takes precedence, so `RUST_LOG=mtp_rs=trace` adds per-operation detail. |
 
 `--device` and `--location` are mutually exclusive. If neither is passed,
 commands open the only visible MTP device. If multiple devices are visible,
@@ -233,12 +234,20 @@ Diagnose common discovery and access problems.
 ```sh
 mtp-rs doctor
 mtp-rs doctor --device SERIAL --json
+mtp-rs doctor --probe-cancel        # also run the cancel-health check
 ```
 
-`doctor` checks visible devices, open behavior, storages, root listing, and
-common writable-folder hints such as `Download`, `Documents`, `Music`, and
-`GARMIN`. In JSON mode it keeps the visible device rows, including
+`doctor` checks visible devices, open behavior, capabilities, storages, root
+listing, and common writable-folder hints such as `Download`, `Documents`,
+`Music`, and `GARMIN`. In JSON mode it keeps the visible device rows, including
 `match_reason`, even when opening the selected device fails.
+
+`--probe-cancel` additionally downloads the largest root file, cancels it
+mid-stream, and reports whether the session stayed `healthy`, was
+`wedged_recovered` (the device wedged on the cancel and the library reset it to
+recover; see issue #18), or `errored`. It's read-only but transfers data and can
+briefly wedge a device, so it's off by default; use it when investigating a
+mid-transfer freeze. Attach the `--probe-cancel --json` output to a bug report.
 
 ### `reset`
 

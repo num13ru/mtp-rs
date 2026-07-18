@@ -19,7 +19,7 @@ MtpDevice (unchanged)
 - `state.rs`: `VirtualDeviceState`, `VirtualObject`, `PendingCommand`, handle management
 - `builders.rs`: binary payload builders (DeviceInfo, StorageInfo, ObjectInfo, containers)
 - `handlers.rs`: protocol operation handlers dispatched by opcode
-- `registry.rs`: global virtual device registry for discovery integration (`list_devices`, `open_by_location`, `open_by_serial`) + active-state registry for `rescan_virtual_device()` and `pause_watcher()`/`WatcherGuard`
+- `registry.rs`: global virtual device registry for discovery integration (`list_devices`, `open_by_location`, `open_by_serial`) + active-state registry for `rescan_virtual_device()`, `pause_watcher()`/`WatcherGuard`, and the fault-injection hooks `force_partial_read_caps()` (short/stall reads) and `force_cancel_wedge()` (one-shot: next `cancel_transfer` returns `Error::DeviceReset`, modeling the #18 Samsung large-backlog cancel wedge with no hardware)
 - `watcher.rs`: filesystem watcher for detecting out-of-band changes to backing directories
 - `mod.rs`: `VirtualTransport` struct + `Transport` impl + tests
 

@@ -75,6 +75,37 @@ device). Healthy operations here finish well under a second, so 2s is safe.
   Prefer `download_windowed` to avoid the whole path: no multi-MB backlog to
   cancel.
 
+### 5. Capture diagnostics for a bug report
+
+Two purpose-built ways to get "what did the device actually do" without a
+Wireshark trace. Ask a reporter for these first; they usually pinpoint the fault.
+
+- **`mtp-rs doctor --probe-cancel`**: prints device identity, capabilities, and
+  storages, then runs the cancel-health probe (download the largest root file,
+  cancel mid-stream) and classifies the result: `healthy`, `wedged_recovered`
+  (the #18 signature: the library reset the device and returned `DeviceReset`),
+  or `errored`. Add `--json` for a machine-readable bundle. Plain `doctor` (no
+  flag) stays passive; `--probe-cancel` transfers data and can briefly wedge a
+  device (the library recovers it).
+- **Protocol trace**: the CLI emits the library's `tracing` events to stderr.
+  - `mtp-rs --trace <cmd>` → the cancel/reset path and session recovery at debug
+    level (the #18-relevant events).
+  - `RUST_LOG=mtp_rs=trace mtp-rs <cmd>` → adds per-operation detail
+    (`execute*: op=… -> …`), so you see the exact sequence and where it stalls.
+  - Stderr-only, so `--json`/piped stdout stays clean.
+- **For library consumers** (not the CLI): build `mtp-rs` with the `tracing`
+  feature and install any `tracing` subscriber. Off by default — no dependency,
+  no cost — so a plain build stays lean. The events live on the transaction and
+  cancel/reset paths (`crates/mtp-rs/src/trace.rs` is the shim).
+
+### Reproducing device wedges without hardware
+
+The virtual device can model the #18 large-backlog cancel wedge for regression
+tests: `force_cancel_wedge(serial)` arms a one-shot so the next `cancel_transfer`
+returns `Error::DeviceReset`, exercising the high-level contract (a mid-stream
+`cancel()` surfacing `DeviceReset` so the consumer reopens) with no USB. See
+`cancel_wedge_surfaces_device_reset` in `transport/virtual_device/mod.rs`.
+
 ### Other integration-test env knobs
 
 The header of `crates/mtp-rs/tests/integration.rs` documents the rest:
