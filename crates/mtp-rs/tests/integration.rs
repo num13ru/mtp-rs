@@ -61,6 +61,32 @@ fn env_enabled(name: &str) -> bool {
         "1" | "true" | "yes" | "on"
     )
 }
+
+/// Bulk-transfer timeout for E2E device opens, read from `MTP_TEST_TIMEOUT_SECS`
+/// (default 30). Set it low (for example `MTP_TEST_TIMEOUT_SECS=2`) so a wedged
+/// or absent device skips fast instead of stalling 30s per operation. The
+/// library default is unchanged, so consumers and CI keep 30s unless they opt in.
+fn test_timeout() -> std::time::Duration {
+    let secs = std::env::var("MTP_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(30);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Open the first MTP device with the E2E test timeout (see [`test_timeout`]).
+async fn open_test_mtp() -> Result<mtp_rs::mtp::MtpDevice, mtp_rs::Error> {
+    mtp_rs::mtp::MtpDevice::builder()
+        .timeout(test_timeout())
+        .open_first()
+        .await
+}
+
+/// Open the first PTP device with the E2E test timeout (see [`test_timeout`]).
+async fn open_test_ptp() -> Result<mtp_rs::ptp::PtpDevice, mtp_rs::PtpError> {
+    mtp_rs::ptp::PtpDevice::open_first_with_timeout(test_timeout()).await
+}
 use serial_test::serial;
 use std::time::Instant;
 
@@ -397,7 +423,6 @@ async fn find_writable_folder(storage: &Storage) -> Option<(ObjectHandle, String
 mod readonly {
     use super::*;
     use mtp_rs::mtp::MtpDevice;
-    use mtp_rs::ptp::PtpDevice;
     use std::time::Duration;
 
     #[test]
@@ -421,7 +446,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_device_connection() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let info = device.device_info();
         tlog!(
             "Connected: {} {} ({})",
@@ -438,7 +463,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_list_storages() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         tlog!("Found {} storage(s)", storages.len());
         assert!(!storages.is_empty());
@@ -458,7 +483,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_list_root_folder() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
 
@@ -491,7 +516,7 @@ mod readonly {
             return;
         }
 
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
 
@@ -512,7 +537,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_download_with_progress() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
 
@@ -562,7 +587,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_ptp_device() {
-        let device = try_device!(PtpDevice::open_first().await, "open PTP device");
+        let device = try_device!(crate::open_test_ptp().await, "open PTP device");
         let info = try_device!(device.get_device_info().await, "get device info");
         tlog!("PTP Device: {} {}", info.manufacturer, info.model);
 
@@ -576,7 +601,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_refresh_storage() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let mut storages = try_device!(device.storages().await, "get storages");
         let storage = &mut storages[0];
 
@@ -590,7 +615,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_cancel_download_then_reuse_session() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
 
@@ -689,7 +714,7 @@ mod readonly {
 
         // Phase 1: Open device, start download, drop everything mid-stream.
         {
-            let device = try_device!(MtpDevice::open_first().await, "open device");
+            let device = try_device!(crate::open_test_mtp().await, "open device");
             let storages = try_device!(device.storages().await, "get storages");
             let storage = &storages[0];
 
@@ -729,7 +754,7 @@ mod readonly {
         // so the fresh session reads it as a desync ("expected Response
         // container type (3), got ..."). Either outcome is fine to observe.
         tlog!("Attempting software reconnect (plain reopen)...");
-        match MtpDevice::open_first().await {
+        match crate::open_test_mtp().await {
             Ok(device2) => {
                 tlog!("Reconnected: {}", device2.device_info().model);
                 match device2.storages().await {
@@ -766,7 +791,7 @@ mod readonly {
         // opt-in.
         let mut recovered = false;
         tlog!("Recovering with a transport-level reset...");
-        match PtpDevice::open_first().await {
+        match crate::open_test_ptp().await {
             Ok(ptp) => match ptp.reset_device().await {
                 Ok(()) => match ptp.get_device_info().await {
                     Ok(info) => {
@@ -801,7 +826,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_streaming_download() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
 
@@ -860,7 +885,7 @@ mod readonly {
     #[ignore]
     #[serial]
     async fn test_windowed_download_matches_stream_and_frees_session() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
         let storages = try_device!(device.storages().await, "get storages");
         let storage = &storages[0];
 
@@ -992,7 +1017,7 @@ mod destructive {
     /// devices like PTP cameras), or no writable folder found.
     async fn setup_with_writable_folder() -> Option<(MtpDevice, mtp_rs::mtp::Storage, ObjectHandle)>
     {
-        let device = match MtpDevice::open_first().await {
+        let device = match crate::open_test_mtp().await {
             Ok(d) => d,
             Err(e) => {
                 tlog!("SKIPPING: open device - {:?}", e);
@@ -1096,7 +1121,7 @@ mod destructive {
     #[ignore]
     #[serial]
     async fn test_rename_file() {
-        let device = try_device!(MtpDevice::open_first().await, "open device");
+        let device = try_device!(crate::open_test_mtp().await, "open device");
 
         if !device.supports_rename() {
             tlog!("Device doesn't support rename, skipping");
