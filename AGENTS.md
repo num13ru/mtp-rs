@@ -90,6 +90,12 @@ range, window_size)` (returns `WindowedDownload`), and buffered `Storage::downlo
 
 ## Testing
 
+> **Debugging against real hardware? Read [docs/debugging.md](docs/debugging.md) first.**
+> It's the debugging hub: how to keep macOS's `ptpcamerad` off the interface (run
+> the blocker yourself), recover a wedged device in software with `mtp-rs reset`
+> (no replug), fail fast with `MTP_TEST_TIMEOUT_SECS=2`, and the Samsung/Android
+> gotchas. Only needed when a physical device is involved.
+
 - **Unit**: `cargo test --workspace` (uses mock transport)
 - **Virtual device**: `cargo test -p mtp-rs --features virtual-device` (full protocol tests against local filesystem)
 - **Integration**: `cargo test -p mtp-rs --test integration -- --ignored --nocapture` (needs device). Destructive tests pick a writable root folder from a priority list (Android `Download`, Garmin `Music`, Kindle `documents`, etc.); set `MTP_TEST_FOLDER=Name` to override. See `crates/mtp-rs/tests/integration.rs` header for full details.
@@ -442,7 +448,8 @@ Run `just check` before committing. `cargo fmt`, `cargo clippy -D warnings`, tes
 
 ## References
 
-- [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md), [docs/debugging.md](docs/debugging.md)
+- [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md)
+- [docs/debugging.md](docs/debugging.md): debugging hub. Real-device setup and recovery (ptpcamerad blocker, software reset, fast-fail timeouts, device gotchas) plus USB capture. Read before touching physical hardware.
 - [docs/releasing.md](docs/releasing.md): how to publish a new version to crates.io
 - [docs/notes/community-threads.md](docs/notes/community-threads.md): required reading before working on issues or PRs. Recap of every GitHub thread so far, known device quirks, and recurring contributors. Update after work that affects community-facing context.
 - [MTP v1.1 Spec](https://github.com/vdavid/mtp-v1_1-spec-md)

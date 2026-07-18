@@ -1,8 +1,89 @@
-# Debugging and USB capture
+# Debugging hub
 
-This guide covers how to capture and analyze USB traffic for debugging MTP issues.
+Central guide for debugging `mtp-rs`, especially against physically-connected
+hardware. Everything here is **needed only when you're actually debugging with a
+real device** (issues like #12, #18) or capturing USB traffic. Skip it for
+virtual-device / mock work; those paths never touch USB.
 
-## What you're capturing
+Two parts:
+
+1. [Real-device debugging](#real-device-debugging-read-this-first): setup,
+   recovery, and device gotchas. Read before you plug in a phone.
+2. [USB capture and analysis](#usb-capture-and-analysis): recording and decoding
+   the raw MTP conversation with Wireshark.
+
+## Real-device debugging: read this first
+
+### 1. Block ptpcamerad on macOS (run this yourself, keep it running)
+
+macOS's `ptpcamerad` daemon grabs the PTP/MTP interface the instant a phone
+connects, so `nusb` can't claim it and **every open times out** even though the
+phone is connected, unlocked, and in File transfer mode. Agents: start this loop
+in the background yourself at the start of a real-device session and leave it
+running; don't make the user do it.
+
+```sh
+while :; do pgrep -f "[p]tpcamerad" >/dev/null && pkill -9 -f "[p]tpcamerad"; sleep 0.5; done
+```
+
+The `[p]` bracket stops the pattern from matching its own `pgrep`/`pkill`. A
+stray `ptpcamerad` grab is the most common cause of "device present on USB but
+`open device - Timeout`" on macOS.
+
+### 2. Recover a wedged device in software (usually no replug needed)
+
+`mtp-rs reset` (CLI) / `PtpDevice::reset_device()` (SIC `DEVICE_RESET`, 0x66)
+revives a session-wedged Android/Samsung device **without a physical unplug**. It
+opens without a PTP session, so it works precisely when `MtpDevice::open` can't.
+Verified on a Galaxy S23 Ultra (#18): after a cancel wedged the session,
+`cargo run -p mtp-rs-cli -- reset` printed `Reset OK, device responding: SM-S918B`
+and listing worked immediately.
+
+Reach for it when you see, on a device that worked moments ago:
+
+- `open device - Timeout`,
+- `expected Response container type (3), got N` or a transaction-ID mismatch,
+- every operation timing out after one bad operation.
+
+A fully USB-stuck device (some PTP cameras, #12) still needs a physical replug;
+Samsung/Android phones usually recover from the software reset.
+
+### 3. Fail fast on a wedged or absent device
+
+Integration tests read the open timeout from `MTP_TEST_TIMEOUT_SECS` (default 30,
+so CI and real-device runs are unchanged). Export `MTP_TEST_TIMEOUT_SECS=2` while
+iterating so a wedged or absent device **skips in ~2s instead of stalling 30s per
+op** (otherwise the destructive-first suite hangs for minutes on an unopenable
+device). Healthy operations here finish well under a second, so 2s is safe.
+
+### 4. Samsung / Android gotchas
+
+- **USB mode resets on reconnect.** Replugging a Samsung reverts it to "charging
+  / no data transfer" and re-arms the "Allow access?" prompt. Re-select File
+  transfer after every replug, or opens time out.
+- **Momentary zero storages after reconnect.** Right after a reconnect the device
+  can briefly report zero storages, so an immediate `storages()[0]` panics. Give
+  it a beat and retry.
+- **Cancel of a large in-flight backlog can wedge the session** (#18). Cancelling
+  a held-open streaming download while a big backlog is queued (classically the
+  first download after a fresh connect) leaves the transaction unclosed and the
+  session desynced. Prefer `download_windowed` (drop between windows, no
+  `CLASS_CANCEL` of a multi-MB backlog); if it does wedge, recover with the
+  software reset in step 2.
+
+### Other integration-test env knobs
+
+The header of `crates/mtp-rs/tests/integration.rs` documents the rest:
+`MTP_TEST_FOLDER` (writable folder override), `MTP_TEST_READFILE` (pin a file,
+skip the search), `MTP_RUN_SLOW_TESTS`, and `MTP_RUN_DROP_RECOVERY` (the opt-in
+mid-stream-drop recovery test, which can wedge a device until a replug).
+
+## USB capture and analysis
+
+This section covers how to capture and analyze USB traffic for debugging MTP
+issues.
+
+### What you're capturing
 
 MTP runs over USB bulk transfers. When you connect your phone and browse files, the conversation looks like:
 
@@ -23,9 +104,9 @@ Your Computer                          Phone
 
 You're recording both sides of this conversation as raw bytes.
 
-## Tools
+### Tools
 
-### Wireshark (recommended)
+#### Wireshark (recommended)
 
 - Works on Linux, macOS, Windows
 - Visual interface to see packets in real-time
@@ -34,34 +115,34 @@ You're recording both sides of this conversation as raw bytes.
 - On macOS: needs additional setup but works
 - On Windows: needs USBPcap
 
-### usbmon + tcpdump (Linux)
+#### usbmon + tcpdump (Linux)
 
 - Lower level, text-based
 - Good for scripting
 - Linux only
 
-## Capture process
+### Capture process
 
-### 1. Preparation
+#### 1. Preparation
 
 - Close all file managers and apps that auto-mount MTP
 - On Linux: stop `gvfs-mtp-volume-monitor` or similar
 - You want a clean slate - no background MTP traffic
 
-### 2. Start capture
+#### 2. Start capture
 
 - Open Wireshark
 - Select your USB bus (the one your phone will connect to)
 - Start recording
 
-### 3. Connect phone
+#### 3. Connect phone
 
 - Plug in USB cable
 - Phone shows "USB connected" notification
 - Select "File Transfer / MTP" mode on phone
 - You'll see initial handshake packets appear in Wireshark
 
-### 4. Perform specific operations
+#### 4. Perform specific operations
 
 Do each operation **deliberately and one at a time** so you can label them later:
 
@@ -78,13 +159,13 @@ Do each operation **deliberately and one at a time** so you can label them later
 | **Delete file**         | Delete that test file           | DeleteObject                         |
 | **Close session**       | Safely eject / disconnect       | CloseSession                         |
 
-### 5. Stop capture
+#### 5. Stop capture
 
 - Disconnect phone cleanly (eject first)
 - Stop Wireshark recording
 - Save the raw capture file (.pcapng)
 
-## Reading raw captures
+### Reading raw captures
 
 Wireshark shows you something like:
 
@@ -111,9 +192,9 @@ Frame 42: URB_BULK out (host → device)
            Param1: 1 (session ID)
 ```
 
-## Processing captures
+### Processing captures
 
-### Group into request/response pairs
+#### Group into request/response pairs
 
 Each MTP transaction is:
 
@@ -123,7 +204,7 @@ Command (out) → [Data (in/out)] → Response (in)
 
 Group these by transaction ID.
 
-### Extract and label
+#### Extract and label
 
 For each transaction, save:
 
@@ -132,7 +213,7 @@ For each transaction, save:
 - The response bytes
 - A human label ("GetStorageIDs", "ListRootFolder", etc.)
 
-## Using captures for test fixtures
+### Using captures for test fixtures
 
 After processing, you'd have something like:
 
@@ -178,7 +259,7 @@ Each JSON file might look like:
 }
 ```
 
-## Safety notes
+### Safety notes
 
 | Concern                  | Risk level   | Mitigation                                                |
 |--------------------------|--------------|-----------------------------------------------------------|
@@ -187,9 +268,9 @@ Each JSON file might look like:
 | Private data in captures | **Medium**   | Filenames, folder structure visible - don't share raw captures publicly |
 | Phone left in bad state  | **Very low** | Always cleanly eject before disconnecting                 |
 
-## Recommended capture sessions
+### Recommended capture sessions
 
-### Session 1: Basic discovery (read-only, safest)
+#### Session 1: Basic discovery (read-only, safest)
 
 1. Connect
 2. Let it enumerate storages
@@ -197,7 +278,7 @@ Each JSON file might look like:
 4. Browse to a subfolder
 5. Disconnect cleanly
 
-### Session 2: File operations (minimal writes)
+#### Session 2: File operations (minimal writes)
 
 1. Connect
 2. Navigate to Download folder
@@ -206,7 +287,7 @@ Each JSON file might look like:
 5. Delete it
 6. Disconnect
 
-### Session 3: Edge cases (if needed)
+#### Session 3: Edge cases (if needed)
 
 - Large file transfer (to test chunking)
 - File with unicode name
