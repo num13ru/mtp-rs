@@ -36,6 +36,7 @@ pub(crate) mod backend;
 mod device;
 mod error;
 mod event;
+mod hotplug;
 mod object;
 mod storage;
 mod stream;
@@ -45,6 +46,9 @@ pub use backend::{Backend, ByteRange};
 pub use device::{MtpDevice, MtpDeviceBuilder, MtpDeviceInfo};
 pub use error::{Error, UploadError};
 pub use event::DeviceEvent;
+pub use hotplug::{
+    watch_devices, DeviceWatch, DeviceWatchBuilder, HotplugEvent, DEFAULT_SETTLE_DELAY,
+};
 // Backend-neutral high-level types (see types.rs). These are the default vocabulary for `mtp::`.
 pub use object::NewObjectInfo;
 pub use storage::{ObjectListing, Storage};

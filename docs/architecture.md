@@ -103,6 +103,7 @@ src/
 │   ├── error.rs           # Neutral mtp::Error + UploadError
 │   ├── object.rs          # NewObjectInfo, ObjectFormat
 │   ├── event.rs           # DeviceEvent
+│   ├── hotplug.rs         # watch_devices, DeviceWatch, HotplugEvent
 │   ├── stream.rs          # FileDownload, WindowedDownload, Progress
 │   └── backend/           # The MtpBackend seam
 │       ├── mod.rs         # MtpBackend trait, Backend selector, ByteRange
@@ -308,6 +309,7 @@ impl Error {
 | `mtp/storage.rs`    | Storage struct and methods                    |
 | `mtp/object.rs`     | ObjectInfo, NewObjectInfo, ObjectFormat       |
 | `mtp/event.rs`      | DeviceEvent enum, event stream                |
+| `mtp/hotplug.rs`    | Device arrival/departure watch                |
 | `mtp/stream.rs`     | FileDownload, upload helpers                |
 | `transport/mod.rs`  | Transport trait                               |
 | `transport/nusb.rs` | nusb implementation                           |

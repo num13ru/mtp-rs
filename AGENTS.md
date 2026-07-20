@@ -65,7 +65,7 @@ backend-agnostic variants (`NotFound`, `StaleHandle`, `AccessDenied`, `Unsupport
 `StorageFull`, `Cancelled`, `Disconnected`, …). The rich low-level PTP error is `PtpError` (root and
 `ptp::PtpError`); `ptp::` keeps its detailed response-code errors for camera/protocol users.
 
-**Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `MtpDeviceBuilder::open_virtual()` (feature-gated)
+**Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `mtp::watch_devices()` (hotplug stream), `MtpDeviceBuilder::open_virtual()` (feature-gated)
 
 **Key types:** `ObjectHandle`, `StorageId` (opaque `u64` newtypes, session-scoped tokens — not wire
 values), `ObjectFormat` (raw MTP format code + category helpers), `Capabilities` (replaces the old
@@ -109,6 +109,36 @@ range, window_size)` (returns `WindowedDownload`), and buffered `Storage::downlo
 - **Stream-based**: Downloads and uploads stream via `Stream<Item = Chunk>` for memory efficiency
 - **Safe cancellation**: Mid-stream downloads can be cancelled via USB SIC class cancel
 - **Type-safe handles**: Newtypes prevent ID mixups
+
+## Watching for devices arriving and leaving
+
+`mtp::watch_devices()` returns a `DeviceWatch`, a `Stream<Item = HotplugEvent>`
+(`Arrived(MtpDeviceInfo)` / `Left(MtpDeviceInfo)`) driven by `nusb::watch_devices()`.
+`DeviceWatchBuilder` tunes it (`known_devices` mirrors `list_devices_with_known`,
+`settle_delay` overrides `DEFAULT_SETTLE_DELAY`, 500 ms). USB only: virtual devices are
+registered in-process, so they never produce events even though `list_devices` includes them.
+`examples/watch_devices.rs` needs hardware; the diff logic is unit-tested in `mtp/hotplug.rs`.
+
+Three decisions worth not undoing:
+
+- **Every USB event triggers a fresh `list_mtp_devices_with_known()` and a diff against the
+  last known set; the event's own payload is only a trigger.** The payload can predate the
+  device's descriptors being readable, so classifying from it silently drops real devices; and
+  a `Disconnected` event carries just an opaque `nusb::DeviceId`, which can't be matched to a
+  serial at all. Re-enumerating costs one syscall sweep per USB event and makes both directions
+  correct. It's also what lets `Left` carry the full `MtpDeviceInfo`: consumers need the serial
+  to know *which* phone left, and only the cache has it.
+- **The settle delay exists because arrival detection is otherwise racy**, not for debouncing
+  (coalescing is a side benefit: events during the delay fold into one enumeration). Cmdr hit
+  this first and hand-rolled the same 500 ms wait.
+- **Devices already connected are emitted as `Arrived` on first poll.** One consumer code path
+  instead of enumerate-then-watch, and no gap for a device plugged in during startup to fall
+  through. Consumers therefore must not enumerate separately, or they'll double-count.
+
+Identity is keyed on `(location_id, vendor_id, product_id, serial_number)`, not `location_id`
+alone: swapping phones between two enumerations, or an Android phone re-enumerating from
+charge-only into file transfer (new product ID), must read as `Left` then `Arrived`. A failed
+enumeration keeps the last known set rather than reporting everything as departed.
 
 ## Cooperative cancellation for list/delete ops
 

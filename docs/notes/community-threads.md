@@ -260,6 +260,26 @@ reset → quiet reopen recovered on the 2nd attempt, no replug).
 the only device-specific unknown left. Also spun off `docs/debugging.md` into a real-device debugging
 hub (ptpcamerad blocker, software-reset recovery, `MTP_TEST_TIMEOUT_SECS` fast-fail, Samsung gotchas).
 
+### #17: `mtp-mountd` auto-mount daemon proposal (transferred out 2026-07-20)
+
+LinuxBoy-96 proposed splitting `mtp-mount`'s FUSE logic into a library crate and adding a
+`systemd --user` daemon that auto-mounts MTP devices on hotplug, so the whole Linux desktop gets
+working MTP without gvfs. The pain is real (gvfs's FUSE layer answers plain writes with
+`EOPNOTSUPP`, because POSIX doesn't know the file size at `open()` but `SendObjectInfo` needs it;
+`mtp-mount` spools locally and uploads on `close()` instead). But it's an `mtp-mount` proposal, not
+an `mtp-rs` one, so it moved to
+[vdavid/mtp-mount#1](https://github.com/vdavid/mtp-mount/issues/1). No comments, no reactions, and
+no offer to implement: treat it as a wish, not a contribution.
+
+Two corrections to the proposal, for whoever picks it up: the "extract a library crate" step is
+already done (`mtp-mount` is a lib + bin, so a daemon is a second `[[bin]]`), and the cost is
+concentrated in what it calls service hardening (per-device mount lifecycle, unmounting cleanly when
+a device is yanked mid-transfer, the gvfs coexistence question it lists as open).
+
+The one piece that belonged upstream shipped here: `mtp::watch_devices()` (see AGENTS.md, "Watching
+for devices arriving and leaving"). It covers the proposal's hotplug step, and it's the piece every
+consumer would otherwise hand-roll.
+
 ## Device quirks reference
 
 Cross-cutting summary of every quirk currently handled or known. Sorted by device family.

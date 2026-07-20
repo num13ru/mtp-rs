@@ -102,19 +102,8 @@ impl MtpDevice {
     pub fn list_devices_with_known(known: &[(u16, u16)]) -> Result<Vec<MtpDeviceInfo>, Error> {
         let devices = NusbTransport::list_mtp_devices_with_known(known)?;
         #[allow(unused_mut)]
-        let mut result: Vec<MtpDeviceInfo> = devices
-            .into_iter()
-            .map(|d| MtpDeviceInfo {
-                vendor_id: d.vendor_id,
-                product_id: d.product_id,
-                manufacturer: d.manufacturer,
-                product: d.product,
-                serial_number: d.serial_number,
-                location_id: d.location_id,
-                speed: d.speed,
-                match_reason: d.match_reason,
-            })
-            .collect();
+        let mut result: Vec<MtpDeviceInfo> =
+            devices.into_iter().map(MtpDeviceInfo::from_usb).collect();
 
         #[cfg(feature = "virtual-device")]
         result.extend(crate::transport::virtual_device::registry::list_virtual_devices());
@@ -328,6 +317,20 @@ pub struct MtpDeviceInfo {
 }
 
 impl MtpDeviceInfo {
+    /// Build the neutral info from a USB-transport listing entry.
+    pub(crate) fn from_usb(d: crate::transport::UsbDeviceInfo) -> Self {
+        Self {
+            vendor_id: d.vendor_id,
+            product_id: d.product_id,
+            manufacturer: d.manufacturer,
+            product: d.product,
+            serial_number: d.serial_number,
+            location_id: d.location_id,
+            speed: d.speed,
+            match_reason: d.match_reason,
+        }
+    }
+
     /// Format the device info for display.
     #[must_use]
     pub fn display(&self) -> String {
