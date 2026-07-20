@@ -22,7 +22,8 @@ the [full command reference](crates/mtp-rs-cli/docs/cli.md).
 ## Sister projects
 
 - [Cmdr](https://github.com/vdavid/cmdr): an AI-native file manager that uses `mtp-rs` for MTP access.
-- [mtp-mount](https://github.com/vdavid/mtp-mount): expose `mtp-rs` as a FUSE mount.
+- [mtp-mount](https://github.com/vdavid/mtp-mount): mount a phone or camera as a normal folder, via FUSE. Unlike gvfs,
+  it can also _write_, so `cp` and `rsync` onto the device work.
 
 ## Development
 
