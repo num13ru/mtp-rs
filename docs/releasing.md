@@ -19,30 +19,33 @@ Publishing is manual. There's no CI automation for it.
    - Library: `crates/mtp-rs/Cargo.toml` → `version = "X.Y.Z"`
    - CLI: `crates/mtp-rs-cli/Cargo.toml` → `version = "A.B.C"` and `mtp-rs = { version = "X.Y.Z", ... }` if the lib also moved
 2. **Update `CHANGELOG.md`** at the repo root with one entry covering both crates. Tag each bullet with `[lib]`, `[cli]`, or `[workspace]` so readers can skim.
-3. **Refresh `Cargo.lock`**:
-   ```bash
-   cargo update -p mtp-rs --precise X.Y.Z
-   cargo update -p mtp-rs-cli --precise A.B.C
-   ```
-4. **Run `just check-all`** (format, clippy, test, doc, MSRV, audit, deny). The release commit must produce zero warnings, zero formatting diffs, zero doc-link issues. Re-run until clean.
-5. **Dry run** to catch packaging issues:
-   ```bash
-   just release-dry
-   ```
-   This fully dry-runs the lib and prints the CLI's would-be file list.
-   It does NOT dry-run the CLI publish because the CLI depends on the
-   lib via `version = "X.Y.Z", path = "../mtp-rs"`. `cargo publish
-   --dry-run -p mtp-rs-cli` resolves that version requirement against
-   crates.io and rejects it while the new lib version is still local.
-   The CLI gets its full dry-run in step 7 below, after the lib is on
-   crates.io.
-6. **Commit and tag**. Tag the workspace release with the lib version (since that's the API contract downstream consumers track):
+3. **Run `just check-all`** (format, clippy, test, doc, MSRV, audit, deny). The release commit must produce zero warnings, zero formatting diffs, zero doc-link issues. Re-run until clean.
+
+   This also refreshes `Cargo.lock` to the new versions, since the workspace members resolve by path: editing their `Cargo.toml` and building is all it takes. Check that `Cargo.lock` shows the new versions and goes into the release commit. (No `cargo update --precise` needed; against path deps it reports only "unchanged dependencies" and does nothing.)
+4. **Commit and tag**. Tag the workspace release with the lib version (since that's the API contract downstream consumers track):
    ```bash
    git commit -m "Prepare vX.Y.Z for release"
    git tag vX.Y.Z
    ```
    If you're shipping a CLI-only patch with no lib change, use `mtp-rs-cli-vA.B.C` instead.
-7. **Publish in order**. Library first, CLI second (CLI depends on the published lib version):
+5. **Dry run** to catch packaging issues:
+   ```bash
+   just release-dry
+   ```
+   Commit *before* this, not after: `cargo publish --dry-run` refuses to run
+   against a dirty working tree ("N files in the working directory contain
+   changes"), and the point of the dry run is to verify exactly the tree you're
+   about to publish. If it turns up a problem, amend the release commit and
+   re-run.
+
+   This fully dry-runs the lib and prints the CLI's would-be file list.
+   It does NOT dry-run the CLI publish because the CLI depends on the
+   lib via `version = "X.Y.Z", path = "../mtp-rs"`. `cargo publish
+   --dry-run -p mtp-rs-cli` resolves that version requirement against
+   crates.io and rejects it while the new lib version is still local.
+   The CLI gets its full dry-run in step 6 below, after the lib is on
+   crates.io.
+6. **Publish in order**. Library first, CLI second (CLI depends on the published lib version):
    ```bash
    cargo publish -p mtp-rs
    # Wait ~30 seconds for crates.io index to update.
@@ -51,7 +54,7 @@ Publishing is manual. There's no CI automation for it.
    # Then publish:
    cargo publish -p mtp-rs-cli
    ```
-8. **Push** the commit and tag:
+7. **Push** the commit and tag:
    ```bash
    git push && git push --tags
    ```
@@ -66,9 +69,9 @@ Publishing is manual. There's no CI automation for it.
 If only the CLI changes (no lib changes), you can release `mtp-rs-cli` without bumping the lib:
 
 1. Bump `crates/mtp-rs-cli/Cargo.toml` version only.
-2. Run `cargo update -p mtp-rs-cli --precise A.B.C`.
-3. `just check-all`, then `cargo publish --dry-run -p mtp-rs-cli`.
-4. Tag as `mtp-rs-cli-vA.B.C`.
+2. `just check-all` (this refreshes `Cargo.lock`).
+3. Commit and tag as `mtp-rs-cli-vA.B.C`. Commit before the dry run, which refuses a dirty tree.
+4. `cargo publish --dry-run -p mtp-rs-cli`. The lib version it depends on is already published, so the full dry run works here.
 5. Publish: `cargo publish -p mtp-rs-cli`.
 
 ## Previous releases
