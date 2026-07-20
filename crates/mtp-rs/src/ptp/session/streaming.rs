@@ -10,13 +10,23 @@ use crate::ptp::{
 };
 use crate::transport::Transport;
 use crate::PtpError as Error;
-use bytes::Bytes;
+use bytes::{Buf, Bytes, BytesMut};
 use futures::lock::OwnedMutexGuard;
 use futures::Stream;
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::{PtpSession, RecoveryState, TransactionScope, HEADER_SIZE};
+
+/// How much a receiving stream asks the transport for in one bulk read. It holds
+/// about this much at a time, whatever the object's size.
+const RECEIVE_CHUNK: usize = 64 * 1024;
+
+/// The `ContainerLength` a responder sends when the data phase is bigger than a
+/// 32-bit length can express (MTP 1.1 appendix H.1). The header then says nothing
+/// about where the phase ends: the short packet does, and the real byte count comes
+/// from the object's `ObjectCompressedSize`.
+const LARGE_OBJECT_LENGTH_SENTINEL: u32 = 0xFFFF_FFFF;
 
 impl PtpSession {
     // =========================================================================
@@ -47,6 +57,41 @@ impl PtpSession {
         operation: OperationCode,
         params: &[u32],
     ) -> Result<ReceiveStream, Error> {
+        self.start_receive_stream(operation, params, None).await
+    }
+
+    /// Execute operation with streaming data receive, telling the stream how many
+    /// payload bytes to expect.
+    ///
+    /// Same as [`execute_with_receive_stream`](Self::execute_with_receive_stream)
+    /// except for objects over 4 GiB, where the container header carries the
+    /// `0xFFFFFFFF` length sentinel instead of a real length (MTP 1.1 appendix H.1)
+    /// and the spec points at `ObjectCompressedSize` for the true figure. Passing it
+    /// here keeps the end of such a transfer a byte count rather than short-packet
+    /// detection alone. For every other container the header's own length wins, so an
+    /// inexact value is harmless.
+    ///
+    /// # Arguments
+    ///
+    /// * `operation` - The operation code to execute
+    /// * `params` - Operation parameters
+    /// * `expected_payload_len` - Payload bytes the object is known to hold
+    pub async fn execute_with_receive_stream_sized(
+        self: &Arc<Self>,
+        operation: OperationCode,
+        params: &[u32],
+        expected_payload_len: u64,
+    ) -> Result<ReceiveStream, Error> {
+        self.start_receive_stream(operation, params, Some(expected_payload_len))
+            .await
+    }
+
+    async fn start_receive_stream(
+        self: &Arc<Self>,
+        operation: OperationCode,
+        params: &[u32],
+        expected_payload_len: Option<u64>,
+    ) -> Result<ReceiveStream, Error> {
         // Clone the Arc for the lock
         let lock = Arc::clone(&self.operation_lock);
         let guard = lock.lock_owned().await;
@@ -73,10 +118,14 @@ impl PtpSession {
             _guard: guard,
             transaction_id: tx_id,
             operation,
-            buffer: Vec::new(),
-            container_length: 0,
+            buffer: BytesMut::new(),
+            expected_payload_len,
+            payload_remaining: None,
             payload_yielded: 0,
-            header_parsed: false,
+            large_object: false,
+            in_payload: false,
+            short_read: false,
+            expect_zero_length_packet: false,
             done: false,
         })
     }
@@ -242,14 +291,30 @@ pub struct ReceiveStream {
     transaction_id: u32,
     /// Operation code for this operation.
     operation: OperationCode,
-    /// Buffer for partial container data.
-    buffer: Vec<u8>,
-    /// Total length of current container (from header).
-    container_length: usize,
-    /// How much payload we've already yielded from current container.
-    payload_yielded: usize,
-    /// Whether we've parsed the container header.
-    header_parsed: bool,
+    /// Bytes read from the transport but not yet handed to the caller. Chunks are
+    /// split off the front and the space is reclaimed straight away, so this holds
+    /// roughly one bulk read, never the whole object.
+    buffer: BytesMut,
+    /// Payload length the caller told us to expect, used to bound a container that
+    /// carries the >4 GiB length sentinel.
+    expected_payload_len: Option<u64>,
+    /// Payload bytes still expected in the container being streamed. `None` means an
+    /// over-4-GiB container is in flight with no caller-supplied size, so the data
+    /// phase ends at the next short packet instead of at a byte count.
+    payload_remaining: Option<u64>,
+    /// Payload bytes already yielded from the container being streamed.
+    payload_yielded: u64,
+    /// Whether the container being streamed carried the >4 GiB length sentinel.
+    large_object: bool,
+    /// Whether a data container header has been consumed and its payload is streaming.
+    in_payload: bool,
+    /// Whether the last bulk read came up short, which ends a data phase.
+    short_read: bool,
+    /// Whether an empty read is expected next. A data phase whose length divides the
+    /// USB packet size is terminated by a zero-length packet, and when the payload also
+    /// filled our whole read the device has nothing left to piggyback it on, so it
+    /// arrives as a read of its own.
+    expect_zero_length_packet: bool,
     /// Whether the stream is complete.
     done: bool,
 }
@@ -270,43 +335,76 @@ impl ReceiveStream {
         }
 
         loop {
-            // If we have buffered data beyond what we've already yielded, yield it
-            if self.header_parsed {
-                let payload_start = HEADER_SIZE + self.payload_yielded;
-                let payload_end = std::cmp::min(self.buffer.len(), self.container_length);
-
-                if payload_start < payload_end {
-                    // We have new data to yield
-                    let chunk_data = self.buffer[payload_start..payload_end].to_vec();
-                    self.payload_yielded += chunk_data.len();
-
-                    // Check if this container is complete
-                    if self.buffer.len() >= self.container_length {
-                        // Remove this container from buffer
-                        self.buffer.drain(..self.container_length);
-                        self.header_parsed = false;
-                        self.container_length = 0;
-                        self.payload_yielded = 0;
+            // Between containers: consume the next header once enough of it is here.
+            if !self.in_payload && self.buffer.len() >= HEADER_SIZE {
+                match self.consume_container_header() {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        self.done = true;
+                        return None;
                     }
-
-                    if !chunk_data.is_empty() {
-                        return Some(Ok(Bytes::from(chunk_data)));
+                    Err(e) => {
+                        self.done = true;
+                        return Some(Err(e));
                     }
-                } else if self.buffer.len() >= self.container_length {
-                    // Container complete but no new data (shouldn't happen, but handle it)
-                    self.buffer.drain(..self.container_length);
-                    self.header_parsed = false;
-                    self.container_length = 0;
-                    self.payload_yielded = 0;
                 }
             }
 
-            // Need more data from USB
-            match self.transport.receive_bulk(64 * 1024).await {
+            // A >4 GiB container's header can't say where the data phase ends, so the
+            // short packet does: whatever is buffered is the last of the payload. The
+            // "already yielded something" guard keeps a split-header transfer (header
+            // alone in one short read) from reading as an instant end of phase.
+            if self.in_payload && self.large_object && self.short_read && self.payload_yielded > 0 {
+                let buffered = self.buffer.len() as u64;
+                self.payload_remaining = Some(
+                    self.payload_remaining
+                        .map_or(buffered, |left| left.min(buffered)),
+                );
+            }
+
+            if self.in_payload {
+                let available = self.buffer.len() as u64;
+                let take =
+                    self.payload_remaining
+                        .map_or(available, |left| left.min(available)) as usize;
+                if take > 0 {
+                    // `split_to` hands the bytes over and advances the front in one go:
+                    // no copy, and the buffer never accumulates what we already yielded.
+                    let chunk = self.buffer.split_to(take).freeze();
+                    self.payload_yielded += take as u64;
+                    if let Some(left) = self.payload_remaining.as_mut() {
+                        *left -= take as u64;
+                    }
+                    if self.payload_remaining == Some(0) {
+                        self.end_container();
+                    }
+                    return Some(Ok(chunk));
+                }
+                if self.payload_remaining == Some(0) {
+                    self.end_container();
+                    continue;
+                }
+            }
+
+            // Need more data from USB.
+            self.short_read = false;
+            match self.transport.receive_bulk(RECEIVE_CHUNK).await {
                 Ok(bytes) => {
                     if bytes.is_empty() {
-                        return Some(Err(Error::invalid_data("Empty response from device")));
+                        // A zero-length packet terminating a data phase: expected right
+                        // after one ended, and the end-of-phase signal itself for a
+                        // >4 GiB container. Anywhere else it means the device went quiet.
+                        if self.in_payload && self.large_object {
+                            self.short_read = true;
+                        } else if self.expect_zero_length_packet {
+                            self.expect_zero_length_packet = false;
+                        } else {
+                            return Some(Err(Error::invalid_data("Empty response from device")));
+                        }
+                        continue;
                     }
+                    self.expect_zero_length_packet = false;
+                    self.short_read = bytes.len() < RECEIVE_CHUNK;
                     self.buffer.extend_from_slice(&bytes);
                 }
                 Err(e) => {
@@ -314,69 +412,66 @@ impl ReceiveStream {
                     return Some(Err(e));
                 }
             }
-
-            // Try to parse container header if we haven't yet
-            if !self.header_parsed && self.buffer.len() >= HEADER_SIZE {
-                let ct = match container_type(&self.buffer) {
-                    Ok(ct) => ct,
-                    Err(e) => {
-                        self.done = true;
-                        return Some(Err(e));
-                    }
-                };
-
-                match ct {
-                    ContainerType::Data => {
-                        let length = match unpack_u32(&self.buffer[0..4]) {
-                            Ok(l) => l as usize,
-                            Err(e) => {
-                                self.done = true;
-                                return Some(Err(e));
-                            }
-                        };
-                        self.container_length = length;
-                        self.header_parsed = true;
-                    }
-                    ContainerType::Response => {
-                        // End of data transfer
-                        let response = match ResponseContainer::from_bytes(&self.buffer) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                self.done = true;
-                                return Some(Err(e));
-                            }
-                        };
-
-                        self.done = true;
-
-                        // Check transaction ID
-                        if response.transaction_id != self.transaction_id {
-                            return Some(Err(Error::invalid_data(format!(
-                                "Transaction ID mismatch: expected {}, got {}",
-                                self.transaction_id, response.transaction_id
-                            ))));
-                        }
-
-                        // Check response code
-                        if response.code != ResponseCode::Ok {
-                            return Some(Err(Error::Protocol {
-                                code: response.code,
-                                operation: self.operation,
-                            }));
-                        }
-
-                        return None;
-                    }
-                    _ => {
-                        self.done = true;
-                        return Some(Err(Error::invalid_data(format!(
-                            "Unexpected container type: {:?}",
-                            ct
-                        ))));
-                    }
-                }
-            }
         }
+    }
+
+    /// Consume the container header sitting at the front of the buffer.
+    ///
+    /// Returns `true` when a data container's payload follows, `false` when the
+    /// response container closed the transfer.
+    fn consume_container_header(&mut self) -> Result<bool, Error> {
+        match container_type(&self.buffer)? {
+            ContainerType::Data => {
+                let length = unpack_u32(&self.buffer[0..4])?;
+                self.buffer.advance(HEADER_SIZE);
+                self.large_object = length == LARGE_OBJECT_LENGTH_SENTINEL;
+                self.payload_remaining = if self.large_object {
+                    // Over 4 GiB: run to the caller's size when it gave us one, else to
+                    // the short packet.
+                    self.expected_payload_len
+                } else if (length as usize) < HEADER_SIZE {
+                    return Err(Error::invalid_data(format!(
+                        "Data container length {length} is shorter than its {HEADER_SIZE}-byte header"
+                    )));
+                } else {
+                    Some(u64::from(length) - HEADER_SIZE as u64)
+                };
+                self.payload_yielded = 0;
+                self.in_payload = true;
+                Ok(true)
+            }
+            ContainerType::Response => {
+                let response = ResponseContainer::from_bytes(&self.buffer)?;
+
+                if response.transaction_id != self.transaction_id {
+                    return Err(Error::invalid_data(format!(
+                        "Transaction ID mismatch: expected {}, got {}",
+                        self.transaction_id, response.transaction_id
+                    )));
+                }
+
+                if response.code != ResponseCode::Ok {
+                    return Err(Error::Protocol {
+                        code: response.code,
+                        operation: self.operation,
+                    });
+                }
+
+                Ok(false)
+            }
+            other => Err(Error::invalid_data(format!(
+                "Unexpected container type: {other:?}"
+            ))),
+        }
+    }
+
+    /// Finish the container being streamed and go back to expecting a header.
+    fn end_container(&mut self) {
+        self.expect_zero_length_packet = true;
+        self.in_payload = false;
+        self.payload_remaining = None;
+        self.payload_yielded = 0;
+        self.large_object = false;
     }
 
     /// Cancel the in-progress download.
@@ -440,7 +535,224 @@ mod tests {
     use crate::ptp::session::tests::{
         data_container, mock_transport, ok_response, response_with_params,
     };
-    use crate::ptp::ResponseCode;
+    use crate::ptp::{pack_u16, pack_u32, ResponseCode};
+    use std::sync::Mutex;
+
+    /// One bulk read's worth of data, matching what `next_chunk` asks for.
+    const BULK_READ: usize = 64 * 1024;
+
+    /// The byte a synthetic object carries at `offset`.
+    fn synthetic_byte(offset: u64) -> u8 {
+        (offset % 251) as u8
+    }
+
+    /// Serves one synthetic `GetObject` data phase without ever materializing the
+    /// object, so a test can watch what `ReceiveStream` holds while a transfer far
+    /// bigger than its buffer flows through it.
+    ///
+    /// The header goes out as its own bulk transfer (the split-header shape some
+    /// devices use), then the payload in `max_size` reads, then the response
+    /// container. A payload that lands on a read boundary is followed by a
+    /// zero-length packet, exactly as a real device terminates the data phase.
+    struct BigObjectTransport {
+        /// What to write in the container's `ContainerLength` field.
+        declared_length: u32,
+        payload_len: u64,
+        tx_id: u32,
+        /// Return the response container tacked onto the last payload read instead of
+        /// as its own read, so only a byte count can find the end of the payload.
+        coalesce_response: bool,
+        phase: Mutex<Phase>,
+    }
+
+    enum Phase {
+        OpenSession,
+        Header,
+        Payload { served: u64 },
+        Response,
+        Exhausted,
+    }
+
+    impl BigObjectTransport {
+        fn serving(declared_length: u32, payload_len: u64, tx_id: u32) -> Arc<dyn Transport> {
+            Arc::new(Self {
+                declared_length,
+                payload_len,
+                tx_id,
+                coalesce_response: false,
+                phase: Mutex::new(Phase::OpenSession),
+            })
+        }
+
+        fn coalescing_response(
+            declared_length: u32,
+            payload_len: u64,
+            tx_id: u32,
+        ) -> Arc<dyn Transport> {
+            Arc::new(Self {
+                declared_length,
+                payload_len,
+                tx_id,
+                coalesce_response: true,
+                phase: Mutex::new(Phase::OpenSession),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for BigObjectTransport {
+        async fn send_bulk(&self, _data: &[u8]) -> Result<(), Error> {
+            Ok(())
+        }
+
+        async fn receive_bulk(&self, max_size: usize) -> Result<Vec<u8>, Error> {
+            let mut phase = self.phase.lock().unwrap();
+            match *phase {
+                Phase::OpenSession => {
+                    *phase = Phase::Header;
+                    Ok(ok_response(0))
+                }
+                Phase::Header => {
+                    *phase = Phase::Payload { served: 0 };
+                    let mut header = Vec::with_capacity(HEADER_SIZE);
+                    header.extend_from_slice(&pack_u32(self.declared_length));
+                    header.extend_from_slice(&pack_u16(ContainerType::Data.to_code()));
+                    header.extend_from_slice(&pack_u16(OperationCode::GetObject.into()));
+                    header.extend_from_slice(&pack_u32(self.tx_id));
+                    Ok(header)
+                }
+                Phase::Payload { served } => {
+                    let take = (self.payload_len - served).min(max_size as u64) as usize;
+                    // A read shorter than the request is the short packet that ends the
+                    // data phase; a full read means more is coming.
+                    let mut data: Vec<u8> = (0..take as u64)
+                        .map(|i| synthetic_byte(served + i))
+                        .collect();
+                    if take < max_size {
+                        if self.coalesce_response {
+                            data.extend_from_slice(&ok_response(self.tx_id));
+                            *phase = Phase::Exhausted;
+                        } else {
+                            *phase = Phase::Response;
+                        }
+                    } else {
+                        *phase = Phase::Payload {
+                            served: served + take as u64,
+                        };
+                    }
+                    Ok(data)
+                }
+                Phase::Response => {
+                    *phase = Phase::Exhausted;
+                    Ok(ok_response(self.tx_id))
+                }
+                Phase::Exhausted => Err(Error::NoDevice),
+            }
+        }
+
+        async fn receive_interrupt(&self) -> Result<Vec<u8>, Error> {
+            Err(Error::NoDevice)
+        }
+
+        async fn cancel_transfer(&self, _tx_id: u32, _idle_timeout: Duration) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    /// Read the whole stream, checking every byte and dropping every chunk. Returns
+    /// the byte count plus the largest buffer the stream ever held.
+    async fn drain_checking_bytes(stream: &mut ReceiveStream) -> (u64, usize) {
+        let mut received = 0u64;
+        let mut peak_buffer = 0usize;
+        while let Some(chunk) = stream.next_chunk().await {
+            let chunk = chunk.expect("chunk");
+            for (i, byte) in chunk.iter().enumerate() {
+                assert_eq!(
+                    *byte,
+                    synthetic_byte(received + i as u64),
+                    "payload mismatch at offset {}",
+                    received + i as u64
+                );
+            }
+            received += chunk.len() as u64;
+            peak_buffer = peak_buffer.max(stream.buffer.capacity());
+        }
+        (received, peak_buffer)
+    }
+
+    #[tokio::test]
+    async fn receive_stream_buffer_stays_bounded_across_a_large_object() {
+        // Not a multiple of the read size, so the data phase ends on a short packet.
+        const PAYLOAD: u64 = 16 * 1024 * 1024 + 1000;
+        let transport =
+            BigObjectTransport::serving((HEADER_SIZE as u64 + PAYLOAD) as u32, PAYLOAD, 1);
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        let (received, peak_buffer) = drain_checking_bytes(&mut stream).await;
+
+        assert_eq!(received, PAYLOAD);
+        assert!(
+            peak_buffer <= 8 * BULK_READ,
+            "buffer grew to {peak_buffer} bytes streaming a {PAYLOAD}-byte object"
+        );
+    }
+
+    #[tokio::test]
+    async fn receive_stream_ends_cleanly_on_the_large_object_length_sentinel() {
+        // MTP 1.1 appendix H.1: a data phase over 4 GiB carries 0xFFFFFFFF as its
+        // ContainerLength, so the phase ends at the short packet, not at a byte count.
+        // Fake the header rather than move 4 GiB of real bytes.
+        const PAYLOAD: u64 = 3 * BULK_READ as u64 + 1000;
+        let transport = BigObjectTransport::serving(0xFFFF_FFFF, PAYLOAD, 1);
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        let (received, peak_buffer) = drain_checking_bytes(&mut stream).await;
+
+        assert_eq!(received, PAYLOAD);
+        assert!(
+            peak_buffer <= 8 * BULK_READ,
+            "buffer grew to {peak_buffer} bytes on the sentinel path"
+        );
+    }
+
+    #[tokio::test]
+    async fn receive_stream_sized_ends_a_sentinel_container_on_the_byte_count() {
+        // The response container arrives tacked onto the last payload read, so nothing
+        // about the packet shape marks the end: only the caller-supplied size does.
+        const PAYLOAD: u64 = 2 * BULK_READ as u64 + 1000;
+        let transport = BigObjectTransport::coalescing_response(0xFFFF_FFFF, PAYLOAD, 1);
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session
+            .execute_with_receive_stream_sized(OperationCode::GetObject, &[1], PAYLOAD)
+            .await
+            .unwrap();
+
+        let (received, _) = drain_checking_bytes(&mut stream).await;
+
+        assert_eq!(received, PAYLOAD);
+        assert!(stream.done);
+    }
+
+    #[tokio::test]
+    async fn receive_stream_tolerates_the_zero_length_packet_ending_a_data_phase() {
+        // A payload that exactly fills the last read is followed by a zero-length
+        // packet, the USB terminator for a data phase that divides the packet size.
+        const PAYLOAD: u64 = 4 * BULK_READ as u64;
+        let transport =
+            BigObjectTransport::serving((HEADER_SIZE as u64 + PAYLOAD) as u32, PAYLOAD, 1);
+        let session = Arc::new(PtpSession::open(transport, 1).await.unwrap());
+        let mut stream = session.get_object_stream(ObjectHandle(1)).await.unwrap();
+
+        let (received, peak_buffer) = drain_checking_bytes(&mut stream).await;
+
+        assert_eq!(received, PAYLOAD);
+        assert!(
+            peak_buffer <= 8 * BULK_READ,
+            "buffer grew to {peak_buffer} bytes"
+        );
+    }
 
     #[tokio::test]
     async fn test_receive_stream_small_file() {

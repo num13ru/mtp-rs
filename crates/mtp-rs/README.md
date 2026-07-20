@@ -199,7 +199,7 @@ let files = storage.list_objects(None).await?;
 let photo = files.iter().find( | f| f.filename == "photo.jpg").unwrap();
 
 // Download it
-let data = storage.download(photo.handle).await?.collect().await?;
+let data = storage.download_to_vec(photo.handle).await?;
 std::fs::write("photo.jpg", data) ?;
 ```
 
@@ -252,7 +252,18 @@ println ! ("{:.1}%", download.offset() as f64 / download.size() as f64 * 100.0);
 }
 ```
 
-For raw throughput when nothing else needs the device during the read, `download_stream` reads the whole file in one continuous transfer instead (it holds the PTP session for the entire download, so the device can't service other operations meanwhile).
+For raw throughput when nothing else needs the device during the read, `download(handle, ByteRange::Full)` reads the whole file in one continuous transfer instead. It holds the PTP session for the entire download, so the device can't service other operations meanwhile, and it yields chunks as they arrive:
+
+```rust
+use mtp_rs::mtp::ByteRange;
+
+let mut download = storage.download(file.handle, ByteRange::Full).await?;
+while let Some(chunk) = download.next_chunk().await {
+    file_on_disk.write_all( & chunk ?) ?;
+}
+```
+
+Peak memory per transfer is one 64 KiB USB read, whatever the file's size. Pass `ByteRange::From(offset)` to resume a download, or `ByteRange::Range { offset, len }` for a bounded slice.
 
 ### Partial reads (byte ranges)
 
@@ -260,19 +271,18 @@ Useful for previews, thumbnails, streaming media, or random access into large fi
 
 ```rust
 // First 1 MB of a file
-let head = storage.download_partial(file.handle, 0, 1024 * 1024).await?;
+let head = storage.read_range(file.handle, 0, 1024 * 1024).await?;
 
 // Read from the middle
-let middle = storage.download_partial(file.handle, 5_000_000, 100_000).await?;
+let middle = storage.read_range(file.handle, 5_000_000, 100_000).await?;
+
+// Offsets past 4 GB work on devices that advertise the 64-bit partial read
+// (most modern Android devices do): 64 KB at offset 6 GB.
+let chunk = storage.read_range(file.handle, 6 * 1024 * 1024 * 1024, 65536).await?;
 ```
 
-For files larger than 4 GB, use the 64-bit variant (requires device support, most modern
-Android devices advertise it):
-
-```rust
-// Read 64 KB at offset 6 GB
-let chunk = storage.download_partial_64(file.handle, 6 * 1024 * 1024 * 1024, 65536).await?;
-```
+`read_range` reads at most `u32::MAX` bytes per call. For a bigger span, stream it with
+`download(handle, ByteRange::Range { offset, len })` or walk it with `download_windowed`.
 
 ### Listen for events
 
@@ -395,7 +405,7 @@ We use `nusb` for USB access, which is also runtime-agnostic.
 
 | Limitation                | Details                                            |
 |---------------------------|----------------------------------------------------|
-| Files >4GB (size field)   | `ObjectInfo::size` is u32 and caps at 4 GB. For byte-range reads beyond 4 GB, use `download_partial_64()` (tested end-to-end on Pixel 9 Pro XL with an 8 GB file). |
+| Files >4GB (size field)   | The wire `ObjectInfo::size` is u32 and caps at 4 GB; the library resolves the real size from the `ObjectSize` object property where the device supports it. Byte-range reads beyond 4 GB use the 64-bit partial read (tested end-to-end on Pixel 9 Pro XL with an 8 GB file). |
 | Filename length           | Max 254 characters                                 |
 | Non-empty folder delete   | Fails; delete contents first                       |
 | One connection per device | Can't open the same device twice                   |

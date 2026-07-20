@@ -14,8 +14,14 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+### Fixed
+
+- **[lib] A streaming download no longer holds the whole file in RAM.** `Storage::download` presented itself as a stream but its internal buffer grew to the object's full size, so pulling a 4 GB video off a phone peaked around 4 GB of RSS even when the consumer wrote every chunk straight to disk and dropped it. Chunks now come off the front of a `BytesMut`, which reclaims the space as it hands them out: peak memory per transfer is about one 64 KiB USB read, whatever the file's size. `download_to_vec` and `FileDownload::collect` still buffer by design, but they now hold one copy instead of two.
+- **[lib] Downloads past 4 GiB finish, and finish clean.** An object too big for a 32-bit `ContainerLength` arrives with the `0xFFFFFFFF` sentinel (MTP 1.1 appendix H.1), which the receive path read as a literal byte count: the transfer never found its end, the response container's 12 bytes were handed to the consumer as file data, and the read then errored out. The stream now ends such a transfer on the resolved object size where the device reports one, and on the USB short packet otherwise. A zero-length packet terminating a data phase that exactly fills a read is tolerated too, instead of surfacing as "Empty response from device".
+
 ### Added
 
+- **[lib] `PtpSession::execute_with_receive_stream_sized`.** Takes the payload length the caller already knows, which is what lets a transfer over 4 GiB end on a byte count rather than on short-packet detection alone. `execute_with_receive_stream` is unchanged and still the right call for everything else.
 - **[lib] `Error::is_disconnected()`.** The check a long-lived consumer makes most often (tear down the mount, drop the device from the sidebar), alongside the existing `is_retryable` / `is_exclusive_access` / `is_permission_denied` / `is_stale_handle` predicates. Deliberately false for `Error::DeviceReset`, where the device is still plugged in and reopenable and only the session died.
 
 ## [0.27.0] - 2026-07-20

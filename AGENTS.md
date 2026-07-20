@@ -106,7 +106,8 @@ range, window_size)` (returns `WindowedDownload`), and buffered `Storage::downlo
 
 - **Pure Rust**: No C/FFI, no `-sys` crates
 - **Runtime-agnostic**: `futures` traits only, no tokio/async-std dependency
-- **Stream-based**: Downloads and uploads stream via `Stream<Item = Chunk>` for memory efficiency
+- **Stream-based**: Downloads and uploads stream via `Stream<Item = Chunk>`. Peak memory per transfer is about one
+  64 KiB USB read, whatever the file's size (see "Receiving data containers" below)
 - **Safe cancellation**: Mid-stream downloads can be cancelled via USB SIC class cancel
 - **Type-safe handles**: Newtypes prevent ID mixups
 
@@ -211,9 +212,9 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
 
 ## Resumable (offset) streaming downloads
 
-`Storage::download_stream_from_offset(handle, offset)` is a streaming download
+`Storage::download(handle, ByteRange::From(offset))` is a streaming download
 that starts at a byte offset and streams `[offset, size)` to EOF. It reuses the
-exact `download_stream` machinery (the `execute_with_receive_stream` →
+exact `ByteRange::Full` machinery (the `execute_with_receive_stream` →
 `ReceiveStream` → `FileDownload` path, SIC class-cancel, multi-transfer data
 container accumulation, `TransactionScope`/recovery), just driven by
 `GetPartialObject64(handle, offset, max_bytes)` instead of `GetObject`.
@@ -228,7 +229,7 @@ a true suspend/resume.
 
 Contract:
 
-- `offset == 0` is equivalent to `download_stream` (whole file), routed through
+- `offset == 0` is equivalent to `ByteRange::Full` (whole file), routed through
   `GetPartialObject64`.
 - `offset == size` yields an empty stream that ends at a clean EOF (zero chunks).
   Resuming an already-complete file is a no-op, not an error.
@@ -267,8 +268,8 @@ RELEASES the one-per-device PTP session on return. Companions:
 `download_windowed_from_offset` (resumable), `download_windowed_default`, the
 `DEFAULT_DOWNLOAD_WINDOW` const (8 MiB).
 
-The motivation is the session monopoly: `download_stream` /
-`download_stream_from_offset` own the single PTP session for the WHOLE file, so
+The motivation is the session monopoly: `download` owns the single PTP session
+for the WHOLE file, whatever the range, so
 no other op (a folder listing, navigation) can touch the device until the read
 finishes or is aborted. The spike numbers that drove this (validated on a Pixel
 9 Pro XL): an 8 MiB window is ≈80ms and frees the session between windows, so a
@@ -283,7 +284,7 @@ pause, debounce, or gate. The consumer interposes its own logic BETWEEN
 `next_window()` calls. `window_size` is a real, open parameter; the 8 MiB default
 is a documented suggestion, not baked in.
 
-Edge-case contract (mirrors `download_stream_from_offset`): empty file /
+Edge-case contract (mirrors `download` with a `From` range): empty file /
 `offset == size` ⇒ first `next_window()` returns `None` and issues no read;
 `offset > size` ⇒ `Error::InvalidData` before any USB I/O; a 0-byte read while
 `offset < size` ⇒ `Error::InvalidData` (a device STALL, not a silent EOF and not
@@ -414,6 +415,25 @@ transfers until `bytes.len() >= total_length` (read from the first 4 bytes of
 the header) before parsing.** See `PtpSession::execute_with_receive` and
 `PtpDevice::get_device_info` for the canonical pattern. Skipping this loop
 breaks GetDeviceInfo on spec-compliant devices that split.
+
+`ReceiveStream` (the streaming download path) does **not** accumulate: it hands
+each chunk out of a `BytesMut` with `split_to`, which advances the front, so the
+buffer holds about one 64 KiB read no matter how big the object is. Peak memory
+for a streaming download is that buffer plus whatever the consumer keeps, so a
+4 GB file costs the same as a 4 MB one. **Don't reintroduce an accumulate-then-
+slice shape here**: the old one held the whole object, because a PTP data
+container for an object *is* the whole object.
+
+Objects over 4 GiB don't fit a 32-bit `ContainerLength`, so responders send the
+`0xFFFFFFFF` sentinel instead (MTP 1.1 appendix H.1) and the real byte count
+comes from the `ObjectSize` object property. `ReceiveStream` handles both ends of
+that: `execute_with_receive_stream_sized` takes the resolved size and stops on
+the byte count, and without it the data phase ends at the first short packet
+(the USB signal), with a zero-length packet tolerated as the terminator when the
+payload exactly fills a read. `UsbBackend::download` passes the size for
+`ByteRange::Full` only when `get_object_info_full` actually resolved it past
+`u32::MAX`: a size still saturated at `u32::MAX` is unknown, not 4 GiB, and
+passing it would truncate the download.
 
 ## Test-time backing-dir drain (virtual-device only)
 

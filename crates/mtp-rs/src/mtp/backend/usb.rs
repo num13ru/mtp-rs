@@ -308,9 +308,24 @@ impl MtpBackend for UsbBackend {
         let stream = match range {
             ByteRange::Full => {
                 // Whole file via GetObject (the historical fast path; no offset machinery).
-                self.session
-                    .execute_with_receive_stream(OperationCode::GetObject, &[obj.to_ptp().0])
-                    .await?
+                // Past 4 GiB the data container's length field is the 0xFFFFFFFF sentinel
+                // (MTP 1.1 appendix H.1), so hand the resolved object size to the stream:
+                // it then ends the transfer on a byte count rather than on short-packet
+                // detection alone. A size still saturated at u32::MAX means
+                // `get_object_info_full` couldn't resolve it, so don't pass a wrong bound.
+                if size > u64::from(u32::MAX) {
+                    self.session
+                        .execute_with_receive_stream_sized(
+                            OperationCode::GetObject,
+                            &[obj.to_ptp().0],
+                            size,
+                        )
+                        .await?
+                } else {
+                    self.session
+                        .execute_with_receive_stream(OperationCode::GetObject, &[obj.to_ptp().0])
+                        .await?
+                }
             }
             ByteRange::From(_) | ByteRange::Range { .. } => {
                 // Offset/range read. `max_bytes` is a u32, so a single call requests at most
