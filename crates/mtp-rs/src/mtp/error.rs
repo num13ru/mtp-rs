@@ -122,6 +122,22 @@ impl Error {
         matches!(self, Error::Busy | Error::Timeout)
     }
 
+    /// Whether the device is gone and this handle is dead.
+    ///
+    /// The check a long-lived consumer makes most: a daemon tears down the device's mount, a file
+    /// manager drops it from the sidebar. Pairs naturally with
+    /// [`HotplugEvent::Left`](crate::mtp::HotplugEvent::Left) as the other way to learn the same
+    /// thing.
+    ///
+    /// Deliberately **false** for [`Error::DeviceReset`], which is easy to lump in and shouldn't be:
+    /// there the device is still plugged in and reopenable with no replug, and only the session
+    /// died. Treating it as a disconnect throws away a device that's sitting right there. Reopen
+    /// after a quiet pause instead (see [`Error::DeviceReset`]).
+    #[must_use]
+    pub fn is_disconnected(&self) -> bool {
+        matches!(self, Error::Disconnected)
+    }
+
     /// Whether another process holds the device exclusively.
     ///
     /// Applications can use this to guide users to close the conflicting app (for example, query
@@ -239,5 +255,23 @@ impl From<crate::error::PtpUploadError> for UploadError {
             source: e.source.into(),
             partial: e.partial.map(Into::into),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_disconnected_covers_only_a_device_that_is_actually_gone() {
+        assert!(Error::Disconnected.is_disconnected());
+
+        // The distinction that makes the predicate worth having: after a wedged-cancel
+        // recovery the device is still plugged in and reopenable, so a consumer must NOT
+        // tear down its mount or drop the device from its list. Only the session died.
+        assert!(!Error::DeviceReset.is_disconnected());
+
+        assert!(!Error::Busy.is_disconnected());
+        assert!(!Error::Timeout.is_disconnected());
     }
 }

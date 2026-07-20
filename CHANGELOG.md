@@ -14,6 +14,10 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+### Added
+
+- **[lib] `Error::is_disconnected()`.** The check a long-lived consumer makes most often (tear down the mount, drop the device from the sidebar), alongside the existing `is_retryable` / `is_exclusive_access` / `is_permission_denied` / `is_stale_handle` predicates. Deliberately false for `Error::DeviceReset`, where the device is still plugged in and reopenable and only the session died.
+
 ## [0.27.0] - 2026-07-20
 
 Library `0.27.0`, CLI `0.7.2`. Consumers can react to a device being plugged in instead of re-listing to find out.
