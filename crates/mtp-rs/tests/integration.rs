@@ -44,6 +44,18 @@
 //! ```sh
 //! MTP_TEST_READFILE=/DCIM/111_PANA/P1110001.JPG cargo test --test integration -- --ignored ...
 //! ```
+//!
+//! ## The >4 GiB round trip
+//!
+//! `test_big_file_over_4gib_round_trip` needs a second gate on top of
+//! `#[ignore]`: `MTP_TEST_BIG_FILE=1`. Without it the test returns early, so a
+//! plain `--ignored` sweep never writes gigabytes to someone's phone. It
+//! defaults to 4 GiB + 64 MiB, overridable in bytes via
+//! `MTP_TEST_BIG_FILE_SIZE`:
+//!
+//! ```sh
+//! MTP_TEST_BIG_FILE=1 cargo test --test integration -- --ignored --nocapture big_file
+//! ```
 
 use mtp_rs::mtp::Storage;
 use mtp_rs::{ByteRange, ObjectHandle};
@@ -1082,6 +1094,62 @@ fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
     hash
 }
 
+/// SplitMix64, the pattern generator behind the >4 GiB round trip.
+///
+/// Every 8-byte word of the test payload is `splitmix64(byte_offset / 8)`, so
+/// the expected bytes at any offset can be regenerated without keeping the file
+/// anywhere. Position-dependent on purpose: a constant fill or a repeated block
+/// would survive an offset shift, a dropped chunk, or a duplicated one.
+fn splitmix64(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Fill `buf` with the [`splitmix64`] pattern for the byte range starting at
+/// `start_offset`. Word-aligned or not, the bytes only depend on their absolute
+/// offset, so any chunking of the stream produces the same file.
+fn fill_pattern(buf: &mut [u8], start_offset: u64) {
+    let mut pos = 0usize;
+    while pos < buf.len() {
+        let abs = start_offset + pos as u64;
+        let within = (abs % 8) as usize;
+        let word = splitmix64(abs / 8).to_le_bytes();
+        let n = (8 - within).min(buf.len() - pos);
+        buf[pos..pos + n].copy_from_slice(&word[within..within + n]);
+        pos += n;
+    }
+}
+
+/// A generated upload source: yields the [`fill_pattern`] bytes chunk by chunk
+/// and never holds more than one chunk, so a multi-GB upload costs no disk and
+/// a megabyte of RAM. Hand-rolled rather than `stream::unfold` because
+/// `Storage::upload` wants `Unpin`.
+struct PatternStream {
+    offset: u64,
+    total: u64,
+    chunk_size: usize,
+}
+
+impl futures::Stream for PatternStream {
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.offset >= self.total {
+            return std::task::Poll::Ready(None);
+        }
+        let n = (self.total - self.offset).min(self.chunk_size as u64) as usize;
+        let mut buf = vec![0u8; n];
+        fill_pattern(&mut buf, self.offset);
+        self.offset += n as u64;
+        std::task::Poll::Ready(Some(Ok(bytes::Bytes::from(buf))))
+    }
+}
+
 // Camera control tests disabled - need PtpSession device property methods.
 
 /// Destructive tests - these write to the device.
@@ -1361,5 +1429,215 @@ mod destructive {
 
         storage.delete(dest_handle).await.expect("cleanup failed");
         tlog!("Streaming copy PASSED");
+    }
+
+    /// Round-trips an object larger than 4 GiB against real hardware.
+    ///
+    /// What it guards: an object past 4 GiB doesn't fit a 32-bit PTP
+    /// `ContainerLength`, so responders send the `0xFFFFFFFF` sentinel instead
+    /// (MTP 1.1 appendix H.1) and the real length comes from `ObjectSize`. The
+    /// `receive_stream_*` unit tests pin that contract against a synthetic
+    /// transport; only this test proves a real responder is read correctly.
+    /// Read the sentinel as a literal byte count and the download dies with a
+    /// bogus container type partway in.
+    ///
+    /// Cost: about 25 seconds each way on a Pixel 9 Pro XL over SuperSpeed USB,
+    /// plus a few seconds of pattern generation. Needs the payload size (4 GiB +
+    /// 64 MiB by default) free on the device, and the test skips if the storage
+    /// reports less than that plus a 512 MiB margin. Nothing touches local disk:
+    /// the payload is generated on the fly and verified against a regenerated
+    /// copy as chunks arrive.
+    ///
+    /// Double-gated: `#[ignore]` plus `MTP_TEST_BIG_FILE=1`, because the
+    /// documented way to run this file is `-- --ignored`, and this test has no
+    /// business joining every hardware sweep. Size override:
+    /// `MTP_TEST_BIG_FILE_SIZE` in bytes.
+    ///
+    /// Warning: if it fails mid-transfer, the device may be wedged badly enough
+    /// that `mtp-rs reset` won't clear it and it needs a physical replug before
+    /// anything can talk to it again. Cleanup runs on the panic path, but it
+    /// talks to the same wedged device, so it logs `couldn't delete ...` and
+    /// gives up rather than hanging. Expect to replug and then remove the
+    /// multi-GB payload by hand (`mtp-rs rm --yes /Download/mtp-rs-bigfile-*`).
+    #[tokio::test]
+    #[ignore]
+    #[serial]
+    async fn test_big_file_over_4gib_round_trip() {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        use std::sync::{Arc, Mutex};
+
+        const FOUR_GIB: u64 = 4 * 1024 * 1024 * 1024;
+        /// Headroom we leave on the device on top of the payload.
+        const FREE_SPACE_MARGIN: u64 = 512 * 1024 * 1024;
+        /// Upload chunk size. Big enough to keep the USB pipe busy, small
+        /// enough that one chunk is a rounding error in RAM.
+        const CHUNK_SIZE: usize = 1024 * 1024;
+
+        if !env_enabled("MTP_TEST_BIG_FILE") {
+            tlog!("SKIPPING test_big_file_over_4gib_round_trip: set MTP_TEST_BIG_FILE=1 to run it");
+            tlog!("  It writes 4 GiB + 64 MiB to the device and takes about a minute.");
+            return;
+        }
+
+        let size = std::env::var("MTP_TEST_BIG_FILE_SIZE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&s| s > 0)
+            .unwrap_or(FOUR_GIB + 64 * 1024 * 1024);
+        if size <= FOUR_GIB {
+            tlog!(
+                "WARNING: MTP_TEST_BIG_FILE_SIZE={} is not past 4 GiB, so the 0xFFFFFFFF",
+                size
+            );
+            tlog!("  container-length sentinel will NOT be exercised. This run proves nothing");
+            tlog!("  about the >4 GiB path.");
+        }
+
+        let Some((_device, mut storage, folder_handle)) = setup_with_writable_folder().await else {
+            // setup_with_writable_folder() already logged the skip reason
+            return;
+        };
+
+        if let Err(e) = storage.refresh().await {
+            tlog!("SKIPPING: couldn't refresh storage info - {:?}", e);
+            return;
+        }
+        let free = storage.info().free_space;
+        let needed = size.saturating_add(FREE_SPACE_MARGIN);
+        if free < needed {
+            tlog!(
+                "SKIPPING: device has {:.2} GB free, needs {:.2} GB (payload + 512 MiB margin)",
+                free as f64 / 1e9,
+                needed as f64 / 1e9
+            );
+            return;
+        }
+        tlog!(
+            "Payload {} bytes ({:.2} GB); device has {:.2} GB free",
+            size,
+            size as f64 / 1e9,
+            free as f64 / 1e9
+        );
+
+        let filename = format!("mtp-rs-bigfile-{}.bin", std::process::id());
+        // Set as soon as the object exists on the device, so cleanup below can
+        // remove it whether the body finished, returned early, or panicked.
+        let uploaded: Arc<Mutex<Option<ObjectHandle>>> = Arc::new(Mutex::new(None));
+
+        let body = {
+            let uploaded = Arc::clone(&uploaded);
+            let storage = &storage;
+            let filename = filename.as_str();
+            async move {
+                tlog!("Uploading {} from a generated stream...", filename);
+                let upload_start = Instant::now();
+                let info = NewObjectInfo::file(filename, size);
+                let source = PatternStream {
+                    offset: 0,
+                    total: size,
+                    chunk_size: CHUNK_SIZE,
+                };
+                let handle = match storage.upload(Some(folder_handle), info, source).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        // A failed data phase can still leave a partial object;
+                        // hand it to the cleanup path before panicking.
+                        if let Some(partial) = e.partial {
+                            *uploaded.lock().unwrap() = Some(partial);
+                        }
+                        panic!("upload failed: {e:?}");
+                    }
+                };
+                *uploaded.lock().unwrap() = Some(handle);
+                let upload_secs = upload_start.elapsed().as_secs_f64();
+                tlog!(
+                    "Uploaded in {:.1}s ({:.1} MB/s)",
+                    upload_secs,
+                    size as f64 / 1e6 / upload_secs
+                );
+
+                let obj_info = storage
+                    .get_object_info(handle)
+                    .await
+                    .expect("get info failed");
+                assert_eq!(obj_info.filename, filename);
+                assert_eq!(
+                    obj_info.size, size,
+                    "device reports a different size than we sent"
+                );
+
+                tlog!("Downloading and verifying against the regenerated pattern...");
+                let download_start = Instant::now();
+                let mut download = storage
+                    .download(handle, ByteRange::Full)
+                    .await
+                    .expect("start download failed");
+                assert_eq!(
+                    download.size(),
+                    size,
+                    "download must report the full object size, not a 32-bit truncation"
+                );
+
+                let mut received = 0u64;
+                let mut sent_hash = FNV_OFFSET;
+                let mut recv_hash = FNV_OFFSET;
+                let mut expected = Vec::new();
+                let mut last_logged_percent = 0u64;
+                while let Some(result) = download.next_chunk().await {
+                    let bytes = result.expect("download chunk error");
+                    assert!(
+                        received + bytes.len() as u64 <= size,
+                        "device sent more than {size} bytes"
+                    );
+                    expected.resize(bytes.len(), 0);
+                    fill_pattern(&mut expected, received);
+                    // Byte-exact, so a 12-byte injection or a dropped chunk
+                    // fails here with the offset instead of only at the end.
+                    assert!(
+                        expected[..] == bytes[..],
+                        "payload mismatch in the chunk starting at offset {received}"
+                    );
+                    sent_hash = fnv1a_update(sent_hash, &expected);
+                    recv_hash = fnv1a_update(recv_hash, &bytes);
+                    received += bytes.len() as u64;
+
+                    let percent = received * 100 / size;
+                    if percent >= last_logged_percent + 10 {
+                        tlog!("  {}%", percent);
+                        last_logged_percent = percent;
+                    }
+                }
+                let download_secs = download_start.elapsed().as_secs_f64();
+
+                // Catches a truncation, which per-chunk comparison alone can't.
+                assert_eq!(received, size, "downloaded byte count mismatch");
+                assert_eq!(recv_hash, sent_hash, "payload checksum mismatch");
+                tlog!(
+                    "Downloaded {} bytes in {:.1}s ({:.1} MB/s), FNV-1a {:#018x}, byte-identical",
+                    received,
+                    download_secs,
+                    size as f64 / 1e6 / download_secs,
+                    recv_hash
+                );
+            }
+        };
+
+        let outcome = AssertUnwindSafe(body).catch_unwind().await;
+
+        // Cleanup runs on both paths: a panicking assertion must not strand
+        // 4+ GB on someone's phone.
+        let handle = uploaded.lock().unwrap().take();
+        if let Some(handle) = handle {
+            match storage.delete(handle).await {
+                Ok(()) => tlog!("Deleted {}", filename),
+                Err(e) => tlog!("WARNING: couldn't delete {}: {:?}", filename, e),
+            }
+        }
+
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
+        tlog!("Big-file (>4 GiB) round trip PASSED");
     }
 }

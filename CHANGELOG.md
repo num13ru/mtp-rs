@@ -22,6 +22,7 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 ### Added
 
 - **[lib] `PtpSession::execute_with_receive_stream_sized`.** Takes the payload length the caller already knows, which is what lets a transfer over 4 GiB end on a byte count rather than on short-packet detection alone. `execute_with_receive_stream` is unchanged and still the right call for everything else.
+- **[lib] Hardware coverage for the >4 GiB download path.** `test_big_file_over_4gib_round_trip` uploads a generated 4 GiB + 64 MiB payload to a real device and verifies every byte on the way back, so the `0xFFFFFFFF` container-length sentinel is now proven against a real responder and not only against the in-process transport the unit tests drive. Nothing touches local disk on either side, and the object is deleted even when an assertion fails mid-run. It's double-gated behind `#[ignore]` and `MTP_TEST_BIG_FILE=1` so a normal `--ignored` sweep never writes gigabytes to someone's phone.
 - **[lib] `Error::is_disconnected()`.** The check a long-lived consumer makes most often (tear down the mount, drop the device from the sidebar), alongside the existing `is_retryable` / `is_exclusive_access` / `is_permission_denied` / `is_stale_handle` predicates. Deliberately false for `Error::DeviceReset`, where the device is still plugged in and reopenable and only the session died.
 
 ## [0.27.0] - 2026-07-20

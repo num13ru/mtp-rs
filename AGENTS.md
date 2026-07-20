@@ -433,7 +433,10 @@ the byte count, and without it the data phase ends at the first short packet
 payload exactly fills a read. `UsbBackend::download` passes the size for
 `ByteRange::Full` only when `get_object_info_full` actually resolved it past
 `u32::MAX`: a size still saturated at `u32::MAX` is unknown, not 4 GiB, and
-passing it would truncate the download.
+passing it would truncate the download. Real-device coverage:
+`test_big_file_over_4gib_round_trip` in `tests/integration.rs`, double-gated
+behind `#[ignore]` and `MTP_TEST_BIG_FILE=1` so a plain `--ignored` sweep never
+writes 4+ GB to someone's phone.
 
 ## Test-time backing-dir drain (virtual-device only)
 
