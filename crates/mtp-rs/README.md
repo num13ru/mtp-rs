@@ -313,7 +313,6 @@ mtp-rs = { version = "0.17", features = ["virtual-device"] }
 
 ```rust
 use std::path::PathBuf;
-use std::time::Duration;
 use mtp_rs::{MtpDevice, VirtualDeviceConfig, VirtualStorageConfig};
 
 let device = MtpDevice::builder()
@@ -327,13 +326,16 @@ let device = MtpDevice::builder()
             backing_dir: PathBuf::from("/tmp/mtp-test"),
             read_only: false,
         }],
-        supports_rename: true,
-        supports_partial_object_64: true,
-        event_poll_interval: Duration::from_millis(50),
         watch_backing_dirs: true,
+        ..Default::default()
     })
     .await?;
 ```
+
+`VirtualDeviceConfig` implements `Default`, so set only the fields you care about and spread the rest. `storages` is
+the one you always have to fill in: only you know which directory backs the storage, and opening a device with none
+fails with "VirtualDeviceConfig requires at least one storage". Building configs this way also means a new field in a
+future release won't break your test setup.
 
 When `watch_backing_dirs` is `true`, the virtual device watches its backing directories for external changes (files
 created or removed outside of MTP) and emits `ObjectAdded`/`ObjectRemoved` events, just like a real device would.

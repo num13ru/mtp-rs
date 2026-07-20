@@ -408,10 +408,9 @@ mod tests {
                 backing_dir: dir.path().to_path_buf(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         };
         (config, dir)
     }
@@ -501,7 +500,6 @@ mod tests {
     async fn open_by_location_integration() {
         let dir = tempfile::tempdir().unwrap();
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
             model: "Registry Phone".into(),
             serial: "reg-test-005".into(),
             storages: vec![VirtualStorageConfig {
@@ -510,10 +508,9 @@ mod tests {
                 backing_dir: dir.path().to_path_buf(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         };
         let info = register_virtual_device(&config);
 
@@ -531,7 +528,6 @@ mod tests {
     async fn open_by_serial_integration() {
         let dir = tempfile::tempdir().unwrap();
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
             model: "Registry Phone".into(),
             serial: "reg-test-006".into(),
             storages: vec![VirtualStorageConfig {
@@ -540,10 +536,9 @@ mod tests {
                 backing_dir: dir.path().to_path_buf(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         };
         let info = register_virtual_device(&config);
 
@@ -572,7 +567,6 @@ mod tests {
         // fixtures.
         let backing = dir.keep();
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
             model: "Drain Phone".into(),
             serial: serial.into(),
             storages: vec![VirtualStorageConfig {
@@ -581,10 +575,9 @@ mod tests {
                 backing_dir: backing,
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         };
         let info = register_virtual_device(&config);
         let device = crate::MtpDevice::builder()

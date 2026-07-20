@@ -48,10 +48,9 @@ pub async fn open_device(serial: &str) -> (mtp_rs::MtpDevice, tempfile::TempDir)
             backing_dir: dir.path().to_path_buf(),
             read_only: false,
         }],
-        supports_rename: true,
-        supports_partial_object_64: true,
         event_poll_interval: Duration::ZERO,
         watch_backing_dirs: false,
+        ..Default::default()
     };
     let device = mtp_rs::MtpDevice::builder()
         .open_virtual(config)

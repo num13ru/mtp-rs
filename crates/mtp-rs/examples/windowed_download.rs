@@ -37,8 +37,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let device = MtpDevice::builder()
         .open_virtual(VirtualDeviceConfig {
-            manufacturer: "Demo".into(),
-            model: "Virtual Phone".into(),
             serial: "windowed-demo".into(),
             storages: vec![VirtualStorageConfig {
                 description: "Internal Storage".into(),
@@ -46,10 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 backing_dir: dir.path().to_path_buf(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
+            // No watcher, no event sleep: this demo doesn't need either.
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         })
         .await?;
 

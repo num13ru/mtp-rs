@@ -632,7 +632,6 @@ impl MtpDeviceBuilder {
     ///
     /// ```rust,no_run
     /// use std::path::PathBuf;
-    /// use std::time::Duration;
     /// use mtp_rs::MtpDevice;
     /// use mtp_rs::transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
     ///
@@ -648,10 +647,7 @@ impl MtpDeviceBuilder {
     ///             backing_dir: PathBuf::from("/tmp/mtp-test"),
     ///             read_only: false,
     ///         }],
-    ///         supports_rename: true,
-    ///         supports_partial_object_64: true,
-    ///         event_poll_interval: Duration::from_millis(50),
-    ///         watch_backing_dirs: true,
+    ///         ..Default::default()
     ///     })
     ///     .await?;
     /// # Ok(())
@@ -748,14 +744,10 @@ mod tests {
         use crate::transport::virtual_device::config::VirtualDeviceConfig;
 
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
-            model: "Empty".into(),
             serial: "empty-001".into(),
+            // The point of this test: an empty `storages` must be rejected.
             storages: vec![],
-            supports_rename: false,
-            supports_partial_object_64: true,
-            event_poll_interval: Duration::ZERO,
-            watch_backing_dirs: false,
+            ..Default::default()
         };
 
         let result = MtpDevice::builder().open_virtual(config).await;

@@ -33,10 +33,9 @@ fn register_test_virtual_device() {
             backing_dir: std::path::PathBuf::from(root),
             read_only: false,
         }],
-        supports_rename: true,
-        supports_partial_object_64: true,
         event_poll_interval: std::time::Duration::ZERO,
         watch_backing_dirs: false,
+        ..Default::default()
     };
     let _ = mtp_rs::register_virtual_device(&config);
 }

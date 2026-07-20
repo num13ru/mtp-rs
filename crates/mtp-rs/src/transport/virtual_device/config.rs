@@ -8,11 +8,14 @@ use std::time::Duration;
 /// Defines the identity and storages of a virtual device that operates against
 /// a local filesystem directory instead of real USB hardware.
 ///
+/// Build one from [`Default`] and set only the fields your test cares about.
+/// New fields then arrive with a working default instead of breaking every
+/// construction site.
+///
 /// # Example
 ///
 /// ```rust
 /// use std::path::PathBuf;
-/// use std::time::Duration;
 /// use mtp_rs::transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
 ///
 /// let config = VirtualDeviceConfig {
@@ -25,10 +28,7 @@ use std::time::Duration;
 ///         backing_dir: PathBuf::from("/tmp/mtp-test"),
 ///         read_only: false,
 ///     }],
-///     supports_rename: true,
-///     supports_partial_object_64: true,
-///     event_poll_interval: Duration::from_millis(50),
-///     watch_backing_dirs: true,
+///     ..Default::default()
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -62,7 +62,44 @@ pub struct VirtualDeviceConfig {
     pub watch_backing_dirs: bool,
 }
 
+/// A ready-to-extend starting point: an obviously-fake identity plus the
+/// behavior flags a modern Android device would report.
+///
+/// **You must set `storages`**: the default is empty, which is not a usable
+/// device. `MtpDeviceBuilder::open_virtual` rejects it up front with
+/// "VirtualDeviceConfig requires at least one storage", and
+/// `register_virtual_device` produces a device with nothing on it. There is no
+/// honest default here, since only the caller knows which directory backs the
+/// storage.
+///
+/// Two other fields are worth overriding:
+///
+/// - `serial` defaults to a fixed string, so give each device its own when you
+///   register more than one at a time.
+/// - `event_poll_interval` and `watch_backing_dirs` default to production-like
+///   values (50 ms, watching on). Tests that don't exercise the watcher run
+///   faster with `Duration::ZERO` and `false`.
+impl Default for VirtualDeviceConfig {
+    fn default() -> Self {
+        Self {
+            manufacturer: "mtp-rs".into(),
+            model: "Virtual Device".into(),
+            serial: "virtual-0001".into(),
+            storages: Vec::new(),
+            supports_rename: true,
+            supports_partial_object_64: true,
+            event_poll_interval: Duration::from_millis(50),
+            watch_backing_dirs: true,
+        }
+    }
+}
+
 /// Configuration for a single storage within a virtual device.
+///
+/// Deliberately has no `Default`, unlike [`VirtualDeviceConfig`]: an unset
+/// `backing_dir` is never caught. Nothing validates it, so the storage just
+/// reports zero objects and zero used space, and the test fails somewhere far
+/// from the cause. A compile error is the better outcome here.
 #[derive(Debug, Clone)]
 pub struct VirtualStorageConfig {
     /// Human-readable storage description (for example, "Internal Storage").
@@ -73,4 +110,28 @@ pub struct VirtualStorageConfig {
     pub backing_dir: PathBuf,
     /// If true, write operations return `StoreReadOnly`.
     pub read_only: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_complete_except_storages() {
+        let config = VirtualDeviceConfig::default();
+
+        // A device listing must never show blanks.
+        assert!(!config.manufacturer.is_empty());
+        assert!(!config.model.is_empty());
+        assert!(!config.serial.is_empty());
+
+        // The one field the caller must fill in: only they know the backing dir.
+        // `MtpDeviceBuilder::open_virtual` rejects an empty `storages`.
+        assert!(config.storages.is_empty());
+
+        assert!(config.supports_rename);
+        assert!(config.supports_partial_object_64);
+        assert_eq!(config.event_poll_interval, Duration::from_millis(50));
+        assert!(config.watch_backing_dirs);
+    }
 }

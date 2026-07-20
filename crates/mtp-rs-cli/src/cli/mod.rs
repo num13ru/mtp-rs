@@ -125,10 +125,9 @@ mod tests {
                 backing_dir,
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         };
         let info = mtp_rs::register_virtual_device(&config);
 

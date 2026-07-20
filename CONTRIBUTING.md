@@ -139,6 +139,12 @@ A few things that might not be obvious:
   If you find a device that doesn't work, let's understand why before adding workarounds.
 - **Mock transport for testing**: `transport::mock::MockTransport` lets you test protocol logic without USB. Queue
   expected responses and verify sent commands.
+- **`VirtualDeviceConfig` stays literal-constructible**: every field is public and consumers build it with a struct
+  literal, so give any new field a value in the `Default` impl and don't reach for `#[non_exhaustive]`. That keeps
+  `VirtualDeviceConfig { storages: vec![...], ..Default::default() }` compiling across releases, which is the whole
+  point: a field addition to a test-support struct shouldn't break downstream test suites. Add the field to the
+  `default_config_is_complete_except_storages` test too. `VirtualStorageConfig` has no `Default` on purpose, because
+  an unset `backing_dir` yields a silently empty storage instead of an error.
 
 ## What we're looking for
 

@@ -11,7 +11,6 @@
 //!
 //! ```rust,no_run
 //! use std::path::PathBuf;
-//! use std::time::Duration;
 //! use mtp_rs::MtpDevice;
 //! use mtp_rs::transport::virtual_device::config::{VirtualDeviceConfig, VirtualStorageConfig};
 //!
@@ -27,10 +26,7 @@
 //!             backing_dir: PathBuf::from("/tmp/mtp-test"),
 //!             read_only: false,
 //!         }],
-//!         supports_rename: true,
-//!         supports_partial_object_64: true,
-//!         event_poll_interval: Duration::from_millis(50),
-//!         watch_backing_dirs: true,
+//!         ..Default::default()
 //!     })
 //!     .await?;
 //!
@@ -253,10 +249,9 @@ mod tests {
                 backing_dir: dir.to_path_buf(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         }
     }
 
@@ -271,10 +266,9 @@ mod tests {
                 backing_dir: dir.to_path_buf(),
                 read_only: true,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         }
     }
 
@@ -293,10 +287,9 @@ mod tests {
                     read_only: false,
                 })
                 .collect(),
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         }
     }
 
@@ -1696,8 +1689,6 @@ mod tests {
         // Canonicalize the backing dir to avoid macOS /var vs /private/var mismatches
         let backing_dir = dir.path().canonicalize().unwrap();
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
-            model: "Virtual Phone".into(),
             serial: "test-fswatch".into(),
             storages: vec![VirtualStorageConfig {
                 description: "Internal Storage".into(),
@@ -1705,10 +1696,9 @@ mod tests {
                 backing_dir: backing_dir.clone(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
-            event_poll_interval: Duration::from_millis(50),
+            // This test is about the watcher, so state it rather than inherit it.
             watch_backing_dirs: true,
+            ..Default::default()
         };
 
         let device = MtpDevice::builder().open_virtual(config).await.unwrap();
@@ -1740,8 +1730,6 @@ mod tests {
         std::fs::create_dir(backing_dir.join("Music")).unwrap();
 
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
-            model: "Virtual Phone".into(),
             serial: serial.into(),
             storages: vec![VirtualStorageConfig {
                 description: "Internal Storage".into(),
@@ -1749,10 +1737,9 @@ mod tests {
                 backing_dir: backing_dir.clone(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
-            event_poll_interval: Duration::from_millis(50),
+            // This test is about the watcher, so state it rather than inherit it.
             watch_backing_dirs: true,
+            ..Default::default()
         };
 
         let device = MtpDevice::builder().open_virtual(config).await.unwrap();
@@ -1873,8 +1860,6 @@ mod tests {
         let backing_dir = dir.path().canonicalize().unwrap();
 
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
-            model: "Virtual Phone".into(),
             serial: "test-fswatch-rm".into(),
             storages: vec![VirtualStorageConfig {
                 description: "Internal Storage".into(),
@@ -1882,10 +1867,9 @@ mod tests {
                 backing_dir: backing_dir.clone(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
-            event_poll_interval: Duration::from_millis(50),
+            // This test is about the watcher, so state it rather than inherit it.
             watch_backing_dirs: true,
+            ..Default::default()
         };
 
         let device = MtpDevice::builder().open_virtual(config).await.unwrap();
@@ -1932,8 +1916,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backing_dir = dir.path().canonicalize().unwrap();
         let config = VirtualDeviceConfig {
-            manufacturer: "TestCorp".into(),
-            model: "Virtual Phone".into(),
             serial: "test-fswatch-dedup".into(),
             storages: vec![VirtualStorageConfig {
                 description: "Internal Storage".into(),
@@ -1941,10 +1923,9 @@ mod tests {
                 backing_dir: backing_dir.clone(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
-            event_poll_interval: Duration::from_millis(50),
+            // This test is about the watcher, so state it rather than inherit it.
             watch_backing_dirs: true,
+            ..Default::default()
         };
 
         let device = MtpDevice::builder().open_virtual(config).await.unwrap();
@@ -1996,10 +1977,9 @@ mod tests {
                 backing_dir: dir.to_path_buf(),
                 read_only: false,
             }],
-            supports_rename: true,
-            supports_partial_object_64: true,
             event_poll_interval: Duration::ZERO,
             watch_backing_dirs: false,
+            ..Default::default()
         }
     }
 

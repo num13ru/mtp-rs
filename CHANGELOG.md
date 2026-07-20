@@ -14,6 +14,14 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-20
+
+Library `0.26.0`, CLI `0.7.1`. Adding a field to `VirtualDeviceConfig` stops being a breaking change for downstream test suites.
+
+### Changed
+
+- **[lib] Adding a field to `VirtualDeviceConfig` no longer breaks your test setup.** The struct now implements `Default` (feature `virtual-device`), so you can build one as `VirtualDeviceConfig { storages: vec![...], ..Default::default() }` and set only what your test cares about. Every field addition until now was a compile break for anyone constructing the struct with an exhaustive literal (most recently `supports_partial_object_64` in 0.24.0); from here on a new field arrives with a working default instead. `storages` defaults to empty and still must be set: only you know which directory backs the storage, and `open_virtual` rejects an empty one with "VirtualDeviceConfig requires at least one storage". `VirtualStorageConfig` deliberately gets no `Default`, since a wrong `backing_dir` fails silently (an empty storage) rather than loudly.
+
 ## [0.25.0] - 2026-07-18
 
 Library `0.25.0`, CLI `0.7.0`. Diagnostics so device-specific bugs can be captured by the reporter instead of reproduced on identical hardware (follow-up to the #18 Samsung cancel-wedge work in 0.24.0).
