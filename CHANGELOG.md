@@ -14,9 +14,14 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-07-20
+
+Library `0.27.0`, CLI `0.7.2`. Consumers can react to a device being plugged in instead of re-listing to find out.
+
 ### Added
 
-- **[lib] Watch for devices being plugged in and unplugged: `mtp::watch_devices()`.** Returns a `DeviceWatch` stream of `HotplugEvent::Arrived(MtpDeviceInfo)` / `Left(MtpDeviceInfo)`, so a consumer reacts to a phone appearing instead of re-listing on a timer or on every USB event the system produces. Devices already connected are reported as `Arrived` on first poll, which means one code path and no gap for a device plugged in during startup to fall through. `Left` carries the full device info, including the serial the OS doesn't report on disconnect, so a consumer with two phones attached can tell which one went away. Non-MTP USB traffic never reaches the consumer. Tune with `DeviceWatchBuilder` (`known_devices`, `settle_delay`; default `DEFAULT_SETTLE_DELAY` is 500 ms). USB only, so virtual devices don't produce events. See `examples/watch_devices.rs`.
+- **[lib] Watch for devices being plugged in and unplugged: `mtp::watch_devices()`.** Returns a `DeviceWatch` stream of `HotplugEvent::Arrived(MtpDeviceInfo)` / `Left(MtpDeviceInfo)`, so a consumer reacts to a phone appearing instead of re-listing on a timer or on every USB event the system produces. Devices already connected are reported as `Arrived` on first poll, which means one code path and no gap for a device plugged in during startup to fall through. `Left` carries the full device info, including the serial the OS doesn't report on disconnect, so a consumer with two phones attached can tell which one went away. Non-MTP USB traffic never reaches the consumer. Tune with `DeviceWatchBuilder` (`known_devices`, `settle_delay`; default `DEFAULT_SETTLE_DELAY` is 500 ms). USB only, so virtual devices don't produce events. See `examples/watch_devices.rs`. Verified on a Pixel 9 Pro XL: connected-at-start, unplug, and replug all reported correctly, with the departing device still fully identified.
+- **[cli]** No CLI changes; `0.7.2` just tracks the new library version.
 
 ## [0.26.0] - 2026-07-20
 
