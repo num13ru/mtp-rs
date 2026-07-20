@@ -14,16 +14,27 @@ Entries are grouped by release. Each entry tags which crate it applies to with *
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-07-20
+
+Library `0.28.0`, CLI `0.7.3`. Big files stop being the case that breaks: a download costs about 64 KiB of memory whatever its size, and objects past 4 GiB work at all.
+
 ### Fixed
 
 - **[lib] A streaming download no longer holds the whole file in RAM.** `Storage::download` presented itself as a stream but its internal buffer grew to the object's full size, so pulling a 4 GB video off a phone peaked around 4 GB of RSS even when the consumer wrote every chunk straight to disk and dropped it. Chunks now come off the front of a `BytesMut`, which reclaims the space as it hands them out: peak memory per transfer is about one 64 KiB USB read, whatever the file's size. `download_to_vec` and `FileDownload::collect` still buffer by design, but they now hold one copy instead of two.
 - **[lib] Downloads past 4 GiB finish, and finish clean.** An object too big for a 32-bit `ContainerLength` arrives with the `0xFFFFFFFF` sentinel (MTP 1.1 appendix H.1), which the receive path read as a literal byte count: the transfer never found its end, the response container's 12 bytes were handed to the consumer as file data, and the read then errored out. The stream now ends such a transfer on the resolved object size where the device reports one, and on the USB short packet otherwise. A zero-length packet terminating a data phase that exactly fills a read is tolerated too, instead of surfacing as "Empty response from device".
+
+  Verified on a Pixel 9 Pro XL over SuperSpeed USB with a 4,831,838,208-byte file, round-tripped through `mtp-rs put` and `mtp-rs get`: byte-identical (SHA-256 match), 25.6 s, peak RSS 9.8 MB. The same download on `0.27.0` failed outright with `invalid container type: 53875` after peaking at 4.01 GB of RSS, and left the device wedged until it was replugged.
+
+### Changed
+
+- **[lib] A malformed data container is now rejected instead of silently mis-sliced.** A container declaring a length shorter than its own 12-byte header used to desync the receive stream: the payload window came out empty, and the short length was drained off the front, so everything after it was misread. It now fails fast with an `invalid data` error naming the bad length. No well-behaved device sends one, so this should only ever surface against a broken responder, but it surfaces as a clear error rather than as corrupt bytes.
 
 ### Added
 
 - **[lib] `PtpSession::execute_with_receive_stream_sized`.** Takes the payload length the caller already knows, which is what lets a transfer over 4 GiB end on a byte count rather than on short-packet detection alone. `execute_with_receive_stream` is unchanged and still the right call for everything else.
 - **[lib] Hardware coverage for the >4 GiB download path.** `test_big_file_over_4gib_round_trip` uploads a generated 4 GiB + 64 MiB payload to a real device and verifies every byte on the way back, so the `0xFFFFFFFF` container-length sentinel is now proven against a real responder and not only against the in-process transport the unit tests drive. Nothing touches local disk on either side, and the object is deleted even when an assertion fails mid-run. It's double-gated behind `#[ignore]` and `MTP_TEST_BIG_FILE=1` so a normal `--ignored` sweep never writes gigabytes to someone's phone.
 - **[lib] `Error::is_disconnected()`.** The check a long-lived consumer makes most often (tear down the mount, drop the device from the sidebar), alongside the existing `is_retryable` / `is_exclusive_access` / `is_permission_denied` / `is_stale_handle` predicates. Deliberately false for `Error::DeviceReset`, where the device is still plugged in and reopenable and only the session died.
+- **[cli]** No CLI changes; `0.7.3` just tracks the new library version.
 
 ## [0.27.0] - 2026-07-20
 
