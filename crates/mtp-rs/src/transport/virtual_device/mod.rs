@@ -134,6 +134,14 @@ impl Transport for VirtualTransport {
 
         match container_type {
             CONTAINER_TYPE_COMMAND => {
+                // Model a device wedged mid-session (#18): when armed via
+                // `force_operation_wedge`, the operation reports `DeviceReset`
+                // (one-shot) before it does anything. Only command containers
+                // check it, so a data phase never lands on a device that already
+                // reported the reset.
+                if std::mem::take(&mut state.pending_operation_wedge) {
+                    return Err(crate::PtpError::DeviceReset);
+                }
                 // Parse parameters (each u32, after the 12-byte header)
                 let param_bytes = data.len() - 12;
                 let param_count = param_bytes / 4;
@@ -222,7 +230,7 @@ impl Transport for VirtualTransport {
         let mut state = self.state.lock().unwrap();
         state.pending_command = None;
         state.response_queue.clear();
-        // Model the Samsung large-backlog cancel wedge (#18): when armed via
+        // Model the Samsung cancel wedge (#18): when armed via
         // `force_cancel_wedge`, report `DeviceReset` (one-shot), as the real USB
         // transport does after detecting the wedge and resetting the device.
         if std::mem::take(&mut state.pending_cancel_wedge) {
@@ -644,7 +652,7 @@ mod tests {
         let storages = device.storages().await.unwrap();
         let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
 
-        // Arm the one-shot large-backlog cancel wedge (#18).
+        // Arm the one-shot cancel wedge (#18).
         assert!(crate::force_cancel_wedge(serial));
 
         let mut dl = storages[0]
@@ -673,6 +681,44 @@ mod tests {
         dl2.cancel(DEFAULT_CANCEL_TIMEOUT)
             .await
             .expect("second cancel should be healthy");
+    }
+
+    #[tokio::test]
+    async fn operation_wedge_surfaces_device_reset_without_a_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("data.bin"), b"payload").unwrap();
+
+        let serial = "operation-wedge-18";
+        let config = test_config_with_serial(dir.path(), serial);
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+        let obj = storages[0].list_objects(None).await.unwrap()[0].clone();
+
+        // A consumer that never calls `cancel()` still reaches `DeviceReset`
+        // through the recovery drain, so it needs a hook that doesn't ride on a
+        // cancel to test its reopen path.
+        assert!(crate::force_operation_wedge(serial));
+
+        let err = storages[0]
+            .get_object_info(obj.handle)
+            .await
+            .expect_err("an armed operation wedge must surface the reset");
+        assert!(
+            matches!(err, crate::mtp::Error::DeviceReset),
+            "expected Error::DeviceReset, got {err:?}"
+        );
+
+        // One-shot, like the cancel wedge: the next operation is healthy again.
+        let again = storages[0]
+            .get_object_info(obj.handle)
+            .await
+            .expect("the wedge is one-shot");
+        assert_eq!(again.filename, "data.bin");
+    }
+
+    #[test]
+    fn operation_wedge_reports_an_unknown_serial() {
+        assert!(!crate::force_operation_wedge("no-such-device"));
     }
 
     // ---- Windowed downloads (session-freeing window-by-window reads) ----

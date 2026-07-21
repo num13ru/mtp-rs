@@ -374,7 +374,7 @@ pub fn force_partial_read_caps(serial: &str, caps: Vec<usize>) -> bool {
 ///
 /// The next `cancel_transfer` on that device returns
 /// [`PtpError::DeviceReset`](crate::PtpError::DeviceReset), modeling the Samsung
-/// large-backlog cancel wedge that the real USB transport detects and recovers
+/// cancel wedge that the real USB transport detects and recovers
 /// from with a device reset (issue #18). This lets the high-level `DeviceReset`
 /// contract — a mid-stream `cancel()` surfacing `Error::DeviceReset` so the
 /// consumer reopens — be regression-tested with no hardware. Returns `false` if
@@ -387,6 +387,46 @@ pub fn force_cancel_wedge(serial: &str) -> bool {
     };
     drop(active); // Release the registry lock before acquiring the state lock.
     state_arc.lock().unwrap().pending_cancel_wedge = true;
+    true
+}
+
+/// Arm a one-shot operation wedge on a registered virtual device (test hook).
+///
+/// The next PTP operation on that device fails with
+/// [`PtpError::DeviceReset`](crate::PtpError::DeviceReset), surfacing to the
+/// caller as [`Error::DeviceReset`](crate::Error::DeviceReset). Returns `false`
+/// if no active device has the given serial.
+///
+/// # When to use
+///
+/// [`force_cancel_wedge`] arms the next `cancel_transfer`, so it only fires for
+/// a consumer that calls `cancel()`. A consumer that never cancels still reaches
+/// `DeviceReset`: it drops an operation future (a superseded listing, a raced
+/// timeout), and the next operation's recovery drain hits the wedged device and
+/// returns the reset. That's a real path (hardware-verified on a Galaxy S23
+/// Ultra SM-S918B, macOS/nusb, 2026-07-20: a dropped mid-flight windowed
+/// `GetPartialObject64` produced `DeviceReset` from the drain, and the session
+/// was dead afterwards), and this hook is how to test the reopen-and-retry
+/// response to it with no hardware.
+///
+/// The injection point is the operation itself, not the drain, because
+/// abandoning a virtual-device future mid-flight is a race (its operations
+/// complete instantly). What the consumer observes is the same either way:
+/// `Error::DeviceReset` out of an ordinary operation. What it can't observe here
+/// is the aftermath: a real device's session is dead until a spaced-retry
+/// reopen, while the virtual device is healthy on the very next call.
+///
+/// Aim it at any operation except a **root** listing: the root-listing fast path
+/// tries `parent=0xFFFFFFFF` first and falls back to `parent=0` on any error, so
+/// it swallows the one-shot and succeeds.
+pub fn force_operation_wedge(serial: &str) -> bool {
+    let active = active_states().lock().unwrap();
+    let state_arc = match active.iter().find(|(s, _)| s == serial) {
+        Some((_, state)) => Arc::clone(state),
+        None => return false,
+    };
+    drop(active); // Release the registry lock before acquiring the state lock.
+    state_arc.lock().unwrap().pending_operation_wedge = true;
     true
 }
 

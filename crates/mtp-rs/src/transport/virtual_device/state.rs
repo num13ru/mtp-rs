@@ -86,12 +86,20 @@ pub(super) struct VirtualDeviceState {
 
     /// One-shot: when set, the next `cancel_transfer` returns
     /// [`PtpError::DeviceReset`](crate::PtpError::DeviceReset), modeling the
-    /// Samsung large-backlog cancel wedge that the real USB transport detects
-    /// and recovers from via a device reset (issue #18). Lets the high-level
-    /// `DeviceReset` contract (cancel → error → consumer reopens) be tested with
-    /// no hardware. Set via
-    /// [`force_cancel_wedge`](super::registry::force_cancel_wedge).
+    /// Samsung cancel wedge that the real USB transport detects and recovers
+    /// from via a device reset (issue #18). Lets the high-level `DeviceReset`
+    /// contract (cancel → error → consumer reopens) be tested with no hardware.
+    /// Set via [`force_cancel_wedge`](super::registry::force_cancel_wedge).
     pub(super) pending_cancel_wedge: bool,
+
+    /// One-shot: when set, the next PTP **operation** (command container) fails
+    /// with [`PtpError::DeviceReset`](crate::PtpError::DeviceReset). The sibling
+    /// of `pending_cancel_wedge`, for consumers that never call `cancel()`: they
+    /// reach `DeviceReset` through
+    /// [`recover_if_needed`](crate::ptp::PtpSession)'s drain after a dropped
+    /// operation future, which no cancel-armed hook can reproduce. Set via
+    /// [`force_operation_wedge`](super::registry::force_operation_wedge).
+    pub(super) pending_operation_wedge: bool,
 }
 
 /// Maximum number of entries in [`VirtualDeviceState::dropped_paths`]; oldest
@@ -142,6 +150,7 @@ impl VirtualDeviceState {
             dropped_paths: VecDeque::new(),
             forced_partial_read_caps: VecDeque::new(),
             pending_cancel_wedge: false,
+            pending_operation_wedge: false,
         }
     }
 
