@@ -549,7 +549,7 @@ impl NusbTransport {
     /// (`TransferError::Cancelled`). That is distinct from the device *declining*
     /// the request (`Stall`, i.e. unsupported) or answering `OK`. A wedged result
     /// tells [`cancel_transfer`](Self::cancel_transfer) to escalate to a device
-    /// reset (Samsung large-backlog cancel, issue #18).
+    /// reset (Samsung cancel wedge, issue #18).
     async fn settle_after_cancel(&self) -> bool {
         const POLL_INTERVAL: Duration = Duration::from_millis(50);
         // 100 polls x 50ms = 5s cap, far beyond any sane cancel processing.
@@ -890,8 +890,8 @@ impl Transport for NusbTransport {
             let mut ep = self.bulk_in.lock().await;
             let max_packet_size = ep.max_packet_size();
             // Diagnostic counters (surfaced via the `tracing` feature). A #18
-            // wedge shows up here as a large backlog drained with no closing
-            // Response container. Kept unconditionally; the cost is negligible.
+            // wedge shows up here as a drain that ends with no closing
+            // Response container (at any size: 36 bytes was enough on an S23). Kept unconditionally; the cost is negligible.
             let mut drained_packets = 0u32;
             let mut drained_bytes = 0usize;
             let mut saw_response = false;
@@ -1005,7 +1005,7 @@ impl Transport for NusbTransport {
         let wedged = self.settle_after_cancel().await;
         diag_debug!("cancel_transfer: step 4 settle done (wedged={})", wedged);
 
-        // Step 5: If the device went silent (Samsung large-backlog cancel, #18),
+        // Step 5: If the device went silent (Samsung cancel wedge, #18),
         // the drains couldn't realign the session and it's dead. A CLASS_CANCEL
         // can't revive it, but a session-less USB DEVICE_RESET un-sticks the
         // transport so the device answers again (verified on a Galaxy S23 Ultra),

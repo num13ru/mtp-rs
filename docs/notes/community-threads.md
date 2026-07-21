@@ -235,12 +235,22 @@ transfer operations." He attached an integration-suite run showing the cancel te
 type (3)" desync on every later op.
 
 Reproduced on a **Galaxy S23 Ultra** (David's hardware), which let us root-cause it locally instead of
-round-tripping with the reporter. **Root cause**: cancelling a held-open streaming download while the
-device still has a large bulk backlog queued (classically the *first* download right after a fresh USB
-connect) leaves the `GetObject` transaction unclosed. The drain reads the whole backlog and idles out
-without ever seeing the closing Response container, the device then stops answering, and `cancel()`
-returned a false success so the consumer's next call hung — the "mid-transfer freeze". Intermittent:
-warm sessions with a smaller backlog recover cleanly.
+round-tripping with the reporter. **Root cause**: interrupting an in-flight bulk read leaves the
+`GetObject` transaction unclosed. The drain idles out without ever seeing the closing Response
+container, the device then stops answering, and `cancel()` returned a false success so the consumer's
+next call hung — the "mid-transfer freeze". Intermittent.
+
+**Transfer size is not the trigger** (verified on the S23 Ultra SM-S918B, macOS/nusb, 2026-07-20).
+`doctor --probe-cancel` reported `wedged_recovered` cancelling a **36-byte** file. Earlier notes framed
+this as a "large-backlog cancel"; don't triage a new report by how big the transfer was. The same
+session also split the wedge in two:
+
+- An explicit `cancel()`, or a dropped mid-flight **windowed** `GetPartialObject64` (8 MiB window,
+  dropped after 25 ms, `DeviceReset` out of `recover_if_needed`'s drain), recovers in software, but
+  only with **spaced** retries: transport reset, then fresh opens returning `Timeout`, then
+  `SessionAlreadyOpen`, then success.
+- A dropped held-open **streaming** `GetObject` (`FileDownload`) did **not** recover in software:
+  plain reopen and transport reset both failed, and it needed a physical replug.
 
 Two wrong turns worth remembering (both ruled out on hardware): (1) the post-cancel `GET_DEVICE_STATUS`
 poll (step 4, added for the #12 camera) is **not** the culprit — an early A/B looked decisive but was
@@ -252,9 +262,10 @@ out as `TransferError::Cancelled`, distinct from the fast `Stall` an unsupported
 issues a session-less USB `DEVICE_RESET` to un-stick the transport, and returns the new
 `Error::DeviceReset` (both `mtp::Error` and `ptp::PtpError`) instead of a false success. It does **not**
 reopen — that's the caller's job, and must be quiet (drop the device, wait a few seconds, reopen with
-idle-spaced backoff). `download_windowed` avoids the whole path (no multi-MB backlog to cancel) and is
-the recommended pattern for interruptible reads on Android. Verified end-to-end on the S23 (wedge →
-reset → quiet reopen recovered on the 2nd attempt, no replug).
+idle-spaced backoff). `download_windowed` removes the *need* to cancel, not the wedge (a dropped window
+future still wedges through the recovery drain), but its wedge is the recoverable one, so it stays the
+recommended pattern for interruptible reads on Android. Verified end-to-end on the S23 (wedge → reset →
+quiet reopen recovered on the 2nd attempt, no replug).
 
 **Open question for the reporter**: does `mtp-rs reset` recover his A15 the way it does the S23? That's
 the only device-specific unknown left. Also spun off `docs/debugging.md` into a real-device debugging
@@ -304,7 +315,7 @@ Cross-cutting summary of every quirk currently handled or known. Sorted by devic
 | Panasonic Lumix DMC-TZ61     | Freezes hard (battery-pull-level) if the host aborts mid-listing                                                                               | `mtp-rs reset` / `PtpDevice::reset_device()` (SIC 0x66, untested on the full freeze) | #12                                  |
 | PTP cameras (SIC-compliant)  | Unusable after a cancel unless the host polls GET_DEVICE_STATUS until not Device_Busy                                                          | Step 4 in `cancel_transfer` (post-drain polling + halt clearing)                     | #12 (2026-06-07)                     |
 | PTP cameras (SIC-compliant)  | STALL bulk endpoint for unsupported operations/properties; halt persists across processes                                                      | `clear_halt` at every bulk completion site on STALL                                  | #12 (2026-06-07)                     |
-| Samsung Galaxy (S23 Ultra, A15) | Cancelling a held-open download with a large in-flight backlog wedges the session (false-success cancel, then every op hangs)                | Detect (GET_DEVICE_STATUS timeout) → `DEVICE_RESET` → `Error::DeviceReset`; caller reopens quietly; prefer `download_windowed` | #18 (2026-07-18, v0.24.0)            |
+| Samsung Galaxy (S23 Ultra, A15) | Cancelling or abandoning an in-flight read wedges the session, at any transfer size (false-success cancel, then every op hangs)                | Detect (GET_DEVICE_STATUS timeout) → `DEVICE_RESET` → `Error::DeviceReset`; caller reopens quietly with spaced retries; prefer `download_windowed` (recoverable wedge; a dropped streaming `GetObject` needs a replug) | #18 (2026-07-18, v0.24.0)            |
 | Panasonic Lumix DMC-TZ61     | Pads serial number to fixed width with multiple NULs                                                                                           | `unpack_string` truncates at first NUL                                               | #12 (2026-06-06)                     |
 
 ## Recurring contributors

@@ -186,15 +186,24 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   (for cameras). A healthy Android device answers this poll `OK` or fails it
   harmlessly; the poll is not what wedges the Samsung below (that was ruled out
   on hardware).
-- **Large-backlog cancel wedges some Samsung devices** (Galaxy S23 Ultra, and
-  qarmin's A15, #18). Cancelling a held-open streaming download while the device
-  still has a large bulk backlog queued (classically the *first* download right
-  after a fresh USB connect) leaves the `GetObject` transaction unclosed: the
-  drain reads the whole backlog and idles out without ever seeing the closing
-  Response container, the device then stops answering (GET_DEVICE_STATUS times
-  out as `TransferError::Cancelled`, versus the fast `Stall` an unsupported
-  device returns), and the session is dead. The wedge is intermittent (warm
-  sessions with a smaller backlog recover).
+- **Interrupting an in-flight bulk read wedges some Samsung devices** (Galaxy S23
+  Ultra, and qarmin's A15, #18). The drain that follows leaves the `GetObject`
+  transaction unclosed: it idles out without ever seeing the closing Response
+  container, the device then stops answering (GET_DEVICE_STATUS times out as
+  `TransferError::Cancelled`, versus the fast `Stall` an unsupported device
+  returns), and the session is dead. The wedge is intermittent.
+  **Transfer size is not the trigger**: `doctor --probe-cancel` reported
+  `wedged_recovered` on a 36-byte file (verified on a Galaxy S23 Ultra SM-S918B,
+  macOS/nusb, 2026-07-20). Don't reason about "backlog size" when triaging.
+  Two ways in, with different outcomes on the same hardware and day:
+  - An explicit `cancel()`, or a **dropped windowed** `GetPartialObject64`
+    future whose drain runs through `recover_if_needed`, surfaces
+    `Error::DeviceReset` and recovers **in software** with spaced retries
+    (transport reset, then reopens that return `Timeout`, then
+    `SessionAlreadyOpen`, then success).
+  - A dropped **held-open streaming** `GetObject` (`FileDownload`) future did
+    **not** recover in software: plain reopen and transport reset both failed,
+    and it needed a physical replug.
 - **How `cancel_transfer` handles it (design C):** when it detects the wedge
   (the `Cancelled` timeout above), it issues a session-less USB `DEVICE_RESET` to
   un-stick the transport and returns `Error::DeviceReset` instead of a false
@@ -204,9 +213,11 @@ the bulk IN and interrupt pipes. This approach was validated against libmtp's
   `SessionAlreadyOpen`; *hammer* close/open at it (a tight retry loop) and it
   stays busy and re-wedges into a hard `Timeout`. So on `DeviceReset`: drop the
   device, wait a few seconds quiet, then open again (retry with idle-spaced
-  backoff, not a tight loop). **Better still, avoid the whole path**: prefer
-  `download_windowed` over held-open cancel on Android; it never builds a
-  multi-MB backlog to cancel. See `docs/debugging.md`.
+  backoff, not a tight loop). `download_windowed` removes the *need* to cancel
+  (no held-open transfer to abort), but it does **not** remove the wedge: a
+  window future dropped mid-flight still wedges the device through the recovery
+  drain. It's the recoverable flavor, though, so prefer it on Android anyway.
+  See `docs/debugging.md`.
 - See `NusbTransport::cancel_transfer()` for the full implementation with
   detailed comments.
 

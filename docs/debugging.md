@@ -64,16 +64,24 @@ device). Healthy operations here finish well under a second, so 2s is safe.
 - **Momentary zero storages after reconnect.** Right after a reconnect the device
   can briefly report zero storages, so an immediate `storages()[0]` panics. Give
   it a beat and retry.
-- **Cancel of a large in-flight backlog can wedge the session** (#18). Cancelling
-  a held-open streaming download while a big backlog is queued (classically the
-  first download after a fresh connect) leaves the transaction unclosed and the
-  session desynced. The library detects this and returns `Error::DeviceReset`
-  after resetting the transport to un-stick it (it does not reopen). To recover:
-  drop the device, **wait a few seconds quiet, then reopen** with idle-spaced
-  retries. Do **not** hammer close/open in a tight loop; that keeps the device
-  busy and re-wedges it into a hard `Timeout` (learned the hard way on the S23).
-  Prefer `download_windowed` to avoid the whole path: no multi-MB backlog to
-  cancel.
+- **Interrupting an in-flight bulk read can wedge the session** (#18). Cancelling
+  or abandoning a transfer leaves the transaction unclosed and the session
+  desynced. **Size is not the trigger**: a 36-byte file wedged it (verified on a
+  Galaxy S23 Ultra SM-S918B, macOS/nusb, 2026-07-20), so don't dismiss a report
+  because the file was small. The library detects this and returns
+  `Error::DeviceReset` after resetting the transport to un-stick it (it does not
+  reopen). To recover: drop the device, **wait a few seconds quiet, then reopen**
+  with idle-spaced retries. The sequence that worked on the S23: transport reset,
+  reopens returning `Timeout`, then `SessionAlreadyOpen`, then success. Do **not**
+  hammer close/open in a tight loop; that keeps the device busy and re-wedges it
+  into a hard `Timeout`.
+- **One flavor doesn't recover in software**: a dropped **held-open streaming**
+  `GetObject` (`FileDownload`) future needed a physical replug on the S23 (plain
+  reopen and transport reset both failed), while a dropped **windowed**
+  `GetPartialObject64` future recovered via the reset-plus-spaced-retries path
+  above (both verified 2026-07-20). So `download_windowed` doesn't dodge the
+  wedge, only the need to cancel; prefer it because its wedge is the recoverable
+  one.
 
 ### 5. Capture diagnostics for a bug report
 
@@ -81,12 +89,21 @@ Two purpose-built ways to get "what did the device actually do" without a
 Wireshark trace. Ask a reporter for these first; they usually pinpoint the fault.
 
 - **`mtp-rs doctor --probe-cancel`**: prints device identity, capabilities, and
-  storages, then runs the cancel-health probe (download the largest root file,
-  cancel mid-stream) and classifies the result: `healthy`, `wedged_recovered`
+  storages, then runs the cancel-health probe (download a file, cancel
+  mid-stream) and classifies the result: `healthy`, `wedged_recovered`
   (the #18 signature: the library reset the device and returned `DeviceReset`),
   or `errored`. Add `--json` for a machine-readable bundle. Plain `doctor` (no
   flag) stays passive; `--probe-cancel` transfers data and can briefly wedge a
   device (the library recovers it).
+  - The probe searches **below** the root for the file, breadth-first, bounded to
+    48 folders and three levels. An Android root holds only directories, so a
+    root-only look skipped the probe on exactly the phones #18 is about (verified
+    on a Pixel 9 Pro XL: 17 directories, zero files).
+  - It prefers a file of 100 KB-10 MB but takes **any** file rather than
+    skipping, because size doesn't drive the wedge.
+  - `--probe-path /DCIM/Camera/IMG_0001.jpg` pins the file and implies
+    `--probe-cancel`. Use it when the search picks a file you'd rather leave
+    alone, or when it finds none.
 - **Protocol trace**: the CLI emits the library's `tracing` events to stderr.
   - `mtp-rs --trace <cmd>` → the cancel/reset path and session recovery at debug
     level (the #18-relevant events).
@@ -100,11 +117,20 @@ Wireshark trace. Ask a reporter for these first; they usually pinpoint the fault
 
 ### Reproducing device wedges without hardware
 
-The virtual device can model the #18 large-backlog cancel wedge for regression
-tests: `force_cancel_wedge(serial)` arms a one-shot so the next `cancel_transfer`
-returns `Error::DeviceReset`, exercising the high-level contract (a mid-stream
-`cancel()` surfacing `DeviceReset` so the consumer reopens) with no USB. See
-`cancel_wedge_surfaces_device_reset` in `transport/virtual_device/mod.rs`.
+The virtual device can model the #18 cancel wedge for regression tests, two
+one-shot hooks for the two ways a consumer reaches `Error::DeviceReset`:
+
+- `force_cancel_wedge(serial)`: the next `cancel_transfer` returns
+  `DeviceReset`, so a mid-stream `cancel()` surfaces it. See
+  `cancel_wedge_surfaces_device_reset` in `transport/virtual_device/mod.rs`.
+- `force_operation_wedge(serial)`: the next **operation** returns `DeviceReset`,
+  for a consumer that never calls `cancel()` and only meets the error through
+  `recover_if_needed`'s drain after a dropped future. Aim it at anything but a
+  root listing (that path retries `parent=0` on any error and swallows the
+  one-shot). See `operation_wedge_surfaces_device_reset_without_a_cancel`.
+
+Neither models the aftermath: a real device's session is dead until a
+spaced-retry reopen, the virtual one is healthy on the next call.
 
 ### Other integration-test env knobs
 
