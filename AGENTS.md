@@ -82,6 +82,12 @@ range, window_size)` (returns `WindowedDownload`), and buffered `Storage::downlo
 ## Known device quirks
 
 - **Android**: `ObjectHandle::ALL` recursive listing broken; library auto-detects via `"android.com"` in vendor extension
+- **Android/Kindle root listings** ask `parent=0xFFFFFFFF` first (it returns root-level handles, where `parent=0`
+  returns every object on the storage) and fall back to `parent=0` only when the device **declines**: `Protocol`, or
+  `Io`, which is how a camera's bulk STALL arrives (`is_all_handle_rejection` in `mtp::backend::usb`). Don't widen that
+  back to a catch-all. `DeviceReset`, `Timeout`, and `Disconnected` must propagate: the retry hammers a device that
+  re-wedges under exactly that treatment (#18), and it reports the *second* error, hiding the `DeviceReset` a consumer
+  needs to trigger its reopen.
 - **Android**: Uploads to the storage root are rejected with `InvalidObjectHandle`. Upload into an existing folder (for example, `Download`) instead.
 - **Android**: Object handles are NOT stable. MediaProvider re-keys object IDs across a media rescan, so a handle a host cached when it last listed a folder can be silently invalidated before a later operation (upload, delete) into that folder: the device then returns `InvalidObjectHandle`/`InvalidParentObject`, not for a missing object but for a stale ID. Hosts should treat those codes on a previously-valid handle as "re-list the parent and re-resolve, then retry once", not as a hard not-found. (A downstream, Cmdr, hit this as a 307 MB upload failing at `SendObjectInfo` and surfacing as "Path not found" on the intact *source* file.) Reproducible against the virtual device with `rekey_virtual_object` (see Testing).
 - **Fujifilm cameras**: Report `AccessCapability::ReadWrite` but return `StoreReadOnly` on writes. Advertised ops lie.

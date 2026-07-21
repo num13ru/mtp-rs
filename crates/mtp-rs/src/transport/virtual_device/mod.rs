@@ -716,6 +716,41 @@ mod tests {
         assert_eq!(again.filename, "data.bin");
     }
 
+    #[tokio::test]
+    async fn a_wedged_root_listing_reports_the_reset_it_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("data.bin"), b"payload").unwrap();
+
+        let serial = "root-listing-wedge-18";
+        let config = test_config_with_serial(dir.path(), serial);
+        let device = MtpDevice::builder().open_virtual(config).await.unwrap();
+        let storages = device.storages().await.unwrap();
+
+        assert!(crate::force_operation_wedge(serial));
+
+        // The root-listing fast path asks for parent=0xFFFFFFFF first and falls
+        // back to parent=0 when the device DECLINES it. A wedged session is not
+        // a decline: retrying hammers a device the #18 notes say re-wedges under
+        // exactly that treatment, and reporting the second attempt's error hides
+        // the `DeviceReset` a consumer needs in order to reopen.
+        //
+        // Pre-fix this returned `Ok`: the one-shot wedge was swallowed by the
+        // fast path and the parent=0 attempt succeeded.
+        let err = storages[0]
+            .list_objects(None)
+            .await
+            .expect_err("a wedged root listing must report the reset");
+        assert!(
+            matches!(err, crate::mtp::Error::DeviceReset),
+            "expected Error::DeviceReset, got {err:?}"
+        );
+
+        // The one-shot was spent by that single attempt, so the device is
+        // healthy again: proof the fallback never issued a second roundtrip.
+        let objects = storages[0].list_objects(None).await.unwrap();
+        assert_eq!(objects.len(), 1);
+    }
+
     #[test]
     fn operation_wedge_reports_an_unknown_serial() {
         assert!(!crate::force_operation_wedge("no-such-device"));

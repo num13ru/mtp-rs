@@ -116,16 +116,20 @@ impl UsbBackend {
     ) -> Result<(Vec<PtpHandle>, ParentFilter), PtpError> {
         // For root listings, try parent=0xFFFFFFFF first. Many devices (Android, Kindle, others)
         // return only root-level handles for this value, while parent=0 returns every object on the
-        // storage. Fall back to parent=0 only when the device rejects 0xFFFFFFFF with an error.
+        // storage. Fall back to parent=0 only when the device DECLINES 0xFFFFFFFF (see
+        // `is_all_handle_rejection`); a session or transport failure propagates, because retrying
+        // it would hammer a sick device and mask the real error.
         if parent.is_none() {
-            if let Ok(handles) = self
+            match self
                 .session
                 .get_object_handles(storage, None, Some(PtpHandle::ALL))
                 .await
             {
-                return Ok((handles, ParentFilter::AndroidRoot));
+                Ok(handles) => return Ok((handles, ParentFilter::AndroidRoot)),
+                // Declined: fall through to the parent=0 path.
+                Err(e) if is_all_handle_rejection(&e) => {}
+                Err(e) => return Err(e),
             }
-            // 0xFFFFFFFF rejected; fall through to parent=0 path.
         }
 
         bail_if_cancelled(cancel)?;
@@ -151,6 +155,30 @@ impl UsbBackend {
             Err(e) => Err(e),
         }
     }
+}
+
+/// Did the device *decline* `GetObjectHandles(parent=0xFFFFFFFF)`, as opposed to
+/// the session or the transport failing under it?
+///
+/// Only a decline may fall back to `parent=0`. Everything else has to propagate:
+/// a second roundtrip on a sick device hammers it (a wedged Samsung re-wedges
+/// into a hard `Timeout` under exactly that treatment, #18), and it would report
+/// the *second* attempt's error, hiding the first. A consumer watching for
+/// `Error::DeviceReset` to drive a quiet reopen would never see it, and a root
+/// listing is the likeliest first call after a device goes sour.
+///
+/// Two shapes count as a decline:
+///
+/// - `Protocol`: the spec'd way to say no (`OperationNotSupported`,
+///   `InvalidObjectHandle`, `InvalidParameter`, …).
+/// - `Io`: how a bulk STALL arrives, which is how SIC-compliant cameras signal
+///   an unsupported operation (Panasonic Lumix DMC-TZ61, #12). The transport
+///   folds STALL in with `Fault`/`InvalidArgument`/`Unknown`, so `Io` can't be
+///   narrowed further without a new `PtpError` variant; it stays on the
+///   permissive side deliberately, since losing camera root listings would be
+///   the worse failure.
+fn is_all_handle_rejection(err: &PtpError) -> bool {
+    matches!(err, PtpError::Protocol { .. } | PtpError::Io(_))
 }
 
 /// How to filter objects by parent handle during a listing (PTP terms).
@@ -539,6 +567,44 @@ mod tests {
     use crate::transport::mock::MockTransport;
 
     const OVER_4GIB: u64 = u32::MAX as u64 + 1;
+
+    #[test]
+    fn a_declined_all_handle_request_falls_back_to_parent_zero() {
+        // A response code is the spec'd way to decline...
+        assert!(is_all_handle_rejection(&PtpError::Protocol {
+            code: ResponseCode::InvalidObjectHandle,
+            operation: OperationCode::GetObjectHandles,
+        }));
+        assert!(is_all_handle_rejection(&PtpError::Protocol {
+            code: ResponseCode::OperationNotSupported,
+            operation: OperationCode::GetObjectHandles,
+        }));
+        // ...and a bulk STALL is how SIC cameras say the same thing (#12). The
+        // transport can only surface that as `Io`, so `Io` has to fall back too.
+        assert!(is_all_handle_rejection(&PtpError::Io(
+            std::io::Error::other("stall")
+        )));
+    }
+
+    #[test]
+    fn a_broken_session_propagates_instead_of_falling_back() {
+        // These are the session or the transport failing, not the device
+        // declining. Retrying hammers a sick device and reports the second
+        // error, hiding the first.
+        for err in [
+            PtpError::DeviceReset,
+            PtpError::Timeout,
+            PtpError::Disconnected,
+            PtpError::Cancelled,
+            PtpError::SessionNotOpen,
+            PtpError::invalid_data("desync"),
+        ] {
+            assert!(
+                !is_all_handle_rejection(&err),
+                "{err:?} must propagate, not trigger the parent=0 fallback"
+            );
+        }
+    }
 
     #[test]
     fn plan_partial_read_prefers_64bit_when_available() {

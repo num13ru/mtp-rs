@@ -125,9 +125,9 @@ one-shot hooks for the two ways a consumer reaches `Error::DeviceReset`:
   `cancel_wedge_surfaces_device_reset` in `transport/virtual_device/mod.rs`.
 - `force_operation_wedge(serial)`: the next **operation** returns `DeviceReset`,
   for a consumer that never calls `cancel()` and only meets the error through
-  `recover_if_needed`'s drain after a dropped future. Aim it at anything but a
-  root listing (that path retries `parent=0` on any error and swallows the
-  one-shot). See `operation_wedge_surfaces_device_reset_without_a_cancel`.
+  `recover_if_needed`'s drain after a dropped future. See
+  `operation_wedge_surfaces_device_reset_without_a_cancel`, and
+  `a_wedged_root_listing_reports_the_reset_it_hit` for the root-listing case.
 
 Neither models the aftermath: a real device's session is dead until a
 spaced-retry reopen, the virtual one is healthy on the next call.

@@ -415,10 +415,6 @@ pub fn force_cancel_wedge(serial: &str) -> bool {
 /// `Error::DeviceReset` out of an ordinary operation. What it can't observe here
 /// is the aftermath: a real device's session is dead until a spaced-retry
 /// reopen, while the virtual device is healthy on the very next call.
-///
-/// Aim it at any operation except a **root** listing: the root-listing fast path
-/// tries `parent=0xFFFFFFFF` first and falls back to `parent=0` on any error, so
-/// it swallows the one-shot and succeeds.
 pub fn force_operation_wedge(serial: &str) -> bool {
     let active = active_states().lock().unwrap();
     let state_arc = match active.iter().find(|(s, _)| s == serial) {
