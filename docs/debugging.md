@@ -32,9 +32,10 @@ stray `ptpcamerad` grab is the most common cause of "device present on USB but
 
 ### 2. Recover a wedged device in software (usually no replug needed)
 
-`mtp-rs reset` (CLI) / `PtpDevice::reset_device()` (SIC `DEVICE_RESET`, 0x66)
-revives a session-wedged Android/Samsung device **without a physical unplug**. It
-opens without a PTP session, so it works precisely when `MtpDevice::open` can't.
+`mtp-rs reset` (CLI) / `MtpDevice::reset_by_serial()` (library consumers) /
+`PtpDevice::reset_device()` (SIC `DEVICE_RESET`, 0x66) revives a session-wedged
+Android/Samsung device **without a physical unplug**. It opens without a PTP
+session, so it works precisely when `MtpDevice::open` can't.
 Verified on a Galaxy S23 Ultra (#18): after a cancel wedged the session,
 `cargo run -p mtp-rs-cli -- reset` printed `Reset OK, device responding: SM-S918B`
 and listing worked immediately.
@@ -47,6 +48,14 @@ Reach for it when you see, on a device that worked moments ago:
 
 A fully USB-stuck device (some PTP cameras, #12) still needs a physical replug;
 Samsung/Android phones usually recover from the software reset.
+
+From a library consumer, the full sequence is: drop the `MtpDevice` (holding it
+keeps the USB interface claimed, so the reset can't claim it), call
+`MtpDevice::reset_by_serial`, wait a few seconds quiet, then reopen with
+idle-spaced retries. Expect the early attempts to fail: on the S23 the reopens
+went `Timeout`, then `SessionAlreadyOpen`, then success (verified on SM-S918B,
+macOS/nusb, 2026-07-20). Trying once and giving up reads as "the reset didn't
+work" when it did.
 
 ### 3. Fail fast on a wedged or absent device
 

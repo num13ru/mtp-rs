@@ -72,6 +72,68 @@ impl MtpDevice {
         Self::builder().open_by_serial(serial).await
     }
 
+    /// Reset the USB transport state of the device with this serial, without
+    /// opening a session.
+    ///
+    /// Sends the USB Still Image Class Device Reset request (`bRequest=0x66`),
+    /// clears halted bulk endpoints, and drains stale bulk data. This is the USB
+    /// **transport-level** reset, not the in-session `ResetDevice` (0x1010) PTP
+    /// operation: it works precisely when the device is too confused for PTP
+    /// traffic, which is when you need it.
+    ///
+    /// # Why this isn't a method on an open device
+    ///
+    /// It only claims the USB interface and stops there. The regular opens run
+    /// `OpenSession` + `GetDeviceInfo`, which is exactly what a wedged device
+    /// can't answer, so a reset hanging off an already-open [`MtpDevice`] would
+    /// be useless in the case it exists for. **Drop your device first**: holding
+    /// it keeps the interface claimed, and this call would then fail to claim it.
+    /// You have to reopen afterwards regardless, since the PTP session is gone.
+    ///
+    /// # Recovering a wedged device
+    ///
+    /// After [`Error::DeviceReset`], or when every operation fails with
+    /// "Transaction ID mismatch" / "expected Response container type":
+    ///
+    /// 1. Drop the [`MtpDevice`] (and any [`Storage`] handles).
+    /// 2. Call this.
+    /// 3. Wait a few seconds **quiet**, with no USB traffic at all.
+    /// 4. Reopen with idle-spaced retries.
+    ///
+    /// Step 4 is where consumers go wrong: don't try once and give up, and don't
+    /// hammer close/open in a tight loop (that keeps the device busy and
+    /// re-wedges it into a hard `Timeout`). Expect the early attempts to fail.
+    /// The observed sequence was reset, then a reopen returning `Timeout`, then
+    /// one returning `SessionAlreadyOpen`, then success (verified on a Galaxy S23
+    /// Ultra SM-S918B, macOS/nusb, 2026-07-20).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoDevice`] when no USB device has that serial, and
+    /// [`Error::Unsupported`] for a virtual device, which is a filesystem with no
+    /// USB transport to reset.
+    pub async fn reset_by_serial(serial: &str) -> Result<(), Error> {
+        Self::builder().reset_by_serial(serial).await
+    }
+
+    /// Reset the USB transport state of the device at this location, without
+    /// opening a session.
+    ///
+    /// See [`reset_by_serial`](Self::reset_by_serial) for the full contract and
+    /// the recovery sequence to follow.
+    pub async fn reset_by_location(location_id: u64) -> Result<(), Error> {
+        Self::builder().reset_by_location(location_id).await
+    }
+
+    /// Reset the USB transport state of the first available device, without
+    /// opening a session.
+    ///
+    /// See [`reset_by_serial`](Self::reset_by_serial) for the full contract and
+    /// the recovery sequence to follow.
+    pub async fn reset_first() -> Result<(), Error> {
+        Self::builder().reset_first().await
+    }
+
     /// List all available MTP devices without opening them.
     pub fn list_devices() -> Result<Vec<MtpDeviceInfo>, Error> {
         Self::list_devices_with_known(&[])
@@ -625,6 +687,66 @@ impl MtpDeviceBuilder {
         })
     }
 
+    /// Reset the USB transport of the device with this serial, without opening a
+    /// session. See [`MtpDevice::reset_by_serial`] for the full contract.
+    pub async fn reset_by_serial(self, serial: &str) -> Result<(), Error> {
+        #[cfg(feature = "virtual-device")]
+        if crate::transport::virtual_device::registry::find_virtual_config_by_serial(serial)
+            .is_some()
+        {
+            return Err(Error::Unsupported);
+        }
+
+        let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
+        let device_info = devices
+            .into_iter()
+            .find(|d| d.serial_number.as_deref() == Some(serial))
+            .ok_or(crate::PtpError::NoDevice)?;
+        self.reset_usb_device(device_info).await
+    }
+
+    /// Reset the USB transport of the device at this location, without opening a
+    /// session. See [`MtpDevice::reset_by_serial`] for the full contract.
+    pub async fn reset_by_location(self, location_id: u64) -> Result<(), Error> {
+        #[cfg(feature = "virtual-device")]
+        if crate::transport::virtual_device::registry::find_virtual_config_by_location(location_id)
+            .is_some()
+        {
+            return Err(Error::Unsupported);
+        }
+
+        let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
+        let device_info = devices
+            .into_iter()
+            .find(|d| d.location_id == location_id)
+            .ok_or(crate::PtpError::NoDevice)?;
+        self.reset_usb_device(device_info).await
+    }
+
+    /// Reset the USB transport of the first available device, without opening a
+    /// session. See [`MtpDevice::reset_by_serial`] for the full contract.
+    pub async fn reset_first(self) -> Result<(), Error> {
+        let devices = NusbTransport::list_mtp_devices_with_known(&self.known_devices)?;
+        let device_info = devices
+            .into_iter()
+            .next()
+            .ok_or(crate::PtpError::NoDevice)?;
+        self.reset_usb_device(device_info).await
+    }
+
+    /// Claim the interface and send the transport reset. Deliberately does NOT
+    /// call [`PtpSession::open`] or `GetDeviceInfo`: claiming is all a wedged
+    /// device can still answer.
+    async fn reset_usb_device(
+        self,
+        device_info: crate::transport::UsbDeviceInfo,
+    ) -> Result<(), Error> {
+        let device = device_info.open().map_err(crate::PtpError::Usb)?;
+        let transport = NusbTransport::open_with_timeout(device, self.timeout).await?;
+        transport.reset_device().await?;
+        Ok(())
+    }
+
     /// Open a virtual device backed by local filesystem directories.
     ///
     /// This creates a virtual MTP device that speaks the full binary protocol but
@@ -696,6 +818,42 @@ mod tests {
     #[test]
     fn list_devices_returns_ok() {
         assert!(MtpDevice::list_devices().is_ok());
+    }
+
+    #[tokio::test]
+    async fn resetting_an_absent_device_reports_no_device() {
+        let err = MtpDevice::reset_by_serial("no-such-device-serial")
+            .await
+            .expect_err("no USB device has that serial");
+        assert!(matches!(err, Error::NoDevice), "got {err:?}");
+    }
+
+    #[cfg(feature = "virtual-device")]
+    #[tokio::test]
+    async fn resetting_a_virtual_device_says_it_has_no_transport_to_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let serial = "reset-virtual-serial";
+        let config = crate::VirtualDeviceConfig {
+            serial: serial.into(),
+            storages: vec![crate::VirtualStorageConfig {
+                description: "Internal Storage".into(),
+                capacity: 1024,
+                backing_dir: dir.path().to_path_buf(),
+                read_only: false,
+            }],
+            ..Default::default()
+        };
+        let info = crate::register_virtual_device(&config);
+
+        // A virtual device is a filesystem, not a USB link: there's no transport
+        // state to reset. Saying so beats a puzzling "no device found" in a
+        // consumer's test suite, which is where this will actually be hit.
+        let err = MtpDevice::reset_by_serial(serial)
+            .await
+            .expect_err("a virtual device has no USB transport");
+        assert!(matches!(err, Error::Unsupported), "got {err:?}");
+
+        crate::unregister_virtual_device(info.location_id);
     }
 
     #[test]

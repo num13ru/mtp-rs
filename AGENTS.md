@@ -65,7 +65,8 @@ backend-agnostic variants (`NotFound`, `StaleHandle`, `AccessDenied`, `Unsupport
 `StorageFull`, `Cancelled`, `Disconnected`, …). The rich low-level PTP error is `PtpError` (root and
 `ptp::PtpError`); `ptp::` keeps its detailed response-code errors for camera/protocol users.
 
-**Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `mtp::watch_devices()` (hotplug stream), `MtpDeviceBuilder::open_virtual()` (feature-gated)
+**Entry points:** `MtpDevice::open_first()`, `PtpDevice::open_first()`, `NusbTransport::list_mtp_devices()`, `mtp::watch_devices()` (hotplug stream), `MtpDevice::reset_by_serial()` (session-less transport reset),
+`MtpDeviceBuilder::open_virtual()` (feature-gated)
 
 **Key types:** `ObjectHandle`, `StorageId` (opaque `u64` newtypes, session-scoped tokens — not wire
 values), `ObjectFormat` (raw MTP format code + category helpers), `Capabilities` (replaces the old
@@ -345,11 +346,21 @@ demonstrates it with no hardware. Real-device coverage:
   choice and holds the rationale in one place; new blocking calls should use it.
   `control_in`/`control_out` are the exception: genuinely async via nusb's URB
   event loop, so those stay `.await` and must NOT go through `blocking()`.
-- `Transport::reset_device()` / `PtpDevice::reset_device()` / the CLI's
-  `mtp-rs reset` send the SIC DEVICE_RESET request (0x66), clear halts, and
+- `Transport::reset_device()` / `PtpDevice::reset_device()` /
+  `MtpDevice::reset_by_serial()` (plus `reset_by_location` / `reset_first`, and
+  the `MtpDeviceBuilder` forms that honor `timeout` and `known_devices`) / the
+  CLI's `mtp-rs reset` send the SIC DEVICE_RESET request (0x66), clear halts, and
   drain stale bulk data (without a PTP session), so they work on a device too
   wedged for `OpenSession` ("Transaction ID mismatch" / "expected Response
   container type" on every command).
+- **The neutral reset is a free-standing selector, not a method on an open
+  `MtpDevice`, and that's deliberate.** It claims the USB interface and stops;
+  the regular opens run `OpenSession` + `GetDeviceInfo`, which a wedged device
+  can't answer, so a method on an open device would be useless exactly when it's
+  needed. Callers must drop the device first (holding it keeps the interface
+  claimed, so the reset couldn't claim it) and reopen after, since the session is
+  gone either way. Virtual devices return `Error::Unsupported`: no USB transport
+  to reset.
 
 ## In-session desync self-healing (abandoned transactions)
 
