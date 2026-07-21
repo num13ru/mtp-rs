@@ -235,6 +235,7 @@ Diagnose common discovery and access problems.
 mtp-rs doctor
 mtp-rs doctor --device SERIAL --json
 mtp-rs doctor --probe-cancel        # also run the cancel-health check
+mtp-rs doctor --probe-path /DCIM/Camera/IMG_0001.jpg   # probe that exact file
 ```
 
 `doctor` checks visible devices, open behavior, capabilities, storages, root
@@ -242,12 +243,22 @@ listing, and common writable-folder hints such as `Download`, `Documents`,
 `Music`, and `GARMIN`. In JSON mode it keeps the visible device rows, including
 `match_reason`, even when opening the selected device fails.
 
-`--probe-cancel` additionally downloads the largest root file, cancels it
-mid-stream, and reports whether the session stayed `healthy`, was
-`wedged_recovered` (the device wedged on the cancel and the library reset it to
-recover; see issue #18), or `errored`. It's read-only but transfers data and can
-briefly wedge a device, so it's off by default; use it when investigating a
-mid-transfer freeze. Attach the `--probe-cancel --json` output to a bug report.
+`--probe-cancel` additionally downloads a file, cancels it mid-stream, and
+reports whether the session stayed `healthy`, was `wedged_recovered` (the device
+wedged on the cancel and the library reset it to recover; see issue #18), or
+`errored`. It's read-only but transfers data and can briefly wedge a device, so
+it's off by default; use it when investigating a mid-transfer freeze. Attach the
+`--probe-cancel --json` output to a bug report.
+
+To find a file, the probe walks breadth-first from the storage root, bounded to
+48 folders and three levels deep, preferring a 100 KB-10 MB file but taking any
+file rather than skipping (a 36-byte file is enough to wedge a phone). An
+Android root holds only directories, so looking there alone finds nothing. When
+it does skip, the message says how far it searched.
+
+`--probe-path PATH` pins the file to probe and implies `--probe-cancel`. Reach
+for it when the search picks a file you'd rather leave alone, or when the device
+keeps its files somewhere the bounded search misses.
 
 ### `reset`
 

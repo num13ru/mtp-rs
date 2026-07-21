@@ -151,6 +151,7 @@ mod tests {
             trace: false,
             command: Command::Doctor(super::args::DoctorArgs {
                 probe_cancel: false,
+                probe_path: None,
             }),
         }
     }

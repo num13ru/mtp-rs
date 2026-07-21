@@ -1,11 +1,14 @@
-use mtp_rs::{ByteRange, MtpDevice, Storage};
+use mtp_rs::{ByteRange, MtpDevice, ObjectHandle, Storage};
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::cli::args::{Cli, DoctorArgs};
 use crate::cli::device::open_selected_device;
 use crate::cli::error::{CliError, CliErrorKind};
+use crate::cli::helpers::existing_object;
 use crate::cli::output::{print_json, DeviceRow, StorageRow};
+use crate::cli::path::RemotePath;
 
 #[derive(Debug, Serialize)]
 struct DoctorRow {
@@ -191,9 +194,11 @@ pub async fn run(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
         });
     }
 
-    let cancel_probe = if args.probe_cancel {
+    let cancel_probe = if args.probe_cancel || args.probe_path.is_some() {
         let row = match storages.first() {
-            Some(storage) => cancel_health_probe(storage).await,
+            Some(storage) => {
+                cancel_health_probe(storage, args.probe_path.as_deref(), cli.verbose).await
+            }
             None => CancelProbeRow {
                 outcome: "skipped",
                 detail: "no storage to probe".to_string(),
@@ -221,27 +226,169 @@ pub async fn run(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The cancel-health probe (`--probe-cancel`): download the largest file at the
-/// storage root, cancel mid-stream, and classify what happened. This is the #18
-/// reproducer — a device that wedges on a large-backlog cancel returns
-/// `DeviceReset` here, which the plain listing above can't reveal. Read-only.
-async fn cancel_health_probe(storage: &Storage) -> CancelProbeRow {
-    let root = match storage.list_objects(None).await {
-        Ok(objects) => objects,
-        Err(e) => {
+/// A file the cancel probe can download and cancel.
+#[derive(Debug, Clone)]
+struct ProbeTarget {
+    handle: ObjectHandle,
+    /// Absolute remote path, for the human-readable detail line.
+    path: String,
+    size: u64,
+}
+
+/// The size band the search prefers. Anything in it is good enough to stop at.
+const PROBE_PREFERRED_MIN_SIZE: u64 = 100_000;
+const PROBE_PREFERRED_MAX_SIZE: u64 = 10_000_000;
+/// How far below the storage root the search descends, and how many folders it
+/// lists in total. The probe is a diagnostic, not a crawler: it must not walk a
+/// whole phone before reporting.
+const PROBE_MAX_DEPTH: usize = 3;
+const PROBE_MAX_FOLDERS: usize = 48;
+
+/// Picks which file the probe downloads.
+///
+/// **Size barely matters for wedge detection**: a Galaxy S23 Ultra wedged on a
+/// 36-byte file (verified on SM-S918B, macOS/nusb, 2026-07-20). So a mid-size
+/// file is a preference, never a requirement: any file beats skipping the probe.
+#[derive(Debug, Default)]
+struct ProbePick {
+    best: Option<ProbeTarget>,
+}
+
+impl ProbePick {
+    /// Offer a candidate. Returns `true` when the pick is final, so the search
+    /// can stop walking.
+    fn offer(&mut self, candidate: ProbeTarget) -> bool {
+        let preferred =
+            (PROBE_PREFERRED_MIN_SIZE..=PROBE_PREFERRED_MAX_SIZE).contains(&candidate.size);
+        if preferred {
+            self.best = Some(candidate);
+            return true;
+        }
+        if self
+            .best
+            .as_ref()
+            .is_none_or(|best| candidate.size > best.size)
+        {
+            self.best = Some(candidate);
+        }
+        false
+    }
+}
+
+/// Visit order for a folder's subfolders: user files first, `Android` last.
+///
+/// `Android/data` and `Android/obb` are huge and partly unreadable over MTP, so
+/// walking them first burns the folder budget for nothing.
+fn folder_priority(name: &str) -> u8 {
+    match name {
+        "DCIM" | "Camera" | "Download" | "Downloads" | "Pictures" => 0,
+        "Movies" | "Music" | "Documents" | "Audiobooks" | "Podcasts" => 1,
+        "Android" => 3,
+        _ => 2,
+    }
+}
+
+/// Find a file to probe with, searching below the root.
+///
+/// An Android MTP root is the top of shared storage and by convention holds
+/// only directories (`DCIM`, `Download`, `Android`, …), so a clean phone has
+/// zero files there. Looking at the root alone skipped the probe on exactly the
+/// devices issue #18 is about (verified on a Pixel 9 Pro XL: 17 directories,
+/// zero files). Hence the breadth-first walk, bounded by [`PROBE_MAX_DEPTH`] and
+/// [`PROBE_MAX_FOLDERS`].
+///
+/// The `Err` string explains what the search covered, so a skip is actionable.
+async fn find_probe_target(storage: &Storage) -> Result<ProbeTarget, String> {
+    let mut queue: VecDeque<(Option<ObjectHandle>, String, usize)> =
+        VecDeque::from([(None, String::new(), 0)]);
+    let mut pick = ProbePick::default();
+    let mut folders_listed = 0usize;
+
+    while let Some((parent, prefix, depth)) = queue.pop_front() {
+        if folders_listed >= PROBE_MAX_FOLDERS {
+            break;
+        }
+        folders_listed += 1;
+        let objects = match storage.list_objects(parent).await {
+            Ok(objects) => objects,
+            // An unreadable subfolder is normal on Android; only a root that
+            // won't list is worth reporting.
+            Err(e) if parent.is_none() => return Err(format!("could not list storage root: {e}")),
+            Err(_) => continue,
+        };
+
+        let mut subfolders = Vec::new();
+        for object in objects {
+            let path = format!("{prefix}/{}", object.filename);
+            if object.is_file() {
+                let candidate = ProbeTarget {
+                    handle: object.handle,
+                    path,
+                    size: object.size,
+                };
+                if pick.offer(candidate) {
+                    return Ok(pick.best.expect("a final pick is always set"));
+                }
+            } else if object.is_folder() && depth < PROBE_MAX_DEPTH {
+                subfolders.push((object.handle, path, object.filename));
+            }
+        }
+        subfolders.sort_by_key(|(_, _, name)| folder_priority(name));
+        for (handle, path, _) in subfolders {
+            queue.push_back((Some(handle), path, depth + 1));
+        }
+    }
+
+    pick.best.ok_or_else(|| {
+        format!(
+            "found no file to probe in {folders_listed} folder(s), searching up to \
+             {PROBE_MAX_DEPTH} levels below the storage root. Pass --probe-path /some/file \
+             to point the probe at one"
+        )
+    })
+}
+
+/// Resolve an explicit `--probe-path`. The `Err` string is the skip detail.
+async fn resolve_probe_path(
+    storage: &Storage,
+    path: &str,
+    verbose: bool,
+) -> Result<ProbeTarget, String> {
+    let remote_path = RemotePath::parse(path).map_err(|e| e.to_string())?;
+    let object = existing_object(storage, &remote_path, verbose)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !object.is_file() {
+        return Err(format!("--probe-path {path} is not a file"));
+    }
+    Ok(ProbeTarget {
+        handle: object.handle,
+        path: path.to_string(),
+        size: object.size,
+    })
+}
+
+/// The cancel-health probe (`--probe-cancel`): download a file, cancel
+/// mid-stream, and classify what happened. This is the #18 reproducer — a device
+/// that wedges on a cancel returns `DeviceReset` here, which the plain listing
+/// above can't reveal. Read-only.
+async fn cancel_health_probe(
+    storage: &Storage,
+    probe_path: Option<&str>,
+    verbose: bool,
+) -> CancelProbeRow {
+    let target = match probe_path {
+        Some(path) => resolve_probe_path(storage, path, verbose).await,
+        None => find_probe_target(storage).await,
+    };
+    let target = match target {
+        Ok(target) => target,
+        Err(detail) => {
             return CancelProbeRow {
                 outcome: "skipped",
-                detail: format!("could not list storage root: {e}"),
+                detail,
             };
         }
-    };
-    // Biggest file => biggest in-flight backlog => best chance to surface a
-    // large-backlog wedge (#18).
-    let Some(target) = root.iter().filter(|o| o.is_file()).max_by_key(|o| o.size) else {
-        return CancelProbeRow {
-            outcome: "skipped",
-            detail: "no file at storage root to probe".to_string(),
-        };
     };
 
     let mut download = match storage.download(target.handle, ByteRange::Full).await {
@@ -249,7 +396,7 @@ async fn cancel_health_probe(storage: &Storage) -> CancelProbeRow {
         Err(e) => {
             return CancelProbeRow {
                 outcome: "errored",
-                detail: format!("could not start download of '{}': {e}", target.filename),
+                detail: format!("could not start download of '{}': {e}", target.path),
             };
         }
     };
@@ -261,7 +408,7 @@ async fn cancel_health_probe(storage: &Storage) -> CancelProbeRow {
             outcome: "healthy",
             detail: format!(
                 "cancelled '{}' ({} bytes); session survived",
-                target.filename, target.size
+                target.path, target.size
             ),
         },
         Err(mtp_rs::Error::DeviceReset) => CancelProbeRow {
@@ -269,12 +416,64 @@ async fn cancel_health_probe(storage: &Storage) -> CancelProbeRow {
             detail: format!(
                 "cancel wedged the device on '{}' ({} bytes); the library reset it to recover (#18). \
                  Reopen quietly to continue, and prefer download_windowed for interruptible reads",
-                target.filename, target.size
+                target.path, target.size
             ),
         },
         Err(e) => CancelProbeRow {
             outcome: "errored",
             detail: format!("cancel returned an error: {e}"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(size: u64) -> ProbeTarget {
+        ProbeTarget {
+            handle: ObjectHandle(1),
+            path: format!("/f{size}"),
+            size,
+        }
+    }
+
+    #[test]
+    fn a_mid_size_file_ends_the_search() {
+        let mut pick = ProbePick::default();
+        assert!(pick.offer(target(200_000)));
+        assert_eq!(pick.best.unwrap().size, 200_000);
+    }
+
+    #[test]
+    fn a_tiny_file_is_kept_rather_than_skipped() {
+        // 36 bytes wedged a Galaxy S23 Ultra, so small files are worth probing.
+        let mut pick = ProbePick::default();
+        assert!(!pick.offer(target(36)));
+        assert_eq!(pick.best.unwrap().size, 36);
+    }
+
+    #[test]
+    fn outside_the_band_the_largest_file_wins() {
+        let mut pick = ProbePick::default();
+        assert!(!pick.offer(target(36)));
+        assert!(!pick.offer(target(4_000)));
+        assert!(!pick.offer(target(500)));
+        assert_eq!(pick.best.unwrap().size, 4_000);
+    }
+
+    #[test]
+    fn a_mid_size_file_beats_a_bigger_out_of_band_one() {
+        let mut pick = ProbePick::default();
+        assert!(!pick.offer(target(900_000_000)));
+        assert!(pick.offer(target(150_000)));
+        assert_eq!(pick.best.unwrap().size, 150_000);
+    }
+
+    #[test]
+    fn user_folders_are_visited_before_the_android_tree() {
+        let mut names = vec!["Android", "Notifications", "DCIM", "Music"];
+        names.sort_by_key(|name| folder_priority(name));
+        assert_eq!(names, vec!["DCIM", "Music", "Notifications", "Android"]);
     }
 }

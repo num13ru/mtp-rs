@@ -129,6 +129,108 @@ fn file_lifecycle_through_cli_binary_emits_json() {
 }
 
 #[test]
+fn doctor_probe_cancel_finds_a_file_below_the_storage_root() {
+    let fixture = CliFixture::new();
+    // An Android MTP root holds only directories, so the probe has to look
+    // deeper to find anything to cancel.
+    let camera = fixture.backing_dir.join("DCIM").join("Camera");
+    std::fs::create_dir_all(&camera).unwrap();
+    std::fs::create_dir_all(fixture.backing_dir.join("Download")).unwrap();
+    std::fs::write(camera.join("IMG_0001.jpg"), vec![7u8; 200_000]).unwrap();
+
+    let value = fixture.run_json(&["--json", "--device", SERIAL, "doctor", "--probe-cancel"]);
+    let probe = &value["cancel_probe"];
+    assert_eq!(probe["outcome"], "healthy", "probe was {probe}");
+    let detail = probe["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("/DCIM/Camera/IMG_0001.jpg"),
+        "detail should name the file it probed, got: {detail}"
+    );
+}
+
+#[test]
+fn doctor_probe_cancel_falls_back_to_a_tiny_file() {
+    let fixture = CliFixture::new();
+    // A 36-byte file wedged a Galaxy S23 Ultra, so a small file is worth
+    // probing: never skip just because nothing mid-size is around.
+    let download = fixture.backing_dir.join("Download");
+    std::fs::create_dir_all(&download).unwrap();
+    std::fs::write(
+        download.join("tiny.txt"),
+        b"36 bytes is plenty to wedge a phone.",
+    )
+    .unwrap();
+
+    let value = fixture.run_json(&["--json", "--device", SERIAL, "doctor", "--probe-cancel"]);
+    let probe = &value["cancel_probe"];
+    assert_eq!(probe["outcome"], "healthy", "probe was {probe}");
+    assert!(probe["detail"]
+        .as_str()
+        .unwrap()
+        .contains("/Download/tiny.txt"));
+}
+
+#[test]
+fn doctor_probe_path_pins_the_file_and_implies_the_probe() {
+    let fixture = CliFixture::new();
+    let pictures = fixture.backing_dir.join("Pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    std::fs::write(pictures.join("pinned.bin"), vec![3u8; 4_096]).unwrap();
+    std::fs::write(pictures.join("other.bin"), vec![4u8; 400_000]).unwrap();
+
+    let value = fixture.run_json(&[
+        "--json",
+        "--device",
+        SERIAL,
+        "doctor",
+        "--probe-path",
+        "/Pictures/pinned.bin",
+    ]);
+    let probe = &value["cancel_probe"];
+    assert_eq!(probe["outcome"], "healthy", "probe was {probe}");
+    assert!(probe["detail"]
+        .as_str()
+        .unwrap()
+        .contains("/Pictures/pinned.bin"));
+}
+
+#[test]
+fn doctor_probe_path_reports_a_missing_file() {
+    let fixture = CliFixture::new();
+    std::fs::create_dir_all(fixture.backing_dir.join("Download")).unwrap();
+
+    let value = fixture.run_json(&[
+        "--json",
+        "--device",
+        SERIAL,
+        "doctor",
+        "--probe-path",
+        "/Download/nope.bin",
+    ]);
+    let probe = &value["cancel_probe"];
+    assert_eq!(probe["outcome"], "skipped", "probe was {probe}");
+    assert!(probe["detail"]
+        .as_str()
+        .unwrap()
+        .contains("/Download/nope.bin"));
+}
+
+#[test]
+fn doctor_probe_cancel_skip_message_says_what_it_searched() {
+    let fixture = CliFixture::new();
+    std::fs::create_dir_all(fixture.backing_dir.join("DCIM").join("Camera")).unwrap();
+
+    let value = fixture.run_json(&["--json", "--device", SERIAL, "doctor", "--probe-cancel"]);
+    let probe = &value["cancel_probe"];
+    assert_eq!(probe["outcome"], "skipped", "probe was {probe}");
+    let detail = probe["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("folder") && detail.contains("--probe-path"),
+        "the skip should say what it searched and how to pin a file, got: {detail}"
+    );
+}
+
+#[test]
 fn parser_errors_cross_process_boundary() {
     let fixture = CliFixture::new();
 

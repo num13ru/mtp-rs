@@ -95,6 +95,13 @@ pub struct DoctorArgs {
     /// passive; add it when investigating a mid-transfer freeze.
     #[arg(long)]
     pub probe_cancel: bool,
+
+    /// Probe this exact remote file instead of searching for one, for example
+    /// `--probe-path /DCIM/Camera/IMG_0001.jpg`. Implies `--probe-cancel`. Use
+    /// it when the search picks a file you'd rather leave alone, or when the
+    /// device keeps its files somewhere the depth-limited search misses.
+    #[arg(long, value_name = "PATH")]
+    pub probe_path: Option<String>,
 }
 
 #[derive(Debug, Args)]
