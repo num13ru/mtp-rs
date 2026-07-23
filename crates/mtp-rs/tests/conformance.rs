@@ -35,6 +35,7 @@ async fn device_info_and_capabilities_are_neutral() {
     assert!(caps.supports_partial_download);
     assert!(device.supports_rename());
     assert!(device.supports_upload());
+    assert!(device.supports_copy());
 }
 
 #[tokio::test]

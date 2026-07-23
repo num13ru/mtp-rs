@@ -12,6 +12,7 @@ struct InfoRow {
     serial_number: String,
     device_version: String,
     supports_rename: bool,
+    supports_copy: bool,
     storages: Vec<StorageRow>,
 }
 
@@ -27,6 +28,7 @@ pub async fn run(cli: &Cli) -> Result<(), CliError> {
         serial_number: device.device_info().serial_number.clone(),
         device_version: device.device_info().device_version.clone(),
         supports_rename: device.supports_rename(),
+        supports_copy: device.supports_copy(),
         storages: storages
             .iter()
             .enumerate()
@@ -43,6 +45,7 @@ pub async fn run(cli: &Cli) -> Result<(), CliError> {
         row.manufacturer, row.model, row.serial_number, row.device_version
     );
     println!("supports rename: {}", row.supports_rename);
+    println!("supports copy: {}", row.supports_copy);
     for storage in row.storages {
         println!(
             "[{}] id={} {} free={} capacity={} access={}",

@@ -204,6 +204,14 @@ impl MtpDevice {
         self.backend.capabilities().can_upload
     }
 
+    /// Whether the device supports copying objects.
+    ///
+    /// Convenience over [`capabilities()`](Self::capabilities)`.can_copy`.
+    #[must_use]
+    pub fn supports_copy(&self) -> bool {
+        self.backend.capabilities().can_copy
+    }
+
     /// Get all storages on the device.
     pub async fn storages(&self) -> Result<Vec<Storage>, Error> {
         let infos = self.backend.storages().await?;
